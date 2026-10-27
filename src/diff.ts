@@ -70,8 +70,8 @@ export function unifiedDiff(
     return { text: "", added: 0, removed: 0, truncated: false };
   }
 
-  const a = oldContent === null ? [] : oldContent.split("\n");
-  const b = newContent.split("\n");
+  const a = oldContent === null ? [] : splitLines(oldContent);
+  const b = splitLines(newContent);
 
   if (a.length > MAX_DIFF_LINES || b.length > MAX_DIFF_LINES) {
     return { text: "", added: b.length, removed: a.length, truncated: true };
@@ -161,8 +161,8 @@ export function diffCounts(
   newContent: string,
 ): { added: number; removed: number } {
   if (oldContent === newContent) return { added: 0, removed: 0 };
-  const a = (oldContent ?? "").split("\n");
-  const b = newContent.split("\n");
+  const a = oldContent === null ? [] : splitLines(oldContent);
+  const b = splitLines(newContent);
   if (a.length > MAX_DIFF_LINES || b.length > MAX_DIFF_LINES) {
     return { added: b.length, removed: a.length };
   }

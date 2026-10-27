@@ -12,7 +12,7 @@
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test test/permissions.test.mjs && node test/run-e2e.mjs && node test/run-mcp-test.mjs"
+    "test": "npm run build && node --test test/permissions.test.mjs test/tools.test.mjs test/core.test.mjs && node test/run-e2e.mjs && node test/run-mcp-test.mjs"
   },
   "engines": {
     "node": ">=18"
