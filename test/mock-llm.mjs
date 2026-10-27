@@ -113,16 +113,23 @@ const server = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", () => {
+    let parsed = {};
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      // ignore
+    }
+    // Readiness probes (no messages array) get an empty 200 without consuming a scripted step
+    if (!Array.isArray(parsed.messages)) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ choices: [] }));
+      return;
+    }
     call++;
     const msg = scripted[Math.min(call - 1, scripted.length - 1)];
     console.error(`[mock-llm] call #${call} -> ${msg.tool_calls?.length ? msg.tool_calls.map((t) => t.function.name).join(",") : "text"}`);
 
-    let wantsStream = false;
-    try {
-      wantsStream = JSON.parse(body).stream === true;
-    } catch {
-      // ignore
-    }
+    const wantsStream = parsed.stream === true;
 
     if (wantsStream) {
       sse(res, msg);
@@ -138,4 +145,9 @@ const server = createServer((req, res) => {
   });
 });
 
-server.listen(8931, "127.0.0.1", () => console.error("[mock-llm] listening on :8931"));
+// Bind to a random free port to avoid conflicts between parallel test runs.
+// run-e2e.mjs waits for the "MOCK_LLM_PORT=<n>" line to know the port.
+server.listen(0, "127.0.0.1", () => {
+  process.stdout.write(`MOCK_LLM_PORT=${server.address().port}\n`);
+  console.error("[mock-llm] listening");
+});

@@ -145,51 +145,73 @@ export interface PromptOptions {
 /**
  * Prompt user for permission. Returns true/false. "always" is signaled via
  * the alwaysAllowPrefix callback.
+ * Uses AbortController so timeoutSecs is actually enforced (deny on timeout).
  */
 export async function promptForPermission(
   opts: PromptOptions,
   onAlwaysAllow?: (prefix: string) => void,
 ): Promise<boolean> {
   const cmd = opts.command.length > 80 ? opts.command.slice(0, 80) + "..." : opts.command;
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const question = (q: string): Promise<string> =>
-    new Promise((res) => rl.question(q, (ans) => res(ans)));
-
-  let answer = "";
   const timeoutMs = (opts.timeoutSecs ?? 60) * 1000;
-  const deadline = Date.now() + timeoutMs;
 
-  while (true) {
-    const remaining = Math.max(0, deadline - Date.now()) / 1000;
-    const timeoutStr = remaining > 1 ? `${Math.ceil(remaining)}s` : "";
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
 
-    let prompt = `\n⚠  run_command requires approval: ${cmd}${timeoutStr ? ` (timeout in ${timeoutStr})` : ""}\n`;
-    if (opts.alwaysAllowPrefix) {
-      prompt += `[y] yes  [a] always allow "${opts.alwaysAllowPrefix}"  [n] no  [q] quit: `;
-    } else {
-      prompt += `[y] yes  [n] no  [q] quit: `;
-    }
+  const rl = createInterface({ input: process.stdin, output: process.stdout, signal: ac.signal });
+  const question = (q: string): Promise<string> =>
+    new Promise((res, _rej) => {
+      rl.question(q, (ans) => res(ans));
+      // If signal aborts before question resolves, the pending question
+      // gets rejected (DOMException AbortError) — we catch it in the try/catch.
+    });
 
-    answer = (await question(prompt)).trim().toLowerCase();
-    if (answer === "q") {
-      rl.close();
-      return false; // caller will abort
+  try {
+    let answer = "";
+    while (true) {
+      const timeoutStr = Math.ceil((opts.timeoutSecs ?? 60)) + "s";
+
+      let prompt = `⚠  run_command requires approval: ${cmd} (timeout in ${timeoutStr})\n`;
+      if (opts.alwaysAllowPrefix) {
+        prompt += `[y] yes  [a] always allow "${opts.alwaysAllowPrefix}"  [n] no  [q] quit: `;
+      } else {
+        prompt += `[y] yes  [n] no  [q] quit: `;
+      }
+
+      try {
+        answer = (await question(prompt)).trim().toLowerCase();
+      } catch {
+        // Timeout — AbortController triggered
+        clearTimeout(timer);
+        rl.close();
+        return false; // safe default: deny on timeout
+      }
+
+      if (answer === "q") {
+        clearTimeout(timer);
+        rl.close();
+        return false; // caller will abort
+      }
+      if (answer === "y") {
+        clearTimeout(timer);
+        rl.close();
+        return true;
+      }
+      if (answer === "n") {
+        clearTimeout(timer);
+        rl.close();
+        return false;
+      }
+      if (answer === "a" && opts.alwaysAllowPrefix) {
+        clearTimeout(timer);
+        rl.close();
+        onAlwaysAllow?.(opts.alwaysAllowPrefix);
+        return true;
+      }
+      // invalid answer — loop again (timeout still ticking)
     }
-    if (answer === "y") {
-      rl.close();
-      return true;
-    }
-    if (answer === "n") {
-      rl.close();
-      return false;
-    }
-    if (answer === "a" && opts.alwaysAllowPrefix) {
-      rl.close();
-      onAlwaysAllow?.(opts.alwaysAllowPrefix);
-      return true;
-    }
-    // invalid answer — loop
+  } finally {
+    clearTimeout(timer);
+    if (!rl.closed) rl.close();
   }
 }
 

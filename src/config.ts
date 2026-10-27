@@ -104,9 +104,6 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       /^claude-/i.test(overrides.model ?? process.env.CODER_MODEL ?? rc.model ?? ""));
   const provider: ProviderName = providerRaw === "anthropic" || isAnthropic ? "anthropic" : "openai";
 
-  const isAnth = provider === "anthropic";
-  void isAnth;
-
   const cfg: AgentConfig = {    provider,
     baseUrl: overrides.baseUrl ?? process.env.CODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
     apiKey:

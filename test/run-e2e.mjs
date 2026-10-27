@@ -26,16 +26,38 @@ console.error("[test] temp dir:", tmp);
 console.error("[test] build.js:", join(tmp, "build.js"));
 console.error("[test] build.js content:", execFileSync("cat", [join(tmp, "build.js")], { encoding: "utf8" }).trim());
 
-// Start mock LLM server
+// Start mock LLM server (random port — printed to stdout as MOCK_LLM_PORT=<n>)
 const mockServer = spawn("node", ["./test/mock-llm.mjs"], { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
 mockServer.stderr.on("data", (c) => process.stderr.write(c));
-mockServer.stdout.on("data", (c) => process.stderr.write(c));
 
-// Wait for server to be ready (it logs "listening on :8931")
-await new Promise((res) => setTimeout(res, 500));
+const mockPort = await new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error("mock LLM server did not report a port in time")), 10_000);
+  mockServer.stdout.on("data", (c) => {
+    const m = String(c).match(/MOCK_LLM_PORT=(\d+)/);
+    if (m) {
+      clearTimeout(timer);
+      resolve(Number(m[1]));
+    }
+  });
+  mockServer.on("exit", (c) => {
+    clearTimeout(timer);
+    resolve(null); // server crashed on startup
+  });
+});
+
+// Readiness: poll until the server responds (robust on slow CI runners)
+const BASE_URL = `http://127.0.0.1:${mockPort}`;
+for (let i = 0; i < 50; i++) {
+  try {
+    await fetch(`${BASE_URL}/chat/completions`, { method: "POST", body: "{}" });
+    break; // any HTTP response means the server is up
+  } catch {
+    await new Promise((res) => setTimeout(res, 100));
+  }
+}
 
 // Run the agent
-const agent = spawn("node", [join(process.cwd(), "dist/index.js"), "-m", "mock/model", "--base-url", "http://localhost:8931", "-B", "node build.js", "-y", `Add an add function to lib.js that returns a + b (the correct formula). The build command is "node build.js" which tests that add(2,3) equals 5.`], {
+const agent = spawn("node", [join(process.cwd(), "dist/index.js"), "-m", "mock/model", "--base-url", `http://127.0.0.1:${mockPort}`, "-B", "node build.js", "-y", `Add an add function to lib.js that returns a + b (the correct formula). The build command is "node build.js" which tests that add(2,3) equals 5.`], {
   cwd: tmp,
   stdio: "inherit",
   env: { ...process.env, CODER_API_KEY: "mock-key" },
