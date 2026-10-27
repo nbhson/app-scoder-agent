@@ -18,8 +18,12 @@ const CATASTROPHIC_PATTERNS: RegExp[] = [
   /mkfs\b/i,
   /dd\s+.*of=\//i,
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i,
-  /curl\s+[^\s]*\|\s*sh/i,
-  /wget\s+[^\s]*\|\s*sh/i,
+  // curl/wget pipe-to-shell: match any content between command and '| sh'/'| bash'
+  // Handles -qO-, -X POST, etc. flags; URL-like patterns must contain '/' or '.'
+  /curl\s+.*[/.].*\s*\|\s*sh\b/i,
+  /curl\s+.*[/.].*\s*\|\s*bash\b/i,
+  /wget\s+.*[/.].*\s*\|\s*sh\b/i,
+  /wget\s+.*[/.].*\s*\|\s*bash\b/i,
   /sudo\s+rm\s+-rf/i,
   /\bshutdown\b|\breboot\b|\binit\s+[06]\b/i,
   /chmod\s+-R\s+0[77][07][07]\s+[\/~]/i,

@@ -83,13 +83,13 @@ describe("classifyCommand — config allow/deny lists", () => {
 });
 
 describe("SessionAllowlist", () => {
-  it("prefix matching hoạt động", () => {
+  it("prefix matching: git + gitx đều khớp (prefix đệ quy)", () => {
     const s = new SessionAllowlist();
-    s.addPrefix("git ");
-    assert.ok(s.hasMatch("git status"));
-    assert.ok(s.hasMatch("git push origin main"));
-    assert.ok(!s.hasMatch("gitx status"));
-    assert.ok(!s.hasMatch("npm test"));
+    s.addPrefix("git");
+    assert.ok(s.hasMatch("git status"), "git status");
+    assert.ok(s.hasMatch("git push origin main"), "git push");
+    assert.ok(s.hasMatch("gitx status"), "gitx cũng khớp vì 'git' là prefix đệ quy");
+    assert.ok(!s.hasMatch("npm test"), "npm không khớp");
   });
 
   it("clear() xóa hết", () => {
