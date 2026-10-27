@@ -9,7 +9,7 @@
  *  - response blocks -> assistant message + tool_calls
  */
 import type { ChatMessage, ChatResult, StreamChunk, ToolSpec } from "./llm.js";
-import { LlmError } from "./llm.js";
+import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal } from "./llm.js";
 import { withRetry } from "./retry.js";
 
 // ---------------------------------------------------------------------------
@@ -155,9 +155,14 @@ export class AnthropicClient {
     return this.opts.model;
   }
 
-  async chat(messages: ChatMessage[], tools: ToolSpec[]): Promise<ChatResult> {
+  async chat(
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<ChatResult> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
+    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const body = JSON.stringify({
       model: this.opts.model,
       max_tokens: this.opts.maxTokens,
@@ -174,26 +179,32 @@ export class AnthropicClient {
           : undefined,
     });
 
-    const res = await withRetry(
-      async () => {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": this.opts.apiKey,
-            "anthropic-version": ANTHROPIC_VERSION,
-          },
-          body,
-        });
-        if (!r.ok) throw await toAnthropicError(r, url);
-        return r;
-      },
-      {},
-      (attempt, delay, reason) =>
-        console.error(
-          `⚠  Anthropic request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`,
-        ),
-    );
+    let res: Response;
+    try {
+      res = await withRetry(
+        async () => {
+          const r = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": this.opts.apiKey,
+              "anthropic-version": ANTHROPIC_VERSION,
+            },
+            body,
+            signal,
+          });
+          if (!r.ok) throw await toAnthropicError(r, url);
+          return r;
+        },
+        {},
+        (attempt, delay, reason) =>
+          console.error(
+            `⚠  Anthropic request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`,
+          ),
+      );
+    } finally {
+      cleanup();
+    }
 
     const data = (await res.json()) as AnthropicResponse;
     if (data.error) {
@@ -207,8 +218,12 @@ export class AnthropicClient {
    * For now, delegate to non-streaming chat and emit one final chunk.
    * Full Anthropic streaming is planned for P2.
    */
-  async *streamChat(messages: ChatMessage[], tools: ToolSpec[]): AsyncGenerator<StreamChunk> {
-    const result = await this.chat(messages, tools);
+  async *streamChat(
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    opts: { signal?: AbortSignal } = {},
+  ): AsyncGenerator<StreamChunk> {
+    const result = await this.chat(messages, tools, opts);
     yield { done: true, final: result };
   }
 }

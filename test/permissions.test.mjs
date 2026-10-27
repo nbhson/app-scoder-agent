@@ -9,6 +9,7 @@ import {
   isDangerousCommand,
   SessionAllowlist,
   PermissionChecker,
+  promptForPermission,
 } from "../dist/permissions.js";
 
 const allow = [];
@@ -83,13 +84,20 @@ describe("classifyCommand — config allow/deny lists", () => {
 });
 
 describe("SessionAllowlist", () => {
-  it("prefix matching: git + gitx đều khớp (prefix đệ quy)", () => {
+  it("prefix matching: git + git status both match; gitx does NOT match (word boundary)", () => {
     const s = new SessionAllowlist();
     s.addPrefix("git");
     assert.ok(s.hasMatch("git status"), "git status");
     assert.ok(s.hasMatch("git push origin main"), "git push");
-    assert.ok(s.hasMatch("gitx status"), "gitx cũng khớp vì 'git' là prefix đệ quy");
-    assert.ok(!s.hasMatch("npm test"), "npm không khớp");
+    assert.ok(!s.hasMatch("gitx status"), "gitx is a different binary — must NOT match");
+    assert.ok(!s.hasMatch("npm test"), "npm does not match git");
+  });
+
+  it("prefix with trailing space: 'npm ' still matches npm commands (normalized)", () => {
+    const s = new SessionAllowlist();
+    s.addPrefix("npm "); // already has trailing space
+    assert.ok(s.hasMatch("npm install express"), "npm install");
+    assert.ok(!s.hasMatch("npmx run build"), "npmx is a different binary");
   });
 
   it("clear() xóa hết", () => {
@@ -101,6 +109,15 @@ describe("SessionAllowlist", () => {
 });
 
 describe("PermissionChecker — nonInteractive", () => {
+  it("timeout: promptForPermission tự deny khi hết hạn (không treo)", { timeout: 10_000 }, async () => {
+    // stdin không bao giờ trả lời -> timeout 1s phải trả về false nhanh chóng
+    const start = Date.now();
+    const ok = await promptForPermission({ command: "npm test", timeoutSecs: 1 });
+    const elapsed = Date.now() - start;
+    assert.equal(ok, false, "timeout -> deny (safe default)");
+    assert.ok(elapsed < 5000, `phải resolve trong ~1s, thực tế ${elapsed}ms`);
+  });
+
   it("ask mode + nonInteractive → confirm() = false (deny an toàn)", async () => {
     const checker = new PermissionChecker({
       mode: "ask",

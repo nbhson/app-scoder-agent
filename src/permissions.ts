@@ -56,8 +56,11 @@ export class SessionAllowlist {
   private prefixes = new Set<string>();
 
   addPrefix(prefix: string): void {
-    // Normalize: strip trailing spaces/newlines
-    this.prefixes.add(prefix.trim().replace(/\s+$/, ""));
+    // Normalize to a word-bounded prefix: "git" -> "git " so that allowing
+    // "git" never matches a different binary like "gitx" or "github-cli".
+    const t = prefix.trim().replace(/\s+$/, "");
+    if (t.length === 0) return;
+    this.prefixes.add(`${t} `);
   }
 
   hasMatch(command: string): boolean {
@@ -162,12 +165,27 @@ export async function promptForPermission(
   const timer = setTimeout(() => ac.abort(), timeoutMs);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, signal: ac.signal });
+  // NOTE: Node's rl.question() callback is NOT invoked (and the promise never
+  // settles) when the interface is closed by an aborted signal — so we must
+  // race it against an abort promise or promptForPermission would hang forever.
   const question = (q: string): Promise<string> =>
     new Promise((res, _rej) => {
       rl.question(q, (ans) => res(ans));
-      // If signal aborts before question resolves, the pending question
-      // gets rejected (DOMException AbortError) — we catch it in the try/catch.
     });
+  let rejectAborted: ((e: Error) => void) | null = null;
+  const aborted = new Promise<never>((_res, rej) => {
+    rejectAborted = rej;
+  });
+  ac.signal.addEventListener(
+    "abort",
+    () => {
+      const e = new Error("permission prompt timed out");
+      e.name = "AbortError";
+      rejectAborted?.(e);
+    },
+    { once: true },
+  );
+
 
   try {
     let answer = "";
@@ -182,7 +200,7 @@ export async function promptForPermission(
       }
 
       try {
-        answer = (await question(prompt)).trim().toLowerCase();
+        answer = (await Promise.race([question(prompt), aborted])).trim().toLowerCase();
       } catch {
         // Timeout — AbortController triggered
         clearTimeout(timer);

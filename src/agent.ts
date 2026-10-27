@@ -53,6 +53,8 @@ export class Agent {
   private currentTask = "";
   private lastBuildResult: BuildResult | null = null;
   private mcp: McpManager | null = null;
+  /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
+  private runSignal = new AbortController();
 
   constructor(private config: AgentConfig) {
     const commonOpts = {
@@ -85,6 +87,13 @@ export class Agent {
   /** Handle SIGINT: abort gracefully after current tool finishes. */
   abort(): void {
     this.aborted = true;
+    this.runSignal.abort(new DOMException("interrupted by user", "AbortError"));
+  }
+
+  /** Reset the run-signal so a new run() can use a fresh controller. */
+  private resetRunSignal(): void {
+    this.runSignal = new AbortController();
+    this.aborted = false;
   }
 
   /**
@@ -92,15 +101,16 @@ export class Agent {
    * fallback to non-streaming when the provider/stream fails.
    */
   private async chatWithStream(): Promise<ChatResult> {
+    const signal = this.runSignal.signal;
     if (!this.config.stream) {
-      return this.client.chat(this.messages, this.tools);
+      return this.client.chat(this.messages, this.tools, { signal });
     }
     try {
       let streamedText = "";
       let final: ChatResult | undefined;
       let started = false;
 
-      for await (const chunk of this.client.streamChat(this.messages, this.tools)) {
+      for await (const chunk of this.client.streamChat(this.messages, this.tools, { signal })) {
         if (chunk.contentDelta) {
           if (!started) {
             ui.llmStreamStart("assistant");
@@ -170,6 +180,7 @@ export class Agent {
     ui.info(`model=${this.client.model}  workdir=${this.config.workdir}  build="${buildCmd}"  maxSteps=${this.config.maxSteps}`);
 
     this.currentTask = task;
+    this.resetRunSignal();
     this.messages = [
       {
         role: "system",
@@ -196,6 +207,7 @@ export class Agent {
     const buildCmd = this.buildCmd;
     this.sessionCreatedAt = session.createdAt;
     this.currentTask = session.task;
+    this.resetRunSignal();
     this.messages = session.messages ?? [];
 
     ui.header(`RESUME ${session.id}`);
@@ -238,7 +250,17 @@ export class Agent {
       steps++;
       ui.step(steps, this.config.maxSteps, "thinking...");
 
-      const { message, usage } = await this.chatWithStream();
+      const { message, usage } = await this.chatWithStream().catch((err: unknown) => {
+        // SIGINT during the LLM call — stop gracefully instead of crashing
+        if (this.aborted) {
+          return {
+            message: { role: "assistant", content: null, tool_calls: undefined },
+            usage: undefined,
+          };
+        }
+        throw err;
+      });
+      if (this.aborted) break;
       if (usage) {
         ui.info(`tokens: in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"}`);
         this.logger.log({ type: "step", step: steps, usage });
@@ -376,8 +398,10 @@ export class Agent {
       }
 
       // After a build-command run, treat success as the terminal condition.
+      // Match the FULL build command (not just its first word): matching "npm"
+      // would falsely trigger on "npm install" mid-task and end the agent.
       const ranBuild = message.tool_calls.some(
-        (tc) => tc.name === "run_command" && tc.arguments.includes(buildCmd.split(" ")[0]),
+        (tc) => tc.name === "run_command" && tc.arguments.includes(buildCmd),
       );
       if (ranBuild) {
         lastBuild = this.checkBuild(buildCmd);

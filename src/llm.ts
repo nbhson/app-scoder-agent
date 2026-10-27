@@ -83,8 +83,9 @@ export class LlmError extends Error {
 /** Build an LlmError from a failed Response, carrying status + Retry-After. */
 async function toLlmError(res: Response, url: string): Promise<LlmError> {
   let body = await res.text().catch(() => "");
-  // Redact Bearer token to avoid leaking secrets in logs/errors
+  // Redact Bearer token and raw key patterns to avoid leaking secrets in logs/errors
   body = body.replace(/Bearer\s+[^\s,&\]]+/gi, "Bearer ***REDACTED***");
+  body = body.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***REDACTED***");
   const retryAfterSec = Number(res.headers.get("retry-after") ?? "");
   const err = new LlmError(
     `LLM API error ${res.status} at ${url}: ${body.slice(0, 500)}`,
@@ -92,6 +93,38 @@ async function toLlmError(res: Response, url: string): Promise<LlmError> {
   );
   if (Number.isFinite(retryAfterSec)) err.retryAfterMs = Number(retryAfterSec) * 1000;
   return err;
+}
+
+// ---------------------------------------------------------------------------
+// Request timeout / abort helpers
+// ---------------------------------------------------------------------------
+
+/** Default per-request timeout for LLM calls (a hung connection must not block the agent forever). */
+export const LLM_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * Combine an external signal with a request timeout.
+ * Returns a derived signal plus a cleanup fn (removes listeners).
+ * Works on Node >= 18 (no AbortSignal.any dependency).
+ */
+export function combinedSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new DOMException("LLM request timed out", "TimeoutError")), timeoutMs);
+  const onExternal = () => ac.abort(new DOMException("aborted", "AbortError"));
+  if (external) {
+    if (external.aborted) ac.abort(external.reason);
+    else external.addEventListener("abort", onExternal, { once: true });
+  }
+  return {
+    signal: ac.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", onExternal);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +159,13 @@ export class LlmClient {
 
   // ── Non-streaming ──────────────────────────────────────────────────────────
 
-  async chat(messages: ChatMessage[], tools: ToolSpec[]): Promise<ChatResult> {
+  async chat(
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<ChatResult> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const body = JSON.stringify({
       model: this.opts.model,
       messages,
@@ -137,20 +175,26 @@ export class LlmClient {
       stream: false,
     });
 
-    const res = await withRetry(
-      async () => {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.opts.apiKey}` },
-          body,
-        });
-        if (!r.ok) throw await toLlmError(r, url);
-        return r;
-      },
-      {},
-      (attempt, delay, reason) =>
-        console.error(`⚠  LLM request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`),
-    );
+    let res: Response;
+    try {
+      res = await withRetry(
+        async () => {
+          const r = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.opts.apiKey}` },
+            body,
+            signal,
+          });
+          if (!r.ok) throw await toLlmError(r, url);
+          return r;
+        },
+        {},
+        (attempt, delay, reason) =>
+          console.error(`⚠  LLM request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`),
+      );
+    } finally {
+      cleanup();
+    }
 
     const data = (await res.json()) as {
       choices?: Array<{
@@ -171,7 +215,7 @@ export class LlmClient {
       message: {
         role: "assistant",
         content: choice.content ?? null,
-        stop_reason: choice.stop_reason ?? choice.content ? "stop" : undefined,
+        stop_reason: choice.stop_reason ?? (choice.content ? "stop" : undefined),
         tool_calls: choice.tool_calls?.map((tc) => ({
           id: tc.id ?? "",
           name: tc.function?.name ?? "",
@@ -191,8 +235,10 @@ export class LlmClient {
   async *streamChat(
     messages: ChatMessage[],
     tools: ToolSpec[],
+    opts: { signal?: AbortSignal } = {},
   ): AsyncGenerator<StreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const bodyStr = JSON.stringify({
       model: this.opts.model,
       messages,
@@ -210,6 +256,7 @@ export class LlmClient {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.opts.apiKey}` },
             body: bodyStr,
+            signal,
           });
           if (!r.ok) throw await toLlmError(r, url);
           return r;
@@ -336,7 +383,10 @@ export class LlmClient {
         }
       }
     } finally {
+      // Cancel the body (frees the socket) and clear the request timeout
+      try { reader.cancel(); } catch { /* already released */ }
       reader.releaseLock();
+      cleanup();
     }
 
     yield { done: true, final: finalResult };
