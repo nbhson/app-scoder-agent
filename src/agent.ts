@@ -303,6 +303,7 @@ export class Agent {
       });
 
       // Execute each tool call (validate args before running)
+      const stepToolResults = new Map<string, { ok: boolean; output: string }>();
       for (const tc of message.tool_calls) {
         if (this.aborted) break;
         const tool = getTool(tc.name);
@@ -389,6 +390,7 @@ export class Agent {
         }
 
         ui.toolResult(tc.name, result.ok, result.output);
+        stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
         this.messages.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -400,10 +402,17 @@ export class Agent {
       // After a build-command run, treat success as the terminal condition.
       // Match the FULL build command (not just its first word): matching "npm"
       // would falsely trigger on "npm install" mid-task and end the agent.
-      const ranBuild = message.tool_calls.some(
+      const buildCall = message.tool_calls.find(
         (tc) => tc.name === "run_command" && tc.arguments.includes(buildCmd),
       );
-      if (ranBuild) {
+      if (buildCall) {
+        // Reuse the tool result when the agent ran the exact build command —
+        // avoids executing the build a second time just to verify.
+        const result = stepToolResults.get(buildCall.id);
+        if (result && result.ok) {
+          lastBuild = { success: true, command: buildCmd, output: result.output };
+          return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");
+        }
         lastBuild = this.checkBuild(buildCmd);
         if (lastBuild.success) {
           return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");

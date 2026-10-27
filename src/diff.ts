@@ -88,14 +88,13 @@ export function unifiedDiff(
 
   let text = header + hunks.join("\n");
   let truncated = false;
-  const lines = text.split("\n");
-  if (lines.length > MAX_DIFF_LINES + 1) {
-    // Should not happen given the guard above, but stay safe
-    lines.length = MAX_DIFF_LINES;
-    text = lines.join("\n");
+  const textLines = text.split("\n");
+  if (textLines.length > MAX_DIFF_TEXT_LINES) {
+    // Cap rendered diff lines; report counts instead of the full diff
+    const kept = textLines.slice(0, MAX_DIFF_TEXT_LINES).join("\n");
+    text = `${kept}\n... [diff truncated: +${added} -${removed} lines total]`;
     truncated = true;
   }
-  if (hunks.join("\n").split("\n").length > MAX_DIFF_LINES) truncated = true;
 
   return { text, added, removed, truncated };
 }

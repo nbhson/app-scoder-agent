@@ -303,31 +303,60 @@ export class PermissionChecker {
   /**
    * Ask user to approve a file write/edit, showing the diff first.
    * Returns true = approved, false = rejected.
+   * Enforced timeout (default 120s) — deny on timeout (safe default).
    */
-  async confirmEdit(path: string, diffText: string): Promise<boolean> {
+  async confirmEdit(path: string, diffText: string, timeoutSecs = 120): Promise<boolean> {
     if (this.allowAllEdits) return true;
     if (this.config.nonInteractive) {
       return false;
     }
 
-    // Show the diff (caller passes colored rendering via ui.printDiff upstream;
-    // here we print raw — the tool layer calls ui.printDiff before prompting)
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutSecs * 1000);
+    const rl = createInterface({ input: process.stdin, output: process.stdout, signal: ac.signal });
     const question = (q: string): Promise<string> =>
       new Promise((res) => rl.question(q, (ans) => res(ans)));
+    let rejectAborted: ((e: Error) => void) | null = null;
+    const aborted = new Promise<never>((_res, rej) => {
+      rejectAborted = rej;
+    });
+    ac.signal.addEventListener("abort", () => {
+      const e = new Error("edit confirmation timed out");
+      e.name = "AbortError";
+      rejectAborted?.(e);
+    }, { once: true });
 
-    let approved = false;
-    for (;;) {
-      const answer = (
-        await question(`\nApply this change to ${path}? [y]es  [a] always (this session)  [n]o  [q]uit: `)
-      ).trim().toLowerCase();
+    try {
+      for (;;) {
+        let answer: string;
+        try {
+          answer = (
+            await Promise.race([
+              question(`\nApply this change to ${path}? [y]es  [a] always (this session)  [n]o  [q]uit: `),
+              aborted,
+            ])
+          ).trim().toLowerCase();
+        } catch {
+          // timeout — deny (safe default)
+          return false;
+        }
 
-      if (answer === "y") { approved = true; break; }
-      if (answer === "a") { this.allowAllEdits = true; approved = true; break; }
-      if (answer === "n") { approved = false; break; }
-      if (answer === "q") { process.exit(130); }
+        if (answer === "y") return true;
+        if (answer === "a") { this.allowAllEdits = true; return true; }
+        if (answer === "n") return false;
+        if (answer === "q") {
+          // Graceful abort signal instead of process.exit from library code
+          this.abortRequested = true;
+          return false;
+        }
+        // invalid answer — loop again (timeout still ticking)
+      }
+    } finally {
+      clearTimeout(timer);
+      try { rl.close(); } catch { /* already closed */ }
     }
-    rl.close();
-    return approved;
   }
+
+  /** Set when the user pressed [q]uit in confirmEdit — the agent should stop. */
+  public abortRequested = false;
 }

@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { resolve, dirname, join, relative, isAbsolute } from "node:path";
+import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
 import { unifiedDiff, diffCounts } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
@@ -13,32 +13,85 @@ export interface ToolResult {
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
+const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // refuse to read files > 2MB
 
 function clamp(s: string, max = MAX_OUTPUT_CHARS): string {
   if (s.length <= max) return s;
   return s.slice(0, max) + `\n... [truncated, ${s.length - max} more chars]`;
 }
 
-/** Resolve a user-supplied path inside workdir; reject escapes. */
+/** Resolve a user-supplied path inside workdir; reject escapes and symlink traversal. */
 function safePath(workdir: string, p: string): string {
-  const abs = isAbsolute(p) ? p : resolve(workdir, p);
-  const rel = relative(workdir, abs);
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  const abs = isAbsolute(p) ? resolve(p) : resolve(workdir, p);
+  // Lexical containment first (cheap): reject obvious ../ escapes.
+  const relLex = relative(workdir, abs);
+  if (relLex.startsWith("..") || isAbsolute(relLex)) {
     throw new Error(`Path escapes working directory: ${p}`);
   }
-  return abs;
+  // Realpath containment: resolve symlinks so a link inside workdir pointing
+  // outside (e.g. evil-link -> /etc) cannot be used to read/write outside.
+  // macOS may present /tmp as /private/tmp — resolve workdir the same way.
+  let realWorkdir = workdir;
+  try {
+    realWorkdir = realpathSync(workdir);
+  } catch {
+    // workdir must exist; keep lexical fallback
+  }
+  // Walk up to the nearest existing ancestor, then verify containment.
+  let probe = abs;
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(probe);
+      const reconstructed = real + missing.map((s) => `/${s}`).join("");
+      const rel = relative(realWorkdir, reconstructed.length > 0 ? reconstructed : real);
+      if (rel.startsWith("..") || isAbsolute(rel)) {
+        throw new Error(`Path escapes working directory: ${p}`);
+      }
+      return abs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT" && probe !== dirname(probe)) {
+        missing.push(basename(probe));
+        probe = dirname(probe);
+        continue;
+      }
+      // realpath failed for another reason (e.g. escaped) — rethrow escape errors
+      throw err;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
 
+/** Turn a sync tool step into a ToolResult, converting thrown errors (e.g. path escapes) into structured results. */
+function toResult(fn: () => ToolResult): ToolResult {
+  try {
+    return fn();
+  } catch (err) {
+    return { ok: false, output: `ERROR: ${(err as Error).message}` };
+  }
+}
+
 function toolReadFile(workdir: string, args: { path: string }): ToolResult {
+  return toResult(() => {
   const abs = safePath(workdir, args.path);
+  const st = statSync(abs);
+  if (st.isDirectory()) {
+    return { ok: false, output: `ERROR: ${args.path} is a directory — use list_files instead.` };
+  }
+  if (st.size > MAX_FILE_SIZE_BYTES) {
+    return {
+      ok: false,
+      output: `ERROR: ${args.path} is ${(st.size / 1024 / 1024).toFixed(1)}MB (limit ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB). Use run_command with grep/head/tail to inspect specific parts.`,
+    };
+  }
   const content = readFileSync(abs, "utf8");
   const lines = content.split("\n");
   const numbered = lines.map((l, i) => `${i + 1}: ${l}`).join("\n");
   return { ok: true, output: clamp(numbered) };
+  });
 }
 
 /** Shared permission/diff gate for file writes. Returns null = approved. */
@@ -75,7 +128,12 @@ async function gateWrite(
 }
 
 async function toolWriteFile(ctx: ToolContext, args: { path: string; content: string }): Promise<ToolResult> {
-  const abs = safePath(ctx.workdir, args.path);
+  let abs: string;
+  try {
+    abs = safePath(ctx.workdir, args.path);
+  } catch (err) {
+    return { ok: false, output: `ERROR: ${(err as Error).message}` };
+  }
   let oldContent: string | null = null;
   try {
     oldContent = readFileSync(abs, "utf8");
@@ -95,7 +153,12 @@ async function toolEditFile(
   ctx: ToolContext,
   args: { path: string; old_string: string; new_string: string },
 ): Promise<ToolResult> {
-  const abs = safePath(ctx.workdir, args.path);
+  let abs: string;
+  try {
+    abs = safePath(ctx.workdir, args.path);
+  } catch (err) {
+    return { ok: false, output: `ERROR: ${(err as Error).message}` };
+  }
   const content = readFileSync(abs, "utf8");
   if (!content.includes(args.old_string)) {
     return { ok: false, output: `old_string not found in ${args.path}. Read the file again and retry with exact text.` };
@@ -114,6 +177,7 @@ async function toolEditFile(
 }
 
 function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
+  return toResult(() => {
   const root = safePath(workdir, args.path ?? ".");
   const skip = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
   const out: string[] = [];
@@ -151,6 +215,7 @@ function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
 
   walk(root, 0);
   return { ok: true, output: out.length > 0 ? clamp(out.join("\n")) : "(empty directory)" };
+  });
 }
 
 export function toolRunCommand(workdir: string, args: { command: string; timeout_secs?: number }): ToolResult {
