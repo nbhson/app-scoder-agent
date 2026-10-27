@@ -211,7 +211,7 @@ export async function promptForPermission(
     }
   } finally {
     clearTimeout(timer);
-    if (!rl.closed) rl.close();
+    try { rl.close(); } catch { /* already closed */ }
   }
 }
 
