@@ -1,0 +1,32 @@
+{
+  "name": "coder-agent",
+  "version": "0.1.0",
+  "description": "Autonomous coding agent CLI - similar to opencode/cline/claude. Runs tasks until build succeeds.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "coder": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/run-e2e.mjs && node test/run-mcp-test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cli",
+    "agent",
+    "ai",
+    "coding-agent",
+    "llm"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
