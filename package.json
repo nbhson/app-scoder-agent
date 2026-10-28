@@ -1,6 +1,6 @@
 {
   "name": "app-scoder-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Autonomous coding agent CLI - similar to opencode/cline/claude. Runs tasks until build succeeds.",
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
@@ -27,6 +28,12 @@
     "coding-agent",
     "llm"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nbhson/app-scoder-agent.git"
+  },
+  "homepage": "https://github.com/nbhson/app-scoder-agent#readme",
+  "bugs": "https://github.com/nbhson/app-scoder-agent/issues",
   "license": "MIT",
   "publishConfig": {
     "access": "public",

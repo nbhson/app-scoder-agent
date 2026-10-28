@@ -3,7 +3,16 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-28 — Rename to scoder & release readiness
+
+### Changed
+- **BREAKING: the CLI is renamed from `coder` to `scoder`** to match the repository/package name (`app-scoder-agent`):
+  - command: `coder` → `scoder` (re-install globally after upgrading)
+  - environment variables: `CODER_*` → `SCODER_*` (e.g. `SCODER_API_KEY`, `SCODER_BASE_URL`, `SCODER_MODEL`)
+  - config file: `.coderrc.json` / `.coderrc` → `.scoderrc.json` / `.scoderrc`
+  - data directories: `.coder/sessions/` → `.scoder/sessions/`, `.coder/logs/` → `.scoder/logs/` (rename the folder manually to keep old sessions)
+  - system prompt identity: "You are Coder" → "You are Scoder"
+- **Install from GitHub** — `npm install -g github:nbhson/app-scoder-agent` now works via a `prepare` build step; README gained a full Installation section (GitHub install, `npx`, npm-registry path).
 
 ### Fixed
 - **`[q]uit` in edit confirmation now stops the run** — `permissions.abortRequested` was set but never read; the agent loop now observes it and stops the run.
