@@ -153,15 +153,36 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
 - `scripts/check-secrets.mjs`: scan `sk-*`, `sk-ant-*`, `ghp_*`, `xox*`,
   `AIza*` + field `apiKey` trong `.coderrc.json`. Exit 1 chặn commit.
 
+### BUG-22: `Number("") = 0` gây Retry-After = 0ms (Medium) — ĐÃ FIX
+- `Number(res.headers.get("retry-after") ?? "")` → Number("") = 0 → finite
+  → retryAfterMs = 0 → hammer rate-limited API với delay 0.
+- **Fix:** check null/empty explicitly trước khi parse.
+
+### BUG-23: streamChat error không call cleanup() → timer leak 120s (Critical) — ĐÃ FIX
+- Khi fetch thất bại sau retries (429/network), streamChat throw ra ngoài
+  **trước** khi tới reader.finally → timer 120s của `combinedSignal` tiếp tục
+  tick → **process treo 2 phút sau mỗi lỗi stream**.
+- **Fix:** gọi `cleanup()` trong catch block của cả `LlmClient.streamChat` và
+  `AnthropicClient.streamChat`. Phát hiện nhờ test mới treo vô hạn.
+
+### IMPROVE-4: Anthropic native SSE streaming — ĐÃ FIX
+- `AnthropicClient.streamChat`: parse SSE events (message_start,
+  content_block_delta text + tool_use/input_json_delta, message_delta,
+  message_stop) → real-time token streaming, không còn fallback
+  non-streaming cho Anthropic.
+- 9 tests mới: translation edge cases + mock SSE server + 429 error flow.
+
 ## Kiểm chứng
 
 ```
 npm run typecheck  →  0 errors
-npm test           →  57/57 unit tests pass + e2e closed-loop + MCP smoke
+npm run lint      →  0 errors
+npm test           →  72/72 unit tests pass + e2e closed-loop + MCP smoke
   test/permissions.test.mjs  →  29 tests (catastrophic patterns, classify, allowlist word-boundary, timeout-denies)
-  test/tools.test.mjs        →  10 tests (safePath traversal + symlink escape, size cap, write/edit/list)
-  test/core.test.mjs         →  18 tests (diff, retry, context)
-```
+  test/tools.test.mjs         →  10 tests (safePath traversal + symlink escape, size cap, write/edit/list)
+  test/core.test.mjs          →  18 tests (diff, retry, context)
+  test/config.test.mjs        →  13 tests (env/rc/cli precedence, logFile, permissions)
+  test/anthropic.test.mjs    →   9 tests (message translation, SSE streaming, error handling)
 
 ## Backlog đề xuất (P1/P2)
 
@@ -170,7 +191,7 @@ npm test           →  57/57 unit tests pass + e2e closed-loop + MCP smoke
 - [x] ~~ESLint pipeline~~ (BUG-20)
 - [x] ~~Soften `process.exit(130)`~~ (BUG-14)
 - [x] ~~Secrets pre-commit scanner~~ (IMPROVE-3)
-- [ ] Anthropic native streaming (content_block_delta) — hiện fallback non-streaming
+- [x] ~~Anthropic native streaming~~ (IMPROVE-4)
 - [ ] Soften `checkBuild` chạy build mà không qua permission gate (design decision — cần document)
 - [ ] MCP: HTTP/SSE transport (P2)
 - [ ] Log viewer CLI: `coder logs <id>`
@@ -185,4 +206,6 @@ npm test           →  57/57 unit tests pass + e2e closed-loop + MCP smoke
 6. `docs+security`: README hardening, .coderrc.example.json, secrets scanner
 7. `fix(session)`: save() mkdir sai thư mục
 8. `feat(repl+sessions)`: shared REPL session, smart prune
+9. `fix(config)+test`: CODER_LOG_FILE=1 mapping, +13 config tests
+10. `feat(anthropic-streaming)+fix(leak)`: native SSE, cleanup() timer leak, Retry-After=0 bug, +9 tests
 
