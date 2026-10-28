@@ -6,6 +6,7 @@
  * `mcp__<server>__<tool>` prefixed names in the agent's tool registry.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { CLIENT_NAME, getVersion } from "./version.js";
 
 export interface McpServerConfig {
   command: string;
@@ -69,7 +70,7 @@ export class McpConnection {
     await this.rpc("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "coder-agent", version: "0.1.0" },
+      clientInfo: { name: CLIENT_NAME, version: getVersion() },
     }, timeoutMs);
     this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
   }

@@ -1,5 +1,5 @@
 {
-  "name": "coder-agent",
+  "name": "app-scoder-agent",
   "version": "0.2.0",
   "description": "Autonomous coding agent CLI - similar to opencode/cline/claude. Runs tasks until build succeeds.",
   "type": "module",

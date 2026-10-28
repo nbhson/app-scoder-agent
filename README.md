@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![node](https://img.shields.io/node/v/coder-agent)](https://www.npmjs.com/package/coder-agent)
+[![node](https://img.shields.io/node/v/app-scoder-agent)](https://www.npmjs.com/package/app-scoder-agent)
 
 **coder** is a command-line coding agent that autonomously writes, edits, and builds code until your project compiles without errors. It mirrors the workflow of opencode, cline, and Claude Code, but runs as a single standalone CLI tool.
 
