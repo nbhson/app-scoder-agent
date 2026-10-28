@@ -123,7 +123,12 @@ export function listSessions(workdir: string): SessionSummary[] {
   return out;
 }
 
-/** Delete session files older than `days` (default 7). Returns count removed. */
+/**
+ * Delete session files older than `days` (default 7).
+ * Completed sessions (lastBuild.success === true) are removed; sessions that
+ * did NOT finish successfully are kept longer — they may still be worth
+ * resuming. Returns count removed.
+ */
 export function pruneSessions(workdir: string, days = 7): number {
   const dir = sessionsDir(workdir);
   if (!existsSync(dir)) return 0;
@@ -134,12 +139,16 @@ export function pruneSessions(workdir: string, days = 7): number {
     const full = join(dir, f);
     try {
       const st = statSync(full);
-      if (st.mtimeMs < cutoff) {
+      if (st.mtimeMs >= cutoff) continue;
+      const s = JSON.parse(readFileSync(full, "utf8")) as SessionFile;
+      const completed = s.lastBuild?.success === true;
+      if (completed) {
         rmSync(full);
         removed++;
       }
     } catch {
-      // ignore
+      // malformed JSON — prune it (unreadable session is worthless)
+      try { rmSync(full); removed++; } catch { /* ignore */ }
     }
   }
   return removed;

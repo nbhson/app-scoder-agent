@@ -200,6 +200,27 @@ export class Agent {
   }
 
   /**
+   * One conversational turn in an ongoing session (used by the REPL):
+   * appends the task to the existing message history instead of resetting it,
+   * then runs the autonomous loop. First call behaves like run().
+   */
+  async runTurn(task: string): Promise<AgentRunResult> {
+    if (this.messages.length === 0) {
+      return this.run(task);
+    }
+    const buildCmd = this.buildCmd;
+    this.currentTask = `${this.currentTask}\n${task}`.trim();
+    this.resetRunSignal();
+    this.messages.push({ role: "user", content: task });
+    try {
+      await this.connectMcp();
+      return await this.runLoop(0, buildCmd, null);
+    } finally {
+      this.shutdownMcp();
+    }
+  }
+
+  /**
    * Resume a previous session: restore messages/step count and continue the loop.
    * An optional follow-up task is appended as a new user message.
    */

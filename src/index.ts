@@ -178,15 +178,26 @@ async function repl(cfg: AgentConfig): Promise<never> {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "you> " });
 
+  // One shared session for the whole REPL conversation (plan P0.5 §4):
+  // every input is a follow-up turn, context carries over, saved continuously.
+  const agent = new Agent(cfg);
+
+  process.on("SIGINT", () => {
+    ui.warn("\nSIGINT — aborting current task...");
+    agent.abort();
+  });
+
+  let first = true;
+
   for (;;) {
     const line: string = await new Promise((res) => rl.question("you> ", res));
     const input = line.trim();
     if (!input) continue;
     if (input === "exit" || input === "quit") break;
 
-    const agent = new Agent(cfg);
     try {
-      const result = await agent.run(input);
+      const result = first ? await agent.run(input) : await agent.runTurn(input);
+      first = false;
       if (!result.success) ui.warn("task did not complete — try refining it");
     } catch (err) {
       ui.error((err as Error).message);
