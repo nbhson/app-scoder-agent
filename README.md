@@ -256,12 +256,19 @@ npm run lint      # eslint flat config (typescript-eslint + eqeqeq, prefer-const
 npm run typecheck # tsc --noEmit
 ```
 
-Test suites:
-- `test/permissions.test.mjs` — 29 tests: catastrophic patterns, mode classification, allowlist word-boundary, timeout-denies
-- `test/tools.test.mjs` — 10 tests: safePath traversal, symlink escape, file-size cap, write/edit/list
-- `test/core.test.mjs` — 18 tests: unified diff, retry backoff, context trimming
-- `test/run-e2e.mjs` — closed-loop integration (mock LLM server port 127.0.0.1:8931)
+Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
+- `test/permissions.test.mjs` — catastrophic patterns, mode classification, allowlist word-boundary, timeout-denies
+- `test/permission-prompt.test.mjs` — interactive prompt timeout behavior
+- `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list
+- `test/core.test.mjs` — unified diff, retry backoff, context trimming
+- `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
+- `test/session.test.mjs` — session store, smart prune, resolve
+- `test/anthropic.test.mjs` — message translation + native SSE streaming
+- `test/llm.test.mjs` — OpenAI-compatible chat + SSE streaming + redaction
+- `test/run-e2e.mjs` — closed-loop integration (mock LLM server)
 - `test/run-mcp-test.mjs` — MCP smoke (mock stdio server)
+
+Coverage (lines): **90.3%** overall — see `npm run coverage`.
 
 ## Exit Codes
 
