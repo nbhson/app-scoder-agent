@@ -49,6 +49,7 @@ export class SessionStore {
   readonly id: string;
   private filePath: string;
   private enabled: boolean;
+  private readonly _workdir: string;
 
   constructor(
     workdir: string,
@@ -56,6 +57,7 @@ export class SessionStore {
     id = newSessionId(),
   ) {
     this.id = id;
+    this._workdir = workdir;
     this.enabled = enabled;
     this.filePath = join(sessionsDir(workdir), `${id}.json`);
   }
@@ -63,7 +65,7 @@ export class SessionStore {
   save(data: Omit<SessionFile, "id" | "createdAt" | "updatedAt">, createdAt?: string): void {
     if (!this.enabled) return;
     try {
-      mkdirSync(sessionsDirDirname(this.filePath), { recursive: true });
+      mkdirSync(sessionsDir(this._workdir), { recursive: true });
       const now = new Date().toISOString();
       const full: SessionFile = {
         ...data,
@@ -77,16 +79,6 @@ export class SessionStore {
       console.error(`⚠  session save failed: ${(err as Error).message}`);
     }
   }
-
-  markDisabled(): void {
-    this.enabled = false;
-  }
-}
-
-function sessionsDirDirname(filePath: string): string {
-  // dirname without importing node:path's dirname — resolve already handled dirs
-  const idx = filePath.lastIndexOf("/");
-  return idx > 0 ? filePath.slice(0, idx) : ".";
 }
 
 // ---------------------------------------------------------------------------
