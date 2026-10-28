@@ -8,7 +8,7 @@
  *  - role:"tool"     -> {role:"user", content:[{type:"tool_result"}]}
  *  - response blocks -> assistant message + tool_calls
  */
-import type { ChatMessage, ChatResult, StreamChunk, ToolSpec } from "./llm.js";
+import type { ChatMessage, ChatResult, ToolCall, StreamChunk, ToolSpec } from "./llm.js";
 import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal } from "./llm.js";
 import { withRetry } from "./retry.js";
 
@@ -205,28 +205,207 @@ export class AnthropicClient {
   }
 
   /**
-   * Streaming: Anthropic SSE has a different event model (content_block_delta).
-   * For now, delegate to non-streaming chat and emit one final chunk.
-   * Full Anthropic streaming is planned for P2.
+   * Streaming: parse Anthropic SSE events (message_start, content_block_delta,
+   * message_delta, message_stop) and translate them to StreamChunks:
+   *  - text_delta            -> contentDelta
+   *  - tool_use + input_json_delta -> toolCallDelta accumulation
+   *  - message_delta stop_reason/usage -> final ChatResult
    */
   async *streamChat(
     messages: ChatMessage[],
     tools: ToolSpec[],
     opts: { signal?: AbortSignal } = {},
   ): AsyncGenerator<StreamChunk> {
-    const result = await this.chat(messages, tools, opts);
-    yield { done: true, final: result };
+    const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
+    const { system, messages: translated } = toAnthropicMessages(messages);
+    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const body = JSON.stringify({
+      model: this.opts.model,
+      max_tokens: this.opts.maxTokens,
+      temperature: this.opts.temperature,
+      system,
+      messages: translated,
+      stream: true,
+      tools:
+        tools.length > 0
+          ? tools.map((t) => ({
+              name: t.function.name,
+              description: t.function.description,
+              input_schema: t.function.parameters,
+            }))
+          : undefined,
+    });
+
+    let res: Response;
+    try {
+      res = await withRetry(
+        async () => {
+          const r = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": this.opts.apiKey,
+              "anthropic-version": ANTHROPIC_VERSION,
+            },
+            body,
+            signal,
+          });
+          if (!r.ok) throw await toAnthropicError(r, url);
+          return r;
+        },
+        {},
+        (attempt, delay, reason) =>
+          console.error(`⚠  Anthropic stream request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s...`),
+      );
+    } catch (err) {
+      cleanup(); // don't leak the 120s request timer — it would hang the process
+      throw new LlmError(`Anthropic stream fetch error after retries at ${url}: ${(err as Error).message}`);
+    }
+
+    if (!res.body) {
+      throw new LlmError("Anthropic stream: response body is not readable");
+    }
+
+    // Accumulators — text content + tool_use blocks (by block index)
+    let text = "";
+    const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
+    let stopReason: string | undefined;
+    let usage: ChatResult["usage"] | undefined;
+    let sawStop = false;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const handleEvent = (raw: string): StreamChunk | null => {
+      let ev: {
+        type?: string;
+        index?: number;
+        content_block?: { type?: string; id?: string; name?: string };
+        delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
+        message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+        usage?: { input_tokens?: number; output_tokens?: number };
+      };
+      try {
+        ev = JSON.parse(raw) as typeof ev;
+      } catch {
+        return null;
+      }
+
+      if (ev.type === "message_start") {
+        // Initial usage (input tokens) arrives on message_start
+        if (ev.message?.usage) {
+          usage = {
+            prompt_tokens: ev.message.usage.input_tokens,
+            completion_tokens: ev.message.usage.output_tokens,
+          };
+        }
+        return null;
+      }
+
+      if (ev.type === "content_block_start" && ev.content_block?.type === "tool_use") {
+        toolBlocks.set(ev.index ?? 0, {
+          id: ev.content_block.id ?? "",
+          name: ev.content_block.name ?? "",
+          json: "",
+        });
+        return null;
+      }
+
+      if (ev.type === "content_block_delta") {
+        if (ev.delta?.type === "text_delta" && ev.delta.text) {
+          text += ev.delta.text;
+          return { contentDelta: ev.delta.text, done: false };
+        }
+        if (ev.delta?.type === "input_json_delta" && ev.delta.partial_json) {
+          const block = toolBlocks.get(ev.index ?? 0);
+          if (block) block.json += ev.delta.partial_json;
+          return {
+            toolCallDelta: { index: ev.index ?? 0, argumentsDelta: ev.delta.partial_json },
+            done: false,
+          };
+        }
+        return null;
+      }
+
+      if (ev.type === "message_delta") {
+        stopReason = ev.delta?.stop_reason ?? stopReason;
+        // Merge: message_delta usage only carries output_tokens
+        if (ev.usage) {
+          usage = {
+            ...usage,
+            prompt_tokens: usage?.prompt_tokens ?? ev.usage.input_tokens,
+            completion_tokens: ev.usage.output_tokens ?? usage?.completion_tokens,
+          };
+        }
+        return null;
+      }
+
+      if (ev.type === "message_stop") {
+        sawStop = true;
+        return null;
+      }
+
+      return null;
+    };
+
+    let finalResult: ChatResult | undefined;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+
+          const chunk = handleEvent(payload);
+          if (chunk) yield chunk;
+        }
+      }
+
+      if (sawStop) {
+        const toolCalls: ToolCall[] = [...toolBlocks.values()]
+          .filter((b) => b.name)
+          .map((b) => ({ id: b.id, name: b.name, arguments: b.json || "{}" }));
+        finalResult = {
+          message: {
+            role: "assistant",
+            content: text.length > 0 ? text : null,
+            stop_reason: stopReason,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+          },
+          usage,
+        };
+      }
+    } finally {
+      try { reader.cancel(); } catch { /* already released */ }
+      reader.releaseLock();
+      cleanup();
+    }
+
+    yield { done: true, final: finalResult };
   }
 }
 
 async function toAnthropicError(res: globalThis.Response, url: string): Promise<LlmError> {
   let body = await res.text().catch(() => "");
   body = body.replace(/sk-ant-[^\s,&\]]+/gi, "sk-ant-***REDACTED***");
-  const retryAfterSec = Number(res.headers.get("retry-after") ?? "");
   const err = new LlmError(
     `Anthropic API error ${res.status} at ${url}: ${body.slice(0, 500)}`,
     res.status,
   );
-  if (Number.isFinite(retryAfterSec)) err.retryAfterMs = Number(retryAfterSec) * 1000;
+  const retryAfterHeader = res.headers.get("retry-after");
+  if (retryAfterHeader != null && retryAfterHeader !== "") {
+    const sec = Number(retryAfterHeader);
+    if (Number.isFinite(sec) && sec > 0) err.retryAfterMs = sec * 1000;
+  }
   return err;
 }

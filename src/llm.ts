@@ -86,12 +86,16 @@ async function toLlmError(res: Response, url: string): Promise<LlmError> {
   // Redact Bearer token and raw key patterns to avoid leaking secrets in logs/errors
   body = body.replace(/Bearer\s+[^\s,&\]]+/gi, "Bearer ***REDACTED***");
   body = body.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***REDACTED***");
-  const retryAfterSec = Number(res.headers.get("retry-after") ?? "");
   const err = new LlmError(
     `LLM API error ${res.status} at ${url}: ${body.slice(0, 500)}`,
     res.status,
   );
-  if (Number.isFinite(retryAfterSec)) err.retryAfterMs = Number(retryAfterSec) * 1000;
+  // Only honor a REAL Retry-After value: Number("") === 0 would zero the backoff
+  const retryAfterHeader = res.headers.get("retry-after");
+  if (retryAfterHeader != null && retryAfterHeader !== "") {
+    const sec = Number(retryAfterHeader);
+    if (Number.isFinite(sec) && sec > 0) err.retryAfterMs = sec * 1000;
+  }
   return err;
 }
 
@@ -266,6 +270,7 @@ export class LlmClient {
           console.error(`⚠  LLM stream request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s...`),
       );
     } catch (err) {
+      cleanup(); // don't leak the 120s request timer — it would hang the process
       throw new LlmError(`Stream fetch error after retries at ${url}: ${(err as Error).message}`);
     }
 
