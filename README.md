@@ -162,6 +162,8 @@ coder is designed for unattended use. Key guarantees:
 - **Double-build prevention** — when the agent itself runs the build command, coder reuses that result instead of running the build twice.
 - **Build diff preview** — run `coder --permission ask` to see a unified diff before every file write/edit.
 
+> **Design note:** the build command (stop condition) always runs without a permission prompt, even in `readonly` mode — the agent must be able to verify its stop condition. Builds are invoked as-is from your config (`buildCmd`) or auto-detection, never invented by the LLM. Shell commands *chosen by the LLM* (`run_command` tool) go through the full permission policy above.
+
 ### Auto-detected build commands
 
 coder detects the build command automatically:
