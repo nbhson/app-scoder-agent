@@ -93,6 +93,23 @@ describe("write_file / edit_file", () => {
     assert.equal(r.ok, false);
     assert.match(r.output, /matches 2 locations/);
   });
+
+  it("edit_file: new_string chứa $-pattern ($&, $`, $') -> chèn LITERAL không interpolate", async () => {
+    const p = "sub/dollar.txt";
+    await writeFile.run(ctx, { path: p, content: "echo PLACEHOLDER\n" });
+    // $& và $' là special replacement patterns — phải được chèn nguyên văn
+    const r = await editFile.run(ctx, {
+      path: p,
+      old_string: "echo PLACEHOLDER",
+      new_string: "echo '$&' $` $' $1",
+    });
+    assert.equal(r.ok, true);
+    assert.equal(
+      readFileSync(join(workdir, "sub/dollar.txt"), "utf8"),
+      "echo '$&' $` $' $1\n",
+      "literal $-patterns phải giữ nguyên, không bị interpolate",
+    );
+  });
 });
 
 describe("list_files", () => {

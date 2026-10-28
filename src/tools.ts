@@ -167,7 +167,9 @@ async function toolEditFile(
   if (count > 1) {
     return { ok: false, output: `old_string matches ${count} locations in ${args.path}; include more surrounding context to make it unique.` };
   }
-  const newContent = content.replace(args.old_string, args.new_string);
+  // Function replacement: avoids JS $-pattern interpolation ($&, $', $`, $1…)
+  // which would corrupt literal text like "$&" in the new content.
+  const newContent = content.replace(args.old_string, () => args.new_string);
 
   const gate = await gateWrite(ctx, args.path, content, newContent);
   if (gate) return gate;
