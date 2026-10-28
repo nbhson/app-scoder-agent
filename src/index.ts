@@ -1,14 +1,25 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { createInterface } from "node:readline";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadConfig, type AgentConfig } from "./config.js";
 import { Agent } from "./agent.js";
 import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import * as ui from "./ui.js";
 
-const VERSION = "0.1.0";
+// Single source of truth: read version from package.json (two levels up from
+// dist/), falling back to a literal if the file is unavailable (bundled builds).
+const VERSION = (() => {
+  try {
+    const pkgPath = resolve(dirname(fileURLToPath(import.meta.url)), "../package.json");
+    return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 interface CliArgs {
   task: string | null;

@@ -1,6 +1,6 @@
 {
   "name": "coder-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Autonomous coding agent CLI - similar to opencode/cline/claude. Runs tasks until build succeeds.",
   "type": "module",
   "main": "dist/index.js",
@@ -27,6 +27,15 @@
     "llm"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
