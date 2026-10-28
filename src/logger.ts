@@ -3,7 +3,7 @@
  * One JSON object per line — parseable with jq or any log consumer.
  * Never crashes the agent: write failures are swallowed after one warning.
  */
-import { mkdirSync, appendFileSync } from "node:fs";
+import { mkdirSync, appendFileSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 export class JsonlLogger {
@@ -43,6 +43,27 @@ export class JsonlLogger {
 
   get enabled(): boolean {
     return this.filePath !== null;
+  }
+
+  /** Read a session's JSONL log file, returning parsed events (or null if missing/unreadable). */
+  static read(workdir: string, sessionId: string): Array<Record<string, unknown>> | null {
+    const path = resolve(workdir, ".coder/logs", `${sessionId}.jsonl`);
+    let content: string;
+    try {
+      content = readFileSync(path, "utf8");
+    } catch {
+      return null;
+    }
+    const events: Array<Record<string, unknown>> = [];
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        events.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return events;
   }
 
   /** Append one event. Never throws. */

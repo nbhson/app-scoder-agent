@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { loadConfig, type AgentConfig } from "./config.js";
 import { Agent } from "./agent.js";
 import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
+import { JsonlLogger } from "./logger.js";
 import * as ui from "./ui.js";
 
 const VERSION = "0.1.0";
@@ -22,8 +23,10 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume";
+  subcommand?: "list" | "resume" | "logs";
   resumeId?: string;
+  logsId?: string;
+  logsFilter?: string;
   help: boolean;
   version: boolean;
 }
@@ -35,6 +38,7 @@ USAGE
   coder                           Start interactive session (chat + tools)
   coder list                      List saved sessions for this directory
   coder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
+  coder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
   coder --version | --help
 
 OPTIONS
@@ -141,7 +145,7 @@ function parseArgs(argv: string[]): CliArgs {
 
   args.task = rest.length > 0 ? rest.join(" ") : null;
 
-  // Subcommands: coder list | coder resume <id|last> [follow-up task]
+  // Subcommands: coder list | coder resume <id|last> [follow-up task] | coder logs [id]
   if (rest.length > 0 && rest[0] === "list") {
     args.subcommand = "list";
     args.task = null;
@@ -149,6 +153,10 @@ function parseArgs(argv: string[]): CliArgs {
     args.subcommand = "resume";
     args.resumeId = rest[1] ?? "last";
     args.task = rest.length > 2 ? rest.slice(2).join(" ") : null;
+  } else if (rest[0] === "logs") {
+    args.subcommand = "logs";
+    args.logsId = rest[1] ?? "last";
+    args.logsFilter = rest.length > 2 ? rest.slice(2).join(" ") : undefined;
   }
 
   return args as CliArgs;
@@ -271,6 +279,30 @@ async function main(): Promise<void> {
       ui.error((err as Error).message);
       process.exit(2);
     }
+  }
+
+  if (args.subcommand === "logs") {
+    let id = args.logsId ?? "last";
+    if (id === "last") {
+      const sessions = listSessions(cfg.workdir);
+      if (sessions.length === 0) {
+        ui.error("No saved sessions in this directory. Run with --log-file to record logs.");
+        process.exit(2);
+      }
+      id = sessions[0].id;
+    }
+    const events = JsonlLogger.read(cfg.workdir, id);
+    if (events === null || events.length === 0) {
+      ui.error(`No log found for session ${id}. Logs require --log-file (or CODER_LOG_FILE=1).`);
+      process.exit(2);
+    }
+    const filter = args.logsFilter?.toLowerCase();
+    for (const ev of events) {
+      const line = JSON.stringify(ev);
+      if (filter && !line.toLowerCase().includes(filter)) continue;
+      console.log(line);
+    }
+    return;
   }
 
   if (args.task) {
