@@ -124,6 +124,35 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
 ### BUG-18: Secrets trong error body (Medium) — ĐÃ FIX (session 2)
 - `toLlmError` chỉ redact `Bearer ...`. **Fix:** thêm redact `sk-*` raw keys.
 
+### BUG-19: SessionStore.save() mkdir sai thư mục (High) — ĐÃ FIX (session 2)
+- `save()` gọi `sessionsDirDirname(this.filePath)` — helper tự viết bằng
+  `lastIndexOf("/")` — thay vì `sessionsDir(workdir)` chính xác.
+- **Fix:** lưu workdir trong store, `mkdirSync(sessionsDir(workdir))`.
+  Xóa helper thừa + method `markDisabled()` không ai gọi.
+
+### BUG-20: ESLint phát hiện 13 lỗi code quality — ĐÃ FIX (session 2)
+- 7 biến/type import không dùng (`mcpToolKey`, `VALID_PERMISSION_MODES`,
+  `MAX_TOTAL_CHARS`, `AgentConfig`, `AnthropicRequest`, `existsSync`,
+  `diffCounts`)
+- 3 `no-useless-assignment` (`args`, `lastBuild`, `input`)
+- 3 `no-useless-escape` trong regex catastrophic patterns
+- 3 non-null assertions (`!`) — restructure thay vì dùng `!`
+- **CI giờ chạy `npm run lint` trước typecheck/build/test.**
+
+### IMPROVE-1: REPL dùng chung 1 session (P0.5 §4) — ĐÃ FIX (session 2)
+- Trước: mỗi line REPL tạo Agent mới → mất context, tốn token.
+- **Fix:** `Agent.runTurn()` append vào history hiện có; SIGINT abort
+  graceful; session lưu liên tục.
+
+### IMPROVE-2: pruneSessions chỉ xóa session completed — ĐÃ FIX (session 2)
+- Trước: xóa MỌI session > 7 ngày, kể cả session dang dở đáng lẽ resume.
+- **Fix:** chỉ xóa session có `lastBuild.success === true`; session fail
+  giữ lại để resume; file JSON hỏng xóa ngay (vô giá trị).
+
+### IMPROVE-3: Secrets pre-commit scanner — ĐÃ FIX (session 2)
+- `scripts/check-secrets.mjs`: scan `sk-*`, `sk-ant-*`, `ghp_*`, `xox*`,
+  `AIza*` + field `apiKey` trong `.coderrc.json`. Exit 1 chặn commit.
+
 ## Kiểm chứng
 
 ```
@@ -136,10 +165,12 @@ npm test           →  57/57 unit tests pass + e2e closed-loop + MCP smoke
 
 ## Backlog đề xuất (P1/P2)
 
-- [ ] REPL dùng chung 1 session cho cả conversation (hiện mỗi line tạo Agent mới)
+- [x] ~~REPL dùng chung 1 session~~ (IMPROVE-1)
+- [x] ~~`pruneSessions` chỉ xóa session success~~ (IMPROVE-2)
+- [x] ~~ESLint pipeline~~ (BUG-20)
+- [x] ~~Soften `process.exit(130)`~~ (BUG-14)
+- [x] ~~Secrets pre-commit scanner~~ (IMPROVE-3)
 - [ ] Anthropic native streaming (content_block_delta) — hiện fallback non-streaming
-- [ ] `pruneSessions` chỉ xóa session success (hiện xóa mọi session > 7 ngày)
-- [ ] ESLint + Prettier pipeline
 - [ ] Soften `checkBuild` chạy build mà không qua permission gate (design decision — cần document)
 - [ ] MCP: HTTP/SSE transport (P2)
 - [ ] Log viewer CLI: `coder logs <id>`
@@ -149,4 +180,9 @@ npm test           →  57/57 unit tests pass + e2e closed-loop + MCP smoke
 1. `fix(security)`: critical permission-prompt hang, premature build exit, SIGINT cancel, request timeout
 2. `fix(reliability)`: symlink-safe paths, file-size cap, diff render cap, double-build optimization
 3. `test(core)`: +18 unit tests; fix trailing-newline diff bug
+4. `docs(plan)`: changelog 18 bugs
+5. `chore(quality)`: eslint + fix 13 lint errors; CI chạy lint
+6. `docs+security`: README hardening, .coderrc.example.json, secrets scanner
+7. `fix(session)`: save() mkdir sai thư mục
+8. `feat(repl+sessions)`: shared REPL session, smart prune
 
