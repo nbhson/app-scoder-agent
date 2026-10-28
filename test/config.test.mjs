@@ -22,6 +22,7 @@ afterEach(() => {
   delete process.env.CODER_MODEL;
   delete process.env.CODER_BASE_URL;
   delete process.env.CODER_PROVIDER;
+  delete process.env.CODER_MAX_STEPS;
 });
 
 describe("loadConfig", () => {
@@ -91,6 +92,27 @@ describe("loadConfig", () => {
     process.env.CODER_PERMISSION = "yolo";
     const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
     assert.equal(cfg.permissionMode, "auto");
+  });
+
+  it("CODER_MAX_STEPS không phải số -> fallback 40, không NaN (BUG: steps < NaN)", () => {
+    process.env.CODER_MAX_STEPS = "abc";
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.maxSteps, 40);
+  });
+
+  it("CODER_MAX_STEPS <= 0 hoặc NaN -> fallback 40", () => {
+    process.env.CODER_MAX_STEPS = "0";
+    assert.equal(loadConfig({ workdir: TMP, apiKey: "test" }).maxSteps, 40);
+    process.env.CODER_MAX_STEPS = "-5";
+    assert.equal(loadConfig({ workdir: TMP, apiKey: "test" }).maxSteps, 40);
+    process.env.CODER_MAX_STEPS = "NaN";
+    assert.equal(loadConfig({ workdir: TMP, apiKey: "test" }).maxSteps, 40);
+  });
+
+  it("CODER_MAX_STEPS hợp lệ (số thập phân) -> được floor", () => {
+    process.env.CODER_MAX_STEPS = "12.9";
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.maxSteps, 12);
   });
 });
 

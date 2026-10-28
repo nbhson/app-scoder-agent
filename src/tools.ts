@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
 import { unifiedDiff } from "./diff.js";
@@ -220,27 +220,85 @@ function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
   });
 }
 
-export function toolRunCommand(workdir: string, args: { command: string; timeout_secs?: number }): ToolResult {
-  const timeout = Math.min(Math.max(args.timeout_secs ?? 120, 1), 600) * 1000;
-  try {
-    const stdout = execFileSync("/bin/sh", ["-c", args.command], {
+/**
+ * Run a shell command asynchronously (async spawn keeps the event loop free,
+ * so streaming output renders and SIGINT is handled promptly).
+ * Kills the child on timeout or external abort (SIGINT via ctx.signal).
+ */
+export async function toolRunCommand(
+  workdir: string,
+  args: { command: string; timeout_secs?: number },
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  const timeoutMs = Math.min(Math.max(args.timeout_secs ?? 120, 1), 600) * 1000;
+
+  return new Promise<ToolResult>((resolve) => {
+    let settled = false;
+    const finish = (result: ToolResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+
+    const child = spawn("/bin/sh", ["-c", args.command], {
       cwd: workdir,
-      timeout,
-      encoding: "utf8",
-      maxBuffer: 10 * 1024 * 1024,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { ok: true, output: clamp(`$ ${args.command}\n(exit 0)\n${stdout}`) };
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; status?: number; message: string };
-    const stdout = e.stdout ?? "";
-    const stderr = e.stderr ?? "";
-    const status = e.status ?? -1;
-    return {
-      ok: false,
-      output: clamp(`$ ${args.command}\n(exit ${status})\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+
+    let stdout = "";
+    let stderr = "";
+    let killedReason: "timeout" | "aborted" | null = null;
+
+    const killChild = (reason: "timeout" | "aborted") => {
+      killedReason = reason;
+      try { child.kill("SIGTERM"); } catch { /* already dead */ }
+      // SIGKILL fallback if the process ignores SIGTERM
+      setTimeout(() => {
+        try { if (child.exitCode === null) child.kill("SIGKILL"); } catch { /* already dead */ }
+      }, 5_000).unref();
     };
-  }
+
+    const timer = setTimeout(() => killChild("timeout"), timeoutMs);
+
+    const onAbort = () => killChild("aborted");
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout?.on("data", (c: Buffer) => { stdout += c.toString("utf8"); });
+    child.stderr?.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
+
+    child.on("error", (err) => {
+      finish({ ok: false, output: clamp(`$ ${args.command}\n(spawn error) ${err.message}`) });
+    });
+
+    child.on("close", (code) => {
+      if (killedReason === "timeout") {
+        finish({
+          ok: false,
+          output: clamp(`$ ${args.command}\n(command timed out after ${Math.round(timeoutMs / 1000)}s and was killed)\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+        });
+        return;
+      }
+      if (killedReason === "aborted") {
+        finish({
+          ok: false,
+          output: clamp(`$ ${args.command}\n(interrupted by user)\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+        });
+        return;
+      }
+      const status = code ?? -1;
+      if (status === 0) {
+        finish({ ok: true, output: clamp(`$ ${args.command}\n(exit 0)\n${stdout}`) });
+      } else {
+        finish({
+          ok: false,
+          output: clamp(`$ ${args.command}\n(exit ${status})\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+        });
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +309,8 @@ export interface ToolContext {
   workdir: string;
   permissions?: PermissionChecker;
   permissionMode?: PermissionMode;
+  /** Aborted on SIGINT — long-running commands observe this and terminate. */
+  signal?: AbortSignal;
 }
 
 export interface AgentTool {
@@ -341,7 +401,7 @@ export const AGENT_TOOLS: AgentTool[] = [
       },
     },
     run: (ctx, args) =>
-      toolRunCommand(ctx.workdir, args as { command: string; timeout_secs?: number }),
+      toolRunCommand(ctx.workdir, args as { command: string; timeout_secs?: number }, ctx.signal),
   },
 ];
 

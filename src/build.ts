@@ -33,8 +33,12 @@ export function detectBuildCommand(workdir: string): string | null {
  * Run the build command. This is the agent's stop condition:
  * exit code 0 == task complete.
  */
-export function runBuild(workdir: string, command: string): BuildResult {
-  const res = toolRunCommand(workdir, { command, timeout_secs: 600 });
+/**
+ * Run the build command. This is the agent's stop condition:
+ * exit code 0 == task complete.
+ */
+export async function runBuild(workdir: string, command: string): Promise<BuildResult> {
+  const res = await toolRunCommand(workdir, { command, timeout_secs: 600 });
   return {
     success: res.ok,
     command,

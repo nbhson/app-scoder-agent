@@ -4,7 +4,7 @@ import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolSpec }
 import { AnthropicClient } from "./provider-anthropic.js";
 import { AGENT_TOOLS, getTool, type ToolContext } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
-import { trimHistory, summariseOutput } from "./context.js";
+import { trimHistory, summariseOutput, claimsCompletion } from "./context.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, type SessionFile } from "./session.js";
 import { JsonlLogger } from "./logger.js";
@@ -84,7 +84,10 @@ export class Agent {
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
   }
 
-  /** Handle SIGINT: abort gracefully after current tool finishes. */
+  /**
+   * Handle SIGINT: abort gracefully after current tool finishes.
+   * Also kills any in-flight run_command child process via the context signal.
+   */
   abort(): void {
     this.aborted = true;
     this.runSignal.abort(new DOMException("interrupted by user", "AbortError"));
@@ -94,6 +97,9 @@ export class Agent {
   private resetRunSignal(): void {
     this.runSignal = new AbortController();
     this.aborted = false;
+    // Keep the tool context in sync so run_command can observe SIGINT and
+    // terminate its child process immediately (long builds must be interruptible).
+    this.ctx.signal = this.runSignal.signal;
   }
 
   /**
@@ -149,6 +155,9 @@ export class Agent {
   private async connectMcp(): Promise<void> {
     const servers = this.config.mcpServers ?? {};
     if (Object.keys(servers as Record<string, unknown>).length === 0) return;
+    if (this.config.permissionMode === "readonly") {
+      ui.warn("readonly mode: MCP tools are disabled (they bypass the permission system)");
+    }
     this.mcp = new McpManager(servers);
     await this.mcp.connectAll();
     const mcpSpecs = this.mcp.toToolSpecs();
@@ -295,9 +304,10 @@ export class Agent {
         this.messages.push({ role: "assistant", content: text });
 
         // If the assistant says it's done without building, force a build check.
-        if (/task (is )?complete|done|finished/i.test(text) && steps < this.config.maxSteps) {
+        // If the assistant says it's done without building, force a build check.
+        if (claimsCompletion(text) && steps < this.config.maxSteps) {
           ui.info("agent claims completion -> verifying with build");
-          lastBuild = this.checkBuild(buildCmd);
+          lastBuild = await this.checkBuild(buildCmd);
           if (lastBuild.success) {
             return this.finish(true, steps, buildCmd, text);
           }
@@ -399,6 +409,13 @@ export class Agent {
           // Route MCP tools first (they carry the mcp__ prefix, not in AGENT_TOOLS)
           if (tool) {
             result = await tool.run(this.ctx, args);
+          } else if (this.config.permissionMode === "readonly") {
+            // MCP tools are not covered by the permission system (no command
+            // classification, no diff preview) — deny them entirely in readonly.
+            result = {
+              ok: false,
+              output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. MCP tools bypass the built-in permission policy, so they cannot run in readonly mode.`,
+            };
           } else {
             const reg = this.mcp?.getTool(tc.name);
             if (!reg) {
@@ -412,6 +429,12 @@ export class Agent {
         } catch (err) {
           result = { ok: false, output: `ERROR: ${(err as Error).message}` };
           this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: false, error: (err as Error).message });
+        }
+
+        // User pressed [q]uit in an edit-confirmation prompt — stop the whole run.
+        if (this.permissions.abortRequested) {
+          this.aborted = true;
+          ui.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
         }
 
         ui.toolResult(tc.name, result.ok, result.output);
@@ -437,7 +460,7 @@ export class Agent {
         if (result && result.ok) {
           return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");
         }
-        lastBuild = this.checkBuild(buildCmd);
+        lastBuild = await this.checkBuild(buildCmd);
         if (lastBuild.success) {
           return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");
         }
@@ -480,8 +503,8 @@ export class Agent {
   }
 
   /** Explicitly verify the build (independent of what the LLM claims). */
-  private checkBuild(buildCmd: string): BuildResult {
-    const res = runBuild(this.config.workdir, buildCmd);
+  private async checkBuild(buildCmd: string): Promise<BuildResult> {
+    const res = await runBuild(this.config.workdir, buildCmd);
     ui.buildStatus(res.success, res.output);
     this.logger.log({ type: "build", success: res.success, command: buildCmd, output: res.output.slice(0, 10_000) });
     return res;

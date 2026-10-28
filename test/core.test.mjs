@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { unifiedDiff, diffCounts } from "../dist/diff.js";
 import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/retry.js";
-import { trimHistory, summariseOutput } from "../dist/context.js";
+import { trimHistory, summariseOutput, claimsCompletion } from "../dist/context.js";
 
 // ── diff ────────────────────────────────────────────────────────────────────
 
@@ -169,5 +169,33 @@ describe("summariseOutput", () => {
     assert.ok(s.length <= 600);
     assert.match(s, /lines omitted/);
     assert.match(s, /line 199/);
+  });
+});
+
+describe("claimsCompletion", () => {
+  it("khớp cụm hoàn thành rõ ràng", () => {
+    for (const t of [
+      "Task is complete.",
+      "The task is now completed.",
+      "task done",
+      "All done.",
+      "The work is finished.",
+      "WORK IS COMPLETE",
+    ]) {
+      assert.equal(claimsCompletion(t), true, `phải khớp: "${t}"`);
+    }
+  });
+
+  it("KHÔNG khớp từ đơn lẻ xuất hiện trong câu thường (BUG-24 regression)", () => {
+    for (const t of [
+      "I'm not done yet — still working on it.",
+      "Reading package.json before editing.",
+      "The task description mentions testing.",
+      "done with this file, moving on to the next one",
+      "Finished reading src/index.ts.",
+      "Here is the list of files I checked.",
+    ]) {
+      assert.equal(claimsCompletion(t), false, `không được khớp: "${t}"`);
+    }
   });
 });

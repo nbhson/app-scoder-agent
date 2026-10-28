@@ -88,7 +88,7 @@ coder ships with a layered permission system for `run_command`:
 |------|----------|
 | `auto` (default) | Autonomous — runs shell commands without confirmation (original behavior) |
 | `ask` | Prompts before each shell command not covered by `allowCommands` |
-| `readonly` | Shell commands are disabled entirely; the agent can only read/list files |
+| `readonly` | Shell commands are disabled entirely; the agent can only read/list files. MCP tools are also disabled (they bypass the permission policy) |
 
 Layered checks, in order:
 
@@ -124,6 +124,7 @@ coder can use tools from [MCP](https://modelcontextprotocol.io) servers configur
 - Servers connect at agent start; a failing server only logs a warning — the agent keeps running with its built-in tools
 - `{env:VAR}` substitution keeps secrets out of config files
 - Built-in tools always take priority over MCP tools with colliding names
+- ⚠️ **MCP tools bypass the built-in permission system** (no command classification, no diff preview). In `readonly` mode they are therefore disabled entirely; in `auto`/`ask` mode they run unsandboxed — only add MCP servers you trust.
 
 ## Sessions
 
@@ -157,7 +158,7 @@ Events: `step` (with token usage), `tool` (args, ok, elapsedMs, denied reason), 
 coder is designed for unattended use. Key guarantees:
 
 - **Request timeouts** — LLM calls have a 120s timeout; on timeout, the agent retries or fails gracefully (never hangs indefinitely).
-- **SIGINT handling** — pressing Ctrl+C cancels the in-flight LLM request immediately, saves the session, and exits with status 130. You can resume with `coder resume last`.
+- **SIGINT handling** — pressing Ctrl+C cancels the in-flight LLM request immediately, kills the running shell command (SIGTERM → SIGKILL), saves the session, and exits with status 130. You can resume with `coder resume last`.
 - **Graceful retries** — transient LLM API failures (HTTP 429/5xx, network errors) are retried with exponential backoff and jitter (up to 3 retries, honoring `Retry-After`). Client errors (401/403/404) fail fast.
 - **Double-build prevention** — when the agent itself runs the build command, coder reuses that result instead of running the build twice.
 - **Build diff preview** — run `coder --permission ask` to see a unified diff before every file write/edit.
@@ -251,7 +252,7 @@ coder --no-save -y "run the full migration"
 ## Integration Testing
 
 ```bash
-npm test          # runs: lint → typecheck → build → 57 unit tests + e2e + MCP smoke
+npm test          # runs: lint → typecheck → build → 116 unit tests + e2e + MCP smoke
 npm run lint      # eslint flat config (typescript-eslint + eqeqeq, prefer-const...)
 npm run typecheck # tsc --noEmit
 ```

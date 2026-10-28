@@ -102,7 +102,13 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       /^claude-/i.test(overrides.model ?? process.env.CODER_MODEL ?? rc.model ?? ""));
   const provider: ProviderName = providerRaw === "anthropic" || isAnthropic ? "anthropic" : "openai";
 
-  const cfg: AgentConfig = {    provider,
+  // Validate maxSteps: NaN/0/negative would silently break the agent loop
+  // (steps < NaN is always false → the loop never runs).
+  const rawMaxSteps = Number(process.env.CODER_MAX_STEPS ?? rc.maxSteps ?? 40);
+  const validatedMaxSteps = Number.isFinite(rawMaxSteps) && rawMaxSteps >= 1 ? Math.floor(rawMaxSteps) : 40;
+
+  const cfg: AgentConfig = {
+    provider,
     baseUrl: overrides.baseUrl ?? process.env.CODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
     apiKey:
       overrides.apiKey ??
@@ -114,7 +120,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     model: overrides.model ?? process.env.CODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL),
     workdir,
     buildCmd: overrides.buildCmd ?? process.env.CODER_BUILD_CMD ?? rc.buildCmd ?? null,
-    maxSteps: overrides.maxSteps ?? Number(process.env.CODER_MAX_STEPS ?? rc.maxSteps ?? 40),
+    maxSteps: overrides.maxSteps ?? validatedMaxSteps,
     maxTokens: 8192,
     temperature: 0.2,
     yes: overrides.yes ?? false,

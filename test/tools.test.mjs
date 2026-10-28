@@ -6,7 +6,7 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getTool } from "../dist/tools.js";
+import { getTool, toolRunCommand } from "../dist/tools.js";
 
 const TMP = join("/tmp", `coder-tools-test-${process.pid}`);
 const workdir = join(TMP, "workdir");
@@ -124,4 +124,53 @@ describe("list_files", () => {
     assert.doesNotMatch(r.output, /node_modules\/pkg/);
     assert.doesNotMatch(r.output, /\.git\//);
   });
+});
+
+describe("toolRunCommand (async spawn)", () => {
+  it("exit 0 -> ok=true, có stdout", async () => {
+    const r = await toolRunCommand(workdir, { command: "echo hello" });
+    assert.equal(r.ok, true);
+    assert.match(r.output, /\(exit 0\)/);
+    assert.match(r.output, /echo hello/);
+  });
+
+  it("exit != 0 -> ok=false, có stderr", async () => {
+    const r = await toolRunCommand(workdir, { command: "echo err >&2; exit 3" });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /\(exit 3\)/);
+    assert.match(r.output, /--- stderr ---/);
+    assert.match(r.output, /err/);
+  });
+
+  it("timeout_secs=1 -> lệnh treo bị kill sau timeout (BUG: execFileSync block)", async () => {
+    const r = await toolRunCommand(workdir, { command: "sleep 30", timeout_secs: 1 });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /timed out after 1s/);
+    assert.ok(r.output.includes("sleep 30"), "phải trả về output đã thu được trước khi kill");
+  }, 15_000);
+
+  it("abort signal -> lệnh bị giết ngay, trả về 'interrupted by user'", async () => {
+    const ac = new AbortController();
+    const p = toolRunCommand(workdir, { command: "sleep 30" }, ac.signal);
+    setTimeout(() => ac.abort(new DOMException("interrupted", "AbortError")), 300);
+    const r = await p;
+    assert.equal(r.ok, false);
+    assert.match(r.output, /interrupted by user/);
+  }, 15_000);
+
+  it("output lớn -> clamp ở MAX_OUTPUT_CHARS", async () => {
+    const r = await toolRunCommand(workdir, { command: "yes A | head -c 100000" });
+    assert.ok(r.output.length < 100_000, "output phải được truncate");
+    assert.match(r.output, /\[truncated/);
+  });
+
+  it("không block event loop: Promise.all chạy song song", async () => {
+    const t0 = Date.now();
+    await Promise.all([
+      toolRunCommand(workdir, { command: "sleep 1" }),
+      toolRunCommand(workdir, { command: "sleep 1" }),
+    ]);
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 1900, `2 lệnh sleep 1s song song phải xong ~1s (thực tế ${elapsed}ms)`);
+  }, 10_000);
 });

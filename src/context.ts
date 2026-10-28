@@ -21,6 +21,19 @@ export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
+ * Strict heuristic: does the assistant's plain-text message claim the task is
+ * finished? Deliberately narrow — bare words like "done" or "finished" appear
+ * in almost any sentence ("I'm not done yet", "package.json is finished with"),
+ * which previously triggered spurious build checks. Requires an explicit
+ * completion phrase instead.
+ */
+export function claimsCompletion(text: string): boolean {
+  return /\b(?:task\s+(?:is\s+)?(?:now\s+)?(?:complete[d]?|done|finished)|all\s+(?:done|finished)|work\s+is\s+(?:now\s+)?(?:complete[d]?|done|finished)|tests?\s+(?:all\s+)?pass(?:ed|ing)?\s*[-—]\s*(?:task|everything)\s+complete[d]?)\b/i.test(
+    text,
+  );
+}
+
+/**
  * Summarize a long output to keep context lean.
  * For very long tool outputs, keep beginning + error lines + end.
  */
