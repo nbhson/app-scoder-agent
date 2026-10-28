@@ -60,25 +60,72 @@ File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved vi
 | `CODER_STREAM` | `1` | `0` to disable streaming LLM output |
 | `CODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
 
-### Per-project config file
+### Per-project config file (.coderrc.json)
 
-Create `.coderrc.json` in your project root (see `.coderrc.example.json`):
+For any OpenAI-compatible endpoint, just point `baseUrl`, `apiKey`, and `model` at it — no code changes needed. Create `.coderrc.json` in your project root (see `.coderrc.example.json`):
 
 ```json
 {
-  "model": "gpt-4o",
   "baseUrl": "https://api.groq.com/openai/v1",
-  "buildCmd": "npm test",
-  "maxSteps": 60,
-  "permissions": {
-    "mode": "ask",
-    "allowCommands": ["npm ", "git ", "npx "],
-    "denyCommands": ["curl ", "wget "]
-  }
+  "apiKey": "gsk_...",
+  "model": "llama-3.3-70b-versatile"
 }
 ```
 
-> ⚠️ **Security:** never put `apiKey` in `.coderrc.json` — it may be committed to git. Use `CODER_API_KEY` env var instead. A pre-commit check is available at `scripts/check-secrets.mjs`.
+Then simply run `coder "your task"` — values are picked up automatically.
+
+#### All fields
+
+| Field | Default | Description |
+|---|---|---|
+| `baseUrl` | `https://api.openai.com/v1` | OpenAI-compatible endpoint (must support `/chat/completions` with tool calling) |
+| `apiKey` | — | API key (⚠️ prefer `CODER_API_KEY` env var, see warning below) |
+| `model` | `gpt-4o-mini` | Model name served by the endpoint |
+| `buildCmd` | auto-detected | Build/compile command (stop condition) |
+| `maxSteps` | `40` | Max autonomous loop iterations |
+| `stream` | `true` | Stream LLM output token-by-token |
+| `provider` | auto-detected | `openai` \| `anthropic` |
+| `permission` | `auto` | `auto` \| `ask` \| `readonly` |
+| `mcpServers` | — | MCP stdio servers (see below) |
+| `permissions` | — | `{ mode, allowCommands, denyCommands }` |
+
+#### Precedence
+
+Values are merged from highest to lowest priority — your `.coderrc.json` value only applies when no flag/env is set:
+
+1. **CLI flags** — `-m`, `--base-url`, `-k`, `--provider`, `-B`
+2. **Environment variables** — `CODER_API_KEY` / `OPENAI_API_KEY`, `CODER_BASE_URL`, `CODER_MODEL`, …
+3. **`.coderrc.json`** (or `.coderrc`) in the project root — project-local only; there is no global rc file. For a machine-wide default, set the `CODER_*` env vars in your shell profile instead
+4. Built-in defaults
+
+> 💡 If your config in `.coderrc.json` seems ignored, check `echo $CODER_API_KEY` — env vars override the file.
+
+#### Examples for common providers
+
+```jsonc
+// Local Ollama
+{
+  "baseUrl": "http://localhost:11434/v1",
+  "apiKey": "ollama",
+  "model": "qwen2.5-coder:32b"
+}
+```
+
+```jsonc
+// DeepSeek
+{
+  "baseUrl": "https://api.deepseek.com/v1",
+  "apiKey": "sk-...",
+  "model": "deepseek-chat"
+}
+```
+
+#### Notes
+
+- Models starting with `claude-`, or a `baseUrl` containing `api.anthropic.com`, automatically switch to the native Anthropic provider — no `provider` field needed.
+- If an `apiKey` is present in the rc file, coder prints a warning on every run. Silence it with `CODER_NO_APIKEY_WARNING=1`.
+
+> ⚠️ **Security:** never commit `apiKey` in `.coderrc.json` — add the file to `.gitignore` and prefer `CODER_API_KEY` env var or the `-k` flag. A pre-commit check is available at `scripts/check-secrets.mjs`.
 
 ## Permissions & Safety
 
