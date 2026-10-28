@@ -6,12 +6,50 @@
 
 **scoder** is a command-line coding agent that autonomously writes, edits, and builds code until your project compiles without errors. It mirrors the workflow of opencode, cline, and Claude Code, but runs as a single standalone CLI tool.
 
+## Installation
+
+**Requirements:** Node.js ≥ 18
+
+### Install from GitHub (current method)
+
+The package is not yet on the npm registry — install straight from this repo:
+
+```bash
+# Clones, builds (via the prepare script), and installs the `scoder` command globally
+npm install -g github:nbhson/app-scoder-agent
+```
+
+Or manually from a local clone:
+
+```bash
+git clone https://github.com/nbhson/app-scoder-agent.git
+cd app-scoder-agent
+npm install
+npm run build
+npm install -g .        # or: npm link
+```
+
+> Upgrading: pull the latest code and re-run `npm install -g .` (or point the global install at the repo again).
+
+### Try without installing
+
+```bash
+npx github:nbhson/app-scoder-agent "your task here"
+```
+
+### From npm (planned)
+
+Once published to the npm registry, installation will be a one-liner:
+
+```bash
+npm install -g app-scoder-agent
+# or run ad-hoc:
+npx app-scoder-agent "your task"
+```
+
 ## Quick Start
 
 ```bash
-# Install globally (or use npx)
-npm install -g .
-
 # Set your API key
 export SCODER_API_KEY=sk-...          # any OpenAI-compatible key (OpenAI, Groq, OpenRouter, Ollama, …)
 export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoints
