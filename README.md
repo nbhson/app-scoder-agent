@@ -41,7 +41,9 @@ You (task) → LLM plans → Tools execute code → Build runs → Success? → 
 | `write_file` | Overwrite/create a file |
 | `edit_file` | Find-and-replace (unique match required) |
 | `list_files` | Recursive directory listing |
-| `run_command` | Execute any shell command |
+| `run_command` | Execute any shell command (subject to permission policy) |
+
+File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved via `realpath` and cannot escape the working directory, even through a malicious symlink. `read_file` refuses files larger than 2MB with guidance to use `grep`/`head`/`tail`.
 
 ## Configuration
 
@@ -152,7 +154,13 @@ Events: `step` (with token usage), `tool` (args, ok, elapsedMs, denied reason), 
 
 ## Reliability
 
-Transient LLM API failures (HTTP 429/5xx, network errors) are retried automatically with exponential backoff and jitter (up to 3 retries, honoring `Retry-After`). Client errors (401/403/404) fail fast. Both OpenAI-compatible and Anthropic native providers are supported — Anthropic is auto-detected from the model name (`claude-*`) or base URL.
+coder is designed for unattended use. Key guarantees:
+
+- **Request timeouts** — LLM calls have a 120s timeout; on timeout, the agent retries or fails gracefully (never hangs indefinitely).
+- **SIGINT handling** — pressing Ctrl+C cancels the in-flight LLM request immediately, saves the session, and exits with status 130. You can resume with `coder resume last`.
+- **Graceful retries** — transient LLM API failures (HTTP 429/5xx, network errors) are retried with exponential backoff and jitter (up to 3 retries, honoring `Retry-After`). Client errors (401/403/404) fail fast.
+- **Double-build prevention** — when the agent itself runs the build command, coder reuses that result instead of running the build twice.
+- **Build diff preview** — run `coder --permission ask` to see a unified diff before every file write/edit.
 
 ### Auto-detected build commands
 
@@ -241,13 +249,17 @@ coder --no-save -y "run the full migration"
 ## Integration Testing
 
 ```bash
-npm test          # or: node test/run-e2e.mjs
+npm test          # runs: lint → typecheck → build → 57 unit tests + e2e + MCP smoke
+npm run lint      # eslint flat config (typescript-eslint + eqeqeq, prefer-const...)
+npm run typecheck # tsc --noEmit
 ```
 
-This spins up a mock LLM server and verifies the closed-loop works:
-1. Agent writes buggy code
-2. Build fails → agent patches it
-3. Build succeeds → agent finishes
+Test suites:
+- `test/permissions.test.mjs` — 29 tests: catastrophic patterns, mode classification, allowlist word-boundary, timeout-denies
+- `test/tools.test.mjs` — 10 tests: safePath traversal, symlink escape, file-size cap, write/edit/list
+- `test/core.test.mjs` — 18 tests: unified diff, retry backoff, context trimming
+- `test/run-e2e.mjs` — closed-loop integration (mock LLM server port 127.0.0.1:8931)
+- `test/run-mcp-test.mjs` — MCP smoke (mock stdio server)
 
 ## Exit Codes
 

@@ -1,11 +1,12 @@
 {
   "model": "gpt-4o-mini",
   "baseUrl": "https://api.openai.com/v1",
+  "buildCmd": null,
   "maxSteps": 40,
   "stream": true,
   "permissions": {
     "mode": "auto",
-    "allowCommands": ["npm ", "npx ", "git ", "node ", "pnpm ", "make ", "cargo ", "go "],
+    "allowCommands": ["npm ", "git ", "npx ", "pnpm ", "make ", "cargo "],
     "denyCommands": ["curl ", "wget "]
   }
 }
