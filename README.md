@@ -1,6 +1,6 @@
 # coder — Autonomous Coding Agent CLI
 
-[![CI](https://github.com/nguyenson/coder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenson/coder-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![node](https://img.shields.io/node/v/coder-agent)](https://www.npmjs.com/package/coder-agent)
 
