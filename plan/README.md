@@ -25,8 +25,9 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
 | Kiến trúc | 9/10 | 9/10 | Modules tách sạch, giữ nguyên |
 | Bảo mật | 8/10 | 9.5/10 | Symlink-safe paths, word-boundary allowlist, redact sk-*, request timeout |
 | Reliability | 7/10 | 9.5/10 | SIGINT cancel in-flight, no hang on timeout, no premature exit |
-| Testing | 5/10 | 8/10 | 57 unit tests (permissions 29 + tools 10 + core 18) + e2e + MCP |
+| Testing | 5/10 | 9/10 | 104 unit tests (9 suites) + e2e + MCP smoke; coverage 90.28% lines / 81.59% branch |
 | TypeScript | 10/10 | 10/10 | typecheck sạch |
+| Lint | — | 10/10 | ESLint flat config, 0 problems, chạy trong CI |
 
 ## Vấn đề phát hiện & đã sửa (28/10/2026)
 
@@ -176,13 +177,26 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
 
 ```
 npm run typecheck  →  0 errors
-npm run lint      →  0 errors
-npm test           →  72/72 unit tests pass + e2e closed-loop + MCP smoke
-  test/permissions.test.mjs  →  29 tests (catastrophic patterns, classify, allowlist word-boundary, timeout-denies)
-  test/tools.test.mjs         →  10 tests (safePath traversal + symlink escape, size cap, write/edit/list)
-  test/core.test.mjs          →  18 tests (diff, retry, context)
-  test/config.test.mjs        →  13 tests (env/rc/cli precedence, logFile, permissions)
-  test/anthropic.test.mjs    →   9 tests (message translation, SSE streaming, error handling)
+npm run lint       →  0 problems
+npm test           →  104/104 unit tests pass + e2e closed-loop + MCP smoke
+npm run coverage   →  90.28% lines / 81.59% branch / 90.13% functions
+
+ Suites (auto-discovered qua glob test/*.test.mjs):
+  test/permissions.test.mjs        → 29 tests (catastrophic patterns, classify, allowlist word-boundary, timeout-denies)
+  test/permission-prompt.test.mjs  →  2 tests (real-timeout regression qua child process)
+  test/tools.test.mjs              → 10 tests (safePath traversal + symlink escape, size cap, write/edit/list)
+  test/core.test.mjs               → 18 tests (diff, retry, context)
+  test/config.test.mjs             → 13 tests (env/rc/cli precedence, logFile mapping, permission lists)
+  test/session.test.mjs            → 17 tests (store round-trip, atomic write, smart prune, resolve)
+  test/anthropic.test.mjs          →  9 tests (message translation, native SSE streaming, 429 error)
+  test/llm.test.mjs                →  6 tests (OpenAI chat + SSE streaming, tool_call accumulation, redaction)
+  test/run-e2e.mjs                 → closed-loop integration (mock LLM server)
+  test/run-mcp-test.mjs            → MCP smoke (mock stdio server)
+```
+
+Ghi chú coverage: `ui.js` 49% lines là display-only (ANSI output) — bỏ qua;
+`permissions.js` 71% thiếu phần lớn là interactive prompt path đã cover qua
+`permission-prompt.test.mjs` (child process, không tính vào V8 coverage).
 
 ## Backlog đề xuất (P1/P2)
 
@@ -192,9 +206,9 @@ npm test           →  72/72 unit tests pass + e2e closed-loop + MCP smoke
 - [x] ~~Soften `process.exit(130)`~~ (BUG-14)
 - [x] ~~Secrets pre-commit scanner~~ (IMPROVE-3)
 - [x] ~~Anthropic native streaming~~ (IMPROVE-4)
-- [ ] Soften `checkBuild` chạy build mà không qua permission gate (design decision — cần document)
-- [ ] MCP: HTTP/SSE transport (P2)
-- [ ] Log viewer CLI: `coder logs <id>`
+- [x] ~~Document design decision `checkBuild` (stop condition không qua gate)~~ (README "Reliability" design note)
+- [x] ~~Log viewer CLI: `coder logs <id|last> [filter]`~~
+- [ ] MCP: HTTP/SSE transport (P2 — stdio đã hoàn chỉnh, giá trị thấp)
 
 ## Lịch sử commit (Enterprise hardening session 2)
 
@@ -208,4 +222,10 @@ npm test           →  72/72 unit tests pass + e2e closed-loop + MCP smoke
 8. `feat(repl+sessions)`: shared REPL session, smart prune
 9. `fix(config)+test`: CODER_LOG_FILE=1 mapping, +13 config tests
 10. `feat(anthropic-streaming)+fix(leak)`: native SSE, cleanup() timer leak, Retry-After=0 bug, +9 tests
+11. `test(permission-prompt)`: real-timeout regression qua child process
+12. `docs`: design note checkBuild (README Reliability)
+13. `feat(cli)`: `coder logs <id|last> [filter]` — JSONL log viewer
+14. `test(session)`: +17 tests; `npm test` glob auto-discover
+15. `test(llm)`: +6 OpenAI streamChat tests
+16. `docs+chore`: coverage script + README test suite list
 
