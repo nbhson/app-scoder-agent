@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-const tmp = mkdtempSync(join(tmpdir(), "coder-agent-test-"));
+const tmp = mkdtempSync(join(tmpdir(), "scoder-agent-test-"));
 
 // Build-checker script: passes only if lib.add(2,3) === 5
 writeFileSync(join(tmp, "build.js"), `
@@ -60,7 +60,7 @@ for (let i = 0; i < 50; i++) {
 const agent = spawn("node", [join(process.cwd(), "dist/index.js"), "-m", "mock/model", "--base-url", `http://127.0.0.1:${mockPort}`, "-B", "node build.js", "-y", `Add an add function to lib.js that returns a + b (the correct formula). The build command is "node build.js" which tests that add(2,3) equals 5.`], {
   cwd: tmp,
   stdio: "inherit",
-  env: { ...process.env, CODER_API_KEY: "mock-key" },
+  env: { ...process.env, SCODER_API_KEY: "mock-key" },
 });
 
 // Give it time to finish (max 30s)

@@ -15,7 +15,7 @@ import {
   resolveSessionId,
 } from "../dist/session.js";
 
-const TMP = join("/tmp", `coder-session-test-${process.pid}`);
+const TMP = join("/tmp", `scoder-session-test-${process.pid}`);
 
 beforeEach(() => {
   rmSync(TMP, { recursive: true, force: true });
@@ -59,7 +59,7 @@ describe("SessionStore", () => {
     assert.equal(loaded.steps, 3);
     assert.equal(loaded.createdAt, loaded.updatedAt);
     // không còn file .tmp sau khi rename
-    assert.ok(!existsSync(join(TMP, ".coder/sessions/20261028-100000-abcd.json.tmp")));
+    assert.ok(!existsSync(join(TMP, ".scoder/sessions/20261028-100000-abcd.json.tmp")));
   });
 
   it("save lần 2 giữ nguyên createdAt (dùng param)", () => {
@@ -74,19 +74,19 @@ describe("SessionStore", () => {
   it("disabled store -> không ghi file", () => {
     const store = new SessionStore(TMP, false, "id-off");
     store.save(sampleData());
-    assert.ok(!existsSync(join(TMP, ".coder/sessions")));
+    assert.ok(!existsSync(join(TMP, ".scoder/sessions")));
   });
 
   it("session file hỏng -> loadSession trả null, không crash", () => {
-    mkdirSync(join(TMP, ".coder/sessions"), { recursive: true });
-    writeFileSync(join(TMP, ".coder/sessions/bad.json"), "{broken");
+    mkdirSync(join(TMP, ".scoder/sessions"), { recursive: true });
+    writeFileSync(join(TMP, ".scoder/sessions/bad.json"), "{broken");
     assert.equal(loadSession(TMP, "bad"), null);
   });
 });
 
 describe("listSessions", () => {
   it("mới nhất trước (reverse sort theo tên)", () => {
-    const d = join(TMP, ".coder/sessions");
+    const d = join(TMP, ".scoder/sessions");
     mkdirSync(d, { recursive: true });
     const mk = (id, task) =>
       writeFileSync(join(d, `${id}.json`), JSON.stringify({ ...sampleData(), id, task }));
@@ -99,7 +99,7 @@ describe("listSessions", () => {
   });
 
   it("bỏ qua file .jsonl/.tmp và file hỏng", () => {
-    const d = join(TMP, ".coder/sessions");
+    const d = join(TMP, ".scoder/sessions");
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, "good.json"), JSON.stringify({ ...sampleData(), id: "good" }));
     writeFileSync(join(d, "x.jsonl"), "{}");
@@ -112,7 +112,7 @@ describe("listSessions", () => {
 });
 
 describe("pruneSessions — smart prune", () => {
-  const d = () => join(TMP, ".coder/sessions");
+  const d = () => join(TMP, ".scoder/sessions");
   const mk = (name, data, ageDays) => {
     mkdirSync(d(), { recursive: true });
     const p = join(d(), name);
@@ -156,7 +156,7 @@ describe("pruneSessions — smart prune", () => {
 
 describe("resolveSessionId", () => {
   it("'last' -> session mới nhất", () => {
-    const d = join(TMP, ".coder/sessions");
+    const d = join(TMP, ".scoder/sessions");
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, "20261027-100000-aaaa.json"), JSON.stringify({ ...sampleData(), id: "20261027-100000-aaaa" }));
     writeFileSync(join(d, "20261028-100000-bbbb.json"), JSON.stringify({ ...sampleData(), id: "20261028-100000-bbbb" }));
@@ -169,7 +169,7 @@ describe("resolveSessionId", () => {
   });
 
   it("id cụ thể -> load đúng session", () => {
-    const d = join(TMP, ".coder/sessions");
+    const d = join(TMP, ".scoder/sessions");
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, "abc.json"), JSON.stringify({ ...sampleData(), id: "abc", task: "specific" }));
     const s = resolveSessionId(TMP, "abc");

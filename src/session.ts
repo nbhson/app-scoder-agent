@@ -1,6 +1,6 @@
 /**
  * Session persistence: save agent state (messages, steps, build) to
- * <workdir>/.coder/sessions/<id>.json after every step so runs can be resumed.
+ * <workdir>/.scoder/sessions/<id>.json after every step so runs can be resumed.
  */
 import { mkdirSync, writeFileSync, renameSync, readFileSync, readdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -20,7 +20,7 @@ export interface SessionFile {
   lastBuild: { success: boolean; command: string; output: string } | null;
 }
 
-const SESSIONS_DIR = ".coder/sessions";
+const SESSIONS_DIR = ".scoder/sessions";
 
 export function newSessionId(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");

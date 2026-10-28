@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "coder": "dist/index.js"
+    "scoder": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",

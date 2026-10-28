@@ -23,7 +23,7 @@ export interface AgentConfig {
   yes: boolean;
   /** Disable session auto-save */
   noSave?: boolean;
-  /** JSONL session log: true = .coder/logs/<session>.jsonl, string = custom path */
+  /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */
   logFile?: boolean | string;
   /** MCP stdio servers: name -> launch config */
   mcpServers?: Record<string, import("./mcp.js").McpServerConfig>;
@@ -59,7 +59,7 @@ interface RcFile {
 }
 
 function loadRcFile(workdir: string): RcFile {
-  for (const name of [".coderrc.json", ".coderrc"]) {
+  for (const name of [".scoderrc.json", ".scoderrc"]) {
     const p = resolve(workdir, name);
     if (existsSync(p)) {
       try {
@@ -89,62 +89,62 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   // Provider auto-detection: explicit flag > env > rc > baseUrl/model heuristics
   const providerRaw =
     (overrides as { provider?: ProviderName }).provider ??
-    process.env.CODER_PROVIDER ??
+    process.env.SCODER_PROVIDER ??
     rc.provider ??
     undefined;
   const isAnthropic =
     providerRaw === "anthropic" ||
     (providerRaw === undefined &&
       /api\.anthropic\.com/.test(
-        process.env.CODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? "",
+        process.env.SCODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? "",
       )) ||
     (providerRaw === undefined &&
-      /^claude-/i.test(overrides.model ?? process.env.CODER_MODEL ?? rc.model ?? ""));
+      /^claude-/i.test(overrides.model ?? process.env.SCODER_MODEL ?? rc.model ?? ""));
   const provider: ProviderName = providerRaw === "anthropic" || isAnthropic ? "anthropic" : "openai";
 
   // Validate maxSteps: NaN/0/negative would silently break the agent loop
   // (steps < NaN is always false → the loop never runs).
-  const rawMaxSteps = Number(process.env.CODER_MAX_STEPS ?? rc.maxSteps ?? 40);
+  const rawMaxSteps = Number(process.env.SCODER_MAX_STEPS ?? rc.maxSteps ?? 40);
   const validatedMaxSteps = Number.isFinite(rawMaxSteps) && rawMaxSteps >= 1 ? Math.floor(rawMaxSteps) : 40;
 
   const cfg: AgentConfig = {
     provider,
-    baseUrl: overrides.baseUrl ?? process.env.CODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
+    baseUrl: overrides.baseUrl ?? process.env.SCODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
     apiKey:
       overrides.apiKey ??
-      process.env.CODER_API_KEY ??
+      process.env.SCODER_API_KEY ??
       (isAnthropic ? process.env.ANTHROPIC_API_KEY : undefined) ??
       process.env.OPENAI_API_KEY ??
       rc.apiKey ??
       "",
-    model: overrides.model ?? process.env.CODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL),
+    model: overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL),
     workdir,
-    buildCmd: overrides.buildCmd ?? process.env.CODER_BUILD_CMD ?? rc.buildCmd ?? null,
+    buildCmd: overrides.buildCmd ?? process.env.SCODER_BUILD_CMD ?? rc.buildCmd ?? null,
     maxSteps: overrides.maxSteps ?? validatedMaxSteps,
     maxTokens: 8192,
     temperature: 0.2,
     yes: overrides.yes ?? false,
-    noSave: (overrides as { noSave?: boolean }).noSave ?? process.env.CODER_NO_SAVE === "1",
+    noSave: (overrides as { noSave?: boolean }).noSave ?? process.env.SCODER_NO_SAVE === "1",
     logFile:
       (overrides as { logFile?: boolean | string }).logFile ??
-      // "1" means auto-path (.coder/logs/<session>.jsonl); any other non-empty
+      // "1" means auto-path (.scoder/logs/<session>.jsonl); any other non-empty
       // value is treated as an explicit path. A bare string "1" would otherwise
       // resolve to a file literally named "1".
-      (process.env.CODER_LOG_FILE === "1"
+      (process.env.SCODER_LOG_FILE === "1"
         ? true
-        : process.env.CODER_LOG_FILE || undefined),
+        : process.env.SCODER_LOG_FILE || undefined),
     mcpServers: rc.mcpServers,
-    stream: overrides.stream ?? (process.env.CODER_STREAM !== "0" ? true : false),
+    stream: overrides.stream ?? (process.env.SCODER_STREAM !== "0" ? true : false),
     permissionMode: overrides.permissionMode ??
-      parsePermissionMode(process.env.CODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
+      parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
   };
 
   // Secrets hygiene: warn if apiKey is set in the rc file (risk of accidental commit)
-  if (rc.apiKey && !process.env.CODER_NO_APIKEY_WARNING) {
+  if (rc.apiKey && !process.env.SCODER_NO_APIKEY_WARNING) {
     console.error(
-      `\n⚠  WARNING: API key found in .coderrc.json — this file may be committed to git.\n` +
-      `   Prefer the environment variable CODER_API_KEY (or OPENAI_API_KEY) instead,\n` +
-      `   and add .coderrc.json to .gitignore. Suppress: CODER_NO_APIKEY_WARNING=1\n`,
+      `\n⚠  WARNING: API key found in .scoderrc.json — this file may be committed to git.\n` +
+      `   Prefer the environment variable SCODER_API_KEY (or OPENAI_API_KEY) instead,\n` +
+      `   and add .scoderrc.json to .gitignore. Suppress: SCODER_NO_APIKEY_WARNING=1\n`,
     );
   }
 

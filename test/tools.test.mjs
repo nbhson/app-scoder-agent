@@ -8,7 +8,7 @@ import { mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSync } from "nod
 import { join } from "node:path";
 import { getTool, toolRunCommand } from "../dist/tools.js";
 
-const TMP = join("/tmp", `coder-tools-test-${process.pid}`);
+const TMP = join("/tmp", `scoder-tools-test-${process.pid}`);
 const workdir = join(TMP, "workdir");
 mkdirSync(join(workdir, "sub"), { recursive: true });
 

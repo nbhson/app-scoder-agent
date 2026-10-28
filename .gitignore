@@ -2,6 +2,6 @@ node_modules/
 dist/
 *.log
 .DS_Store
-.coderrc.json
+.scoderrc.json
 .env
-.coder/
+.scoder/

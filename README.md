@@ -1,10 +1,10 @@
-# coder — Autonomous Coding Agent CLI
+# scoder — Autonomous Coding Agent CLI
 
 [![CI](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![node](https://img.shields.io/node/v/app-scoder-agent)](https://www.npmjs.com/package/app-scoder-agent)
 
-**coder** is a command-line coding agent that autonomously writes, edits, and builds code until your project compiles without errors. It mirrors the workflow of opencode, cline, and Claude Code, but runs as a single standalone CLI tool.
+**scoder** is a command-line coding agent that autonomously writes, edits, and builds code until your project compiles without errors. It mirrors the workflow of opencode, cline, and Claude Code, but runs as a single standalone CLI tool.
 
 ## Quick Start
 
@@ -13,14 +13,14 @@
 npm install -g .
 
 # Set your API key
-export CODER_API_KEY=sk-...          # any OpenAI-compatible key (OpenAI, Groq, OpenRouter, Ollama, …)
+export SCODER_API_KEY=sk-...          # any OpenAI-compatible key (OpenAI, Groq, OpenRouter, Ollama, …)
 export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoints
 
 # Run a task
-coder "add a ping function to src/network.ts"
+scoder "add a ping function to src/network.ts"
 
 # Interactive REPL
-coder
+scoder
 ```
 
 ## How It Works
@@ -31,7 +31,7 @@ You (task) → LLM plans → Tools execute code → Build runs → Success? → 
                               └── Build failed? ─┘ (auto-loop)
 ```
 
-**Key constraint:** coder runs autonomously without stopping for confirmation prompts. If the build fails, it reads the error, patches the code, and retries automatically — until the build passes or the max-step limit is reached.
+**Key constraint:** scoder runs autonomously without stopping for confirmation prompts. If the build fails, it reads the error, patches the code, and retries automatically — until the build passes or the max-step limit is reached.
 
 ## Tool Set
 
@@ -51,18 +51,18 @@ File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved vi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CODER_API_KEY` | — | API key (required) |
-| `CODER_MODEL` | `gpt-4o-mini` | Model name |
-| `CODER_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint |
-| `CODER_BUILD_CMD` | auto-detected | Build/compile command |
-| `CODER_MAX_STEPS` | `40` | Max loop iterations before giving up |
-| `CODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
-| `CODER_STREAM` | `1` | `0` to disable streaming LLM output |
-| `CODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
+| `SCODER_API_KEY` | — | API key (required) |
+| `SCODER_MODEL` | `gpt-4o-mini` | Model name |
+| `SCODER_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint |
+| `SCODER_BUILD_CMD` | auto-detected | Build/compile command |
+| `SCODER_MAX_STEPS` | `40` | Max loop iterations before giving up |
+| `SCODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
+| `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
+| `SCODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
 
-### Per-project config file (.coderrc.json)
+### Per-project config file (.scoderrc.json)
 
-For any OpenAI-compatible endpoint, just point `baseUrl`, `apiKey`, and `model` at it — no code changes needed. Create `.coderrc.json` in your project root (see `.coderrc.example.json`):
+For any OpenAI-compatible endpoint, just point `baseUrl`, `apiKey`, and `model` at it — no code changes needed. Create `.scoderrc.json` in your project root (see `.scoderrc.example.json`):
 
 ```json
 {
@@ -72,14 +72,14 @@ For any OpenAI-compatible endpoint, just point `baseUrl`, `apiKey`, and `model` 
 }
 ```
 
-Then simply run `coder "your task"` — values are picked up automatically.
+Then simply run `scoder "your task"` — values are picked up automatically.
 
 #### All fields
 
 | Field | Default | Description |
 |---|---|---|
 | `baseUrl` | `https://api.openai.com/v1` | OpenAI-compatible endpoint (must support `/chat/completions` with tool calling) |
-| `apiKey` | — | API key (⚠️ prefer `CODER_API_KEY` env var, see warning below) |
+| `apiKey` | — | API key (⚠️ prefer `SCODER_API_KEY` env var, see warning below) |
 | `model` | `gpt-4o-mini` | Model name served by the endpoint |
 | `buildCmd` | auto-detected | Build/compile command (stop condition) |
 | `maxSteps` | `40` | Max autonomous loop iterations |
@@ -91,14 +91,14 @@ Then simply run `coder "your task"` — values are picked up automatically.
 
 #### Precedence
 
-Values are merged from highest to lowest priority — your `.coderrc.json` value only applies when no flag/env is set:
+Values are merged from highest to lowest priority — your `.scoderrc.json` value only applies when no flag/env is set:
 
 1. **CLI flags** — `-m`, `--base-url`, `-k`, `--provider`, `-B`
-2. **Environment variables** — `CODER_API_KEY` / `OPENAI_API_KEY`, `CODER_BASE_URL`, `CODER_MODEL`, …
-3. **`.coderrc.json`** (or `.coderrc`) in the project root — project-local only; there is no global rc file. For a machine-wide default, set the `CODER_*` env vars in your shell profile instead
+2. **Environment variables** — `SCODER_API_KEY` / `OPENAI_API_KEY`, `SCODER_BASE_URL`, `SCODER_MODEL`, …
+3. **`.scoderrc.json`** (or `.scoderrc`) in the project root — project-local only; there is no global rc file. For a machine-wide default, set the `SCODER_*` env vars in your shell profile instead
 4. Built-in defaults
 
-> 💡 If your config in `.coderrc.json` seems ignored, check `echo $CODER_API_KEY` — env vars override the file.
+> 💡 If your config in `.scoderrc.json` seems ignored, check `echo $SCODER_API_KEY` — env vars override the file.
 
 #### Examples for common providers
 
@@ -107,7 +107,7 @@ Values are merged from highest to lowest priority — your `.coderrc.json` value
 {
   "baseUrl": "http://localhost:11434/v1",
   "apiKey": "ollama",
-  "model": "qwen2.5-coder:32b"
+  "model": "qwen2.5-scoder:32b"
 }
 ```
 
@@ -123,13 +123,13 @@ Values are merged from highest to lowest priority — your `.coderrc.json` value
 #### Notes
 
 - Models starting with `claude-`, or a `baseUrl` containing `api.anthropic.com`, automatically switch to the native Anthropic provider — no `provider` field needed.
-- If an `apiKey` is present in the rc file, coder prints a warning on every run. Silence it with `CODER_NO_APIKEY_WARNING=1`.
+- If an `apiKey` is present in the rc file, scoder prints a warning on every run. Silence it with `SCODER_NO_APIKEY_WARNING=1`.
 
-> ⚠️ **Security:** never commit `apiKey` in `.coderrc.json` — add the file to `.gitignore` and prefer `CODER_API_KEY` env var or the `-k` flag. A pre-commit check is available at `scripts/check-secrets.mjs`.
+> ⚠️ **Security:** never commit `apiKey` in `.scoderrc.json` — add the file to `.gitignore` and prefer `SCODER_API_KEY` env var or the `-k` flag. A pre-commit check is available at `scripts/check-secrets.mjs`.
 
 ## Permissions & Safety
 
-coder ships with a layered permission system for `run_command`:
+scoder ships with a layered permission system for `run_command`:
 
 | Mode | Behavior |
 |------|----------|
@@ -149,7 +149,7 @@ In `ask` mode the prompt offers `[y] yes / [a] always allow "<prefix>" / [n] no 
 
 ## MCP Servers (stdio)
 
-coder can use tools from [MCP](https://modelcontextprotocol.io) servers configured in `.coderrc.json`:
+scoder can use tools from [MCP](https://modelcontextprotocol.io) servers configured in `.scoderrc.json`:
 
 ```json
 {
@@ -175,46 +175,46 @@ coder can use tools from [MCP](https://modelcontextprotocol.io) servers configur
 
 ## Sessions
 
-Every run auto-saves its state (messages, steps, build result) to `.coder/sessions/<id>.json` after each step. If the run is interrupted (Ctrl+C, crash, max steps), you can continue where it left off:
+Every run auto-saves its state (messages, steps, build result) to `.scoder/sessions/<id>.json` after each step. If the run is interrupted (Ctrl+C, crash, max steps), you can continue where it left off:
 
 ```bash
-coder list                      # list saved sessions
-coder resume last               # continue the most recent session
-coder resume <id> "follow-up"   # resume + add a new instruction
+scoder list                      # list saved sessions
+scoder resume last               # continue the most recent session
+scoder resume <id> "follow-up"   # resume + add a new instruction
 ```
 
 Sessions older than 7 days are pruned automatically on the next run. Use `--no-save` to disable (e.g. in CI).
 
 ## Streaming
 
-LLM output is streamed token-by-token by default (`CODER_STREAM=0` to disable). If a provider doesn't support streaming, coder automatically falls back to non-streaming requests.
+LLM output is streamed token-by-token by default (`SCODER_STREAM=0` to disable). If a provider doesn't support streaming, scoder automatically falls back to non-streaming requests.
 
 ## Logging
 
-Enable a structured JSONL event log with `--log-file` (or `CODER_LOG_FILE=1`, or `CODER_LOG_FILE=/path/to/log.jsonl`):
+Enable a structured JSONL event log with `--log-file` (or `SCODER_LOG_FILE=1`, or `SCODER_LOG_FILE=/path/to/log.jsonl`):
 
 ```bash
-coder --log-file "fix the failing test"
-cat .coder/logs/<session-id>.jsonl | jq 'select(.type == "error")'
+scoder --log-file "fix the failing test"
+cat .scoder/logs/<session-id>.jsonl | jq 'select(.type == "error")'
 ```
 
 Events: `step` (with token usage), `tool` (args, ok, elapsedMs, denied reason), `build`, `finish`. One JSON object per line — pipe to `jq` or any log consumer.
 
 ## Reliability
 
-coder is designed for unattended use. Key guarantees:
+scoder is designed for unattended use. Key guarantees:
 
 - **Request timeouts** — LLM calls have a 120s timeout; on timeout, the agent retries or fails gracefully (never hangs indefinitely).
-- **SIGINT handling** — pressing Ctrl+C cancels the in-flight LLM request immediately, kills the running shell command (SIGTERM → SIGKILL), saves the session, and exits with status 130. You can resume with `coder resume last`.
+- **SIGINT handling** — pressing Ctrl+C cancels the in-flight LLM request immediately, kills the running shell command (SIGTERM → SIGKILL), saves the session, and exits with status 130. You can resume with `scoder resume last`.
 - **Graceful retries** — transient LLM API failures (HTTP 429/5xx, network errors) are retried with exponential backoff and jitter (up to 3 retries, honoring `Retry-After`). Client errors (401/403/404) fail fast.
-- **Double-build prevention** — when the agent itself runs the build command, coder reuses that result instead of running the build twice.
-- **Build diff preview** — run `coder --permission ask` to see a unified diff before every file write/edit.
+- **Double-build prevention** — when the agent itself runs the build command, scoder reuses that result instead of running the build twice.
+- **Build diff preview** — run `scoder --permission ask` to see a unified diff before every file write/edit.
 
 > **Design note:** the build command (stop condition) always runs without a permission prompt, even in `readonly` mode — the agent must be able to verify its stop condition. Builds are invoked as-is from your config (`buildCmd`) or auto-detection, never invented by the LLM. Shell commands *chosen by the LLM* (`run_command` tool) go through the full permission policy above.
 
 ### Auto-detected build commands
 
-coder detects the build command automatically:
+scoder detects the build command automatically:
 
 | Project type | Detected command |
 |---|---|
@@ -228,9 +228,9 @@ coder detects the build command automatically:
 ## CLI Options
 
 ```
-coder [options] "<task>"     Run a task autonomously until the build passes
-coder                       Start interactive session
-coder --help | --version     Help and version
+scoder [options] "<task>"     Run a task autonomously until the build passes
+scoder                       Start interactive session
+scoder --help | --version     Help and version
 ```
 
 | Flag | Description |
@@ -243,30 +243,30 @@ coder --help | --version     Help and version
 | `-s, --max-steps <n>` | Max iterations (default 40) |
 | `--permission <mode>` | `auto` \| `ask` \| `readonly` shell-command policy (default `auto`) |
 | `-y` | Non-interactive mode (denies commands needing confirmation) |
-| `--provider <name>` | `openai` \| `anthropic` (env CODER_PROVIDER; auto-detected) |
-| `--no-save` | Disable session auto-save to `.coder/sessions/` |
+| `--provider <name>` | `openai` \| `anthropic` (env SCODER_PROVIDER; auto-detected) |
+| `--no-save` | Disable session auto-save to `.scoder/sessions/` |
 
 ## Examples
 
 ```bash
-# Run a task (auto-saves session to .coder/sessions/)
-coder -B "npm test" "fix the null pointer in UserService"
+# Run a task (auto-saves session to .scoder/sessions/)
+scoder -B "npm test" "fix the null pointer in UserService"
 
 # Resume after a crash or interrupt
-coder resume last "now add unit tests for the fix"
+scoder resume last "now add unit tests for the fix"
 
 # Interactive mode with permission guard
-coder --permission ask "npm install express and wire up a route"
+scoder --permission ask "npm install express and wire up a route"
 
 # Custom LLM (Groq, Ollama, vLLM, OpenRouter…)
-coder --base-url https://api.groq.com/openai/v1 -k $GROQ_KEY \
+scoder --base-url https://api.groq.com/openai/v1 -k $GROQ_KEY \
   "add input validation to the CLI"
 
 # Anthropic (auto-detected when model starts with 'claude-')
-coder -m claude-sonnet-4-5 "refactor the parser module"
+scoder -m claude-sonnet-4-5 "refactor the parser module"
 
 # CI: non-interactive, no session saving
-coder --no-save -y "run the full migration"
+scoder --no-save -y "run the full migration"
 ```
 
 ## Architecture

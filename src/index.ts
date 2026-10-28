@@ -33,43 +33,43 @@ interface CliArgs {
   version: boolean;
 }
 
-const HELP = `coder — autonomous coding agent CLI
+const HELP = `scoder — autonomous coding agent CLI
 
 USAGE
-  coder [options] "<task>"        Run a task autonomously until the build passes
-  coder                           Start interactive session (chat + tools)
-  coder list                      List saved sessions for this directory
-  coder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
-  coder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
-  coder --version | --help
+  scoder [options] "<task>"        Run a task autonomously until the build passes
+  scoder                           Start interactive session (chat + tools)
+  scoder list                      List saved sessions for this directory
+  scoder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
+  scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
+  scoder --version | --help
 
 OPTIONS
-  -m, --model <name>        LLM model (env CODER_MODEL / OPENAI_MODEL, default gpt-4o-mini)
-  --base-url <url>          OpenAI-compatible API base URL (env CODER_BASE_URL / OPENAI_BASE_URL)
-  -k, --api-key <key>       API key (env CODER_API_KEY / OPENAI_API_KEY)
-  --provider <name>         openai | anthropic (env CODER_PROVIDER; auto-detected from model/baseUrl)
+  -m, --model <name>        LLM model (env SCODER_MODEL / OPENAI_MODEL, default gpt-4o-mini)
+  --base-url <url>          OpenAI-compatible API base URL (env SCODER_BASE_URL / OPENAI_BASE_URL)
+  -k, --api-key <key>       API key (env SCODER_API_KEY / OPENAI_API_KEY)
+  --provider <name>         openai | anthropic (env SCODER_PROVIDER; auto-detected from model/baseUrl)
   -B, --build <cmd>         Build command = stop condition (auto-detected if omitted)
   -d, --dir <path>          Working directory (default: current directory)
   -s, --max-steps <n>       Max autonomous loop iterations (default 40)
   -y, --yes                 Non-interactive mode (auto-approves commands)
-  --permission <mode>       auto | ask | readonly (env CODER_PERMISSION, default auto)
-  --no-save                 Disable session auto-save to .coder/sessions/
-  --log-file                Write a JSONL event log to .coder/logs/<session>.jsonl
-                            (or set CODER_LOG_FILE=1 / =/path/to/log.jsonl)
+  --permission <mode>       auto | ask | readonly (env SCODER_PERMISSION, default auto)
+  --no-save                 Disable session auto-save to .scoder/sessions/
+  --log-file                Write a JSONL event log to .scoder/logs/<session>.jsonl
+                            (or set SCODER_LOG_FILE=1 / =/path/to/log.jsonl)
   -h, --help                Show this help
   -v, --version             Show version
 
 CONFIG FILE
-  .coderrc.json in the working directory (see .coderrc.example.json):
+  .scoderrc.json in the working directory (see .scoderrc.example.json):
     { "model": "...", "baseUrl": "...", "buildCmd": "...", "maxSteps": 40,
       "permissions": { "mode": "auto", "allowCommands": ["npm "], "denyCommands": ["curl "] } }
 
 EXAMPLES
-  coder "add a divide function to src/math.ts with tests"
-  coder --build "make test" "fix the failing test in utils"
-  coder --permission ask "npm install express and wire up a route"
-  coder -m claude-sonnet-4-5 "refactor the parser module"   # auto-detects Anthropic
-  coder resume last "now add unit tests"
+  scoder "add a divide function to src/math.ts with tests"
+  scoder --build "make test" "fix the failing test in utils"
+  scoder --permission ask "npm install express and wire up a route"
+  scoder -m claude-sonnet-4-5 "refactor the parser module"   # auto-detects Anthropic
+  scoder resume last "now add unit tests"
 `;
 
 function parseArgs(argv: string[]): CliArgs {
@@ -147,7 +147,7 @@ function parseArgs(argv: string[]): CliArgs {
 
   args.task = rest.length > 0 ? rest.join(" ") : null;
 
-  // Subcommands: coder list | coder resume <id|last> [follow-up task] | coder logs [id]
+  // Subcommands: scoder list | scoder resume <id|last> [follow-up task] | scoder logs [id]
   if (rest.length > 0 && rest[0] === "list") {
     args.subcommand = "list";
     args.task = null;
@@ -183,7 +183,7 @@ async function runOnce(cfg: AgentConfig, task: string): Promise<number> {
 }
 
 async function repl(cfg: AgentConfig): Promise<never> {
-  ui.header(`coder interactive — model: ${cfg.model}`);
+  ui.header(`scoder interactive — model: ${cfg.model}`);
   ui.info('Type a task and press Enter. "exit" or Ctrl+D to quit.');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "you> " });
@@ -266,7 +266,7 @@ async function main(): Promise<void> {
   if (args.subcommand === "resume") {
     const s = resolveSessionId(cfg.workdir, args.resumeId ?? "last");
     if (!s) {
-      ui.error(`Session not found: ${args.resumeId ?? "last"}. Run \`coder list\` to see saved sessions.`);
+      ui.error(`Session not found: ${args.resumeId ?? "last"}. Run \`scoder list\` to see saved sessions.`);
       process.exit(2);
     }
     const agent = new Agent(cfg);
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     }
     const events = JsonlLogger.read(cfg.workdir, id);
     if (events === null || events.length === 0) {
-      ui.error(`No log found for session ${id}. Logs require --log-file (or CODER_LOG_FILE=1).`);
+      ui.error(`No log found for session ${id}. Logs require --log-file (or SCODER_LOG_FILE=1).`);
       process.exit(2);
     }
     const filter = args.logsFilter?.toLowerCase();

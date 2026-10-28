@@ -16,7 +16,7 @@ export class JsonlLogger {
 
   /**
    * Create a logger for a session.
-   * logFile: true    -> <workdir>/.coder/logs/<sessionId>.jsonl
+   * logFile: true    -> <workdir>/.scoder/logs/<sessionId>.jsonl
    *          string  -> that exact path
    *          false/undefined -> disabled (no-op)
    */
@@ -31,7 +31,7 @@ export class JsonlLogger {
     const path =
       typeof logFile === "string" && logFile.length > 0
         ? resolve(logFile)
-        : resolve(workdir, ".coder/logs", `${sessionId}.jsonl`);
+        : resolve(workdir, ".scoder/logs", `${sessionId}.jsonl`);
     try {
       mkdirSync(dirname(path), { recursive: true });
       return new JsonlLogger(path);
@@ -47,7 +47,7 @@ export class JsonlLogger {
 
   /** Read a session's JSONL log file, returning parsed events (or null if missing/unreadable). */
   static read(workdir: string, sessionId: string): Array<Record<string, unknown>> | null {
-    const path = resolve(workdir, ".coder/logs", `${sessionId}.jsonl`);
+    const path = resolve(workdir, ".scoder/logs", `${sessionId}.jsonl`);
     let content: string;
     try {
       content = readFileSync(path, "utf8");

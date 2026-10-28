@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Git pre-commit hook: scan staged .coderrc.json for hardcoded apiKey.
+ * Git pre-commit hook: scan staged .scoderrc.json for hardcoded apiKey.
  * Usage: node scripts/check-secrets.mjs
  * Git hook: npx husky add .husky/pre-commit "node scripts/check-secrets.mjs"
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const TARGET = ".coderrc.json";
+const TARGET = ".scoderrc.json";
 const CWD = process.cwd();
 
 let foundSecret = false;
@@ -34,8 +34,8 @@ function checkRcFile(filePath) {
       foundSecret = true;
       console.error(`\n  ERROR: Possible secret in ${filePath}:`);
       console.error(`         Found pattern matching: ${name}`);
-      console.error(`         Remove apiKey from .coderrc.json and use`);
-      console.error(`         the CODER_API_KEY environment variable instead.`);
+      console.error(`         Remove apiKey from .scoderrc.json and use`);
+      console.error(`         the SCODER_API_KEY environment variable instead.`);
       console.error(`         File: ${filePath}\n`);
     }
   }
@@ -47,7 +47,7 @@ checkRcFile(resolve(CWD, TARGET));
 const envPath = resolve(CWD, ".env");
 try {
   const envContent = readFileSync(envPath, "utf8");
-  const hasEnv = /CODER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY/.test(envContent);
+  const hasEnv = /SCODER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY/.test(envContent);
   if (hasEnv) {
     console.log("  ⚠  .env file found with API keys — ensure it is in .gitignore");
   }
@@ -59,5 +59,5 @@ if (foundSecret) {
   process.exit(1);
 }
 
-console.log("  ✓ No secrets detected in .coderrc.json");
+console.log("  ✓ No secrets detected in .scoderrc.json");
 process.exit(0);

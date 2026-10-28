@@ -11,7 +11,7 @@ import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
 import * as ui from "./ui.js";
 
-const SYSTEM_PROMPT = `You are Coder, an autonomous coding agent running in a terminal.
+const SYSTEM_PROMPT = `You are Scoder, an autonomous coding agent running in a terminal.
 You complete coding tasks by using tools: reading/writing/editing files, listing
 files, and running shell commands.
 
@@ -179,7 +179,7 @@ export class Agent {
   async run(task: string): Promise<AgentRunResult> {
     if (!this.config.apiKey) {
       throw new Error(
-        "No API key configured. Set CODER_API_KEY or OPENAI_API_KEY (or put apiKey in .coderrc.json).",
+        "No API key configured. Set SCODER_API_KEY or OPENAI_API_KEY (or put apiKey in .scoderrc.json).",
       );
     }
 
@@ -482,7 +482,7 @@ export class Agent {
     return this.finish(false, steps, buildCmd, `Agent stopped: ${reason}`);
   }
 
-  /** Persist current agent state to .coder/sessions/<id>.json. */
+  /** Persist current agent state to .scoder/sessions/<id>.json. */
   private saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null): void {
     this.lastBuildResult = lastBuild;
     this.session.save(
