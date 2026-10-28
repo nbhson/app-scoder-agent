@@ -121,7 +121,12 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     noSave: (overrides as { noSave?: boolean }).noSave ?? process.env.CODER_NO_SAVE === "1",
     logFile:
       (overrides as { logFile?: boolean | string }).logFile ??
-      (process.env.CODER_LOG_FILE ? process.env.CODER_LOG_FILE : undefined),
+      // "1" means auto-path (.coder/logs/<session>.jsonl); any other non-empty
+      // value is treated as an explicit path. A bare string "1" would otherwise
+      // resolve to a file literally named "1".
+      (process.env.CODER_LOG_FILE === "1"
+        ? true
+        : process.env.CODER_LOG_FILE || undefined),
     mcpServers: rc.mcpServers,
     stream: overrides.stream ?? (process.env.CODER_STREAM !== "0" ? true : false),
     permissionMode: overrides.permissionMode ??
