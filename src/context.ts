@@ -1,7 +1,6 @@
 import type { ChatMessage } from "./llm.js";
 
 const MAX_MESSAGES = 120; // keep history under control for long runs
-const MAX_TOTAL_CHARS = 80_000; // rough budget per "context window" safety
 
 /**
  * Trim message history to stay within token budget.

@@ -129,12 +129,12 @@ export class McpConnection {
       if (!line) continue;
       let msg: { id?: number; result?: Record<string, unknown>; error?: { code: number; message: string } };
       try { msg = JSON.parse(line) as typeof msg; } catch { continue; }
-      if (msg.id !== undefined && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id)!;
-        this.pending.delete(msg.id);
-        if (msg.error) reject(new Error(`${msg.error.code}: ${msg.error.message}`));
-        else resolve(msg.result ?? {});
-      }
+      if (msg.id === undefined) continue;
+      const pending = this.pending.get(msg.id);
+      if (!pending) continue;
+      this.pending.delete(msg.id);
+      if (msg.error) pending.reject(new Error(`${msg.error.code}: ${msg.error.message}`));
+      else pending.resolve(msg.result ?? {});
     }
   }
 

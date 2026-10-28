@@ -40,8 +40,6 @@ const ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5";
 
 export type ProviderName = "openai" | "anthropic";
 
-const VALID_PERMISSION_MODES: PermissionMode[] = ["auto", "ask", "readonly"];
-
 /** Per-project config file, lowest priority (env vars and CLI flags override). */
 interface RcFile {
   baseUrl?: string;

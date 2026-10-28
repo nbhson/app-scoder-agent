@@ -7,14 +7,13 @@
  */
 
 import { createInterface } from "node:readline";
-import type { AgentConfig } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Catastrophic command patterns — always denied, no exceptions
 // ---------------------------------------------------------------------------
 
 const CATASTROPHIC_PATTERNS: RegExp[] = [
-  /rm\s+-rf\s+[\/~"]|(?:rm\s+-rf\s+\/\*)/i,
+  /rm\s+-rf\s+[/~"]|(?:rm\s+-rf\s+\/\*)/i,
   /mkfs\b/i,
   /dd\s+.*of=\//i,
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i,
@@ -26,8 +25,8 @@ const CATASTROPHIC_PATTERNS: RegExp[] = [
   /wget\s+.*[/.].*\s*\|\s*bash\b/i,
   /sudo\s+rm\s+-rf/i,
   /\bshutdown\b|\breboot\b|\binit\s+[06]\b/i,
-  /chmod\s+-R\s+0[77][07][07]\s+[\/~]/i,
-  /\>\s*\/dev\/sda/i,
+  /chmod\s+-R\s+0[77][07][07]\s+[/~]/i,
+  />\s*\/dev\/sda/i,
   /\|\s*nc\s+-e\s+/i,
   /\|\s*bash\s+-i/i,
   /sysctl\s+-w\s+kernel\.panic=/i,

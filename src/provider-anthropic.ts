@@ -26,15 +26,6 @@ interface AnthropicMessage {
   content: string | AnthropicContentBlock[];
 }
 
-interface AnthropicRequest {
-  model: string;
-  max_tokens: number;
-  temperature?: number;
-  system?: string;
-  messages: AnthropicMessage[];
-  tools?: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
-}
-
 interface AnthropicResponse {
   content?: AnthropicContentBlock[];
   usage?: { input_tokens?: number; output_tokens?: number };
@@ -79,7 +70,7 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
       const blocks: AnthropicContentBlock[] = [];
       if (m.content) blocks.push({ type: "text", text: m.content });
       for (const tc of m.tool_calls ?? []) {
-        let input: Record<string, unknown> = {};
+        let input: Record<string, unknown>;
         try {
           input = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
         } catch {

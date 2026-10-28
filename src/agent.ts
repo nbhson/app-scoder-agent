@@ -8,7 +8,7 @@ import { trimHistory, summariseOutput } from "./context.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, type SessionFile } from "./session.js";
 import { JsonlLogger } from "./logger.js";
-import { McpManager, mcpToolKey } from "./mcp.js";
+import { McpManager } from "./mcp.js";
 import * as ui from "./ui.js";
 
 const SYSTEM_PROMPT = `You are Coder, an autonomous coding agent running in a terminal.
@@ -307,7 +307,7 @@ export class Agent {
       for (const tc of message.tool_calls) {
         if (this.aborted) break;
         const tool = getTool(tc.name);
-        let args: Record<string, unknown> = {};
+        let args: Record<string, unknown>;
         try {
           args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
         } catch {
@@ -376,12 +376,16 @@ export class Agent {
 
           const t0 = Date.now();
           // Route MCP tools first (they carry the mcp__ prefix, not in AGENT_TOOLS)
-          if (!tool && this.mcp?.hasTool(tc.name)) {
-            const reg = this.mcp.getTool(tc.name)!;
-            const r = await reg.conn.callTool(reg.toolName, args);
-            result = { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
+          if (tool) {
+            result = await tool.run(this.ctx, args);
           } else {
-            result = await tool!.run(this.ctx, args);
+            const reg = this.mcp?.getTool(tc.name);
+            if (!reg) {
+              result = { ok: false, output: `ERROR: unknown tool "${tc.name}"` };
+            } else {
+              const r = await reg.conn.callTool(reg.toolName, args);
+              result = { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
+            }
           }
           this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: result.ok, elapsedMs: Date.now() - t0 });
         } catch (err) {
@@ -410,7 +414,6 @@ export class Agent {
         // avoids executing the build a second time just to verify.
         const result = stepToolResults.get(buildCall.id);
         if (result && result.ok) {
-          lastBuild = { success: true, command: buildCmd, output: result.output };
           return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");
         }
         lastBuild = this.checkBuild(buildCmd);

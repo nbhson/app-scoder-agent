@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
-import { unifiedDiff, diffCounts } from "./diff.js";
+import { unifiedDiff } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
 import * as ui from "./ui.js";
 
