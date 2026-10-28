@@ -173,6 +173,14 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
   non-streaming cho Anthropic.
 - 9 tests mới: translation edge cases + mock SSE server + 429 error flow.
 
+### BUG-24: edit_file $-pattern interpolation hỏng nội dung literal (Medium) — ĐÃ FIX
+- `content.replace(old_string, new_string)` với replacement là string:
+  `$&`, `` $` ``, `$'`, `$1` bị JS interpolate (match, text sau, text trước,
+  capture group) thay vì chèn nguyên văn. Edit file chứa `$&` (sed, regex,
+  price template) → nội dung sai NGẦM, không có dấu hiệu lỗi.
+- **Fix:** function replacement `content.replace(old, () => new)`.
+  Regression test chèn literal `'$&' $` $' $1` xác minh.
+
 ## Kiểm chứng
 
 ```
