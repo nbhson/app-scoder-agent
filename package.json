@@ -1,6 +1,6 @@
 {
   "name": "s-app-scoder-agent",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Autonomous coding agent CLI - similar to opencode/cline/claude. Runs tasks until build succeeds.",
   "type": "module",
   "main": "dist/index.js",

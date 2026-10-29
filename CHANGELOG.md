@@ -3,6 +3,22 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.4.0] - 2026-10-29 — Enterprise hardening & cost tracking
+
+### Added
+- **`scoder cost` subcommand** — token usage & cost tracking from JSONL logs:
+  - new `llm_usage` events (input/output/cached tokens, model, provider) per LLM call
+  - session usage totals (`usage` field in session state, backward compatible)
+  - model pricing table (~25 models) with `modelPricing` override in `.scoderrc.json`
+  - `--session <id>` / `--last <n>` filters, human-readable cost report
+- Extended catastrophic command patterns in permissions: `rm` flag variants, `mkfs.*`, `dd of=/dev/*`, `chmod -R 777 /`, block-device redirects, `sh -c`/`base64` wrappers of `rm -rf`
+- 42 new tests (cost tracking, permissions) — suite now 158 passing
+
+### Changed
+- `agent.ts` refactor: `rejectToolCall()`/`pushToolResult()` helpers, removed duplicated tool-result blocks
+- Malformed `.scoderrc.json` / `package.json` now warn instead of silent catch
+- `safePath` distinguishes ENOENT from other fs errors (wraps in `cause`)
+
 ## [0.3.0] - 2026-10-28 — Rename to scoder & release readiness
 
 ### Changed
