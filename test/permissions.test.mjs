@@ -30,6 +30,21 @@ describe("isDangerousCommand — catastrophic patterns", () => {
     ":(){ :|:& };:",                   // fork bomb
     "chmod -R 0777 /",                 // mở quyền toàn hệ thống
     "echo hack > /etc/sudoers",        // ghi sudoers
+    // --- pattern mới (nâng cấp enterprise) ---
+    "rm -fr /",                        // biến thể -fr
+    "rm -rf  /",                       // nhiều khoảng trắng
+    "rm -r -f /",                      // tách flag
+    "rm --recursive --force /",        // flag dài
+    "rm -rvf /",                       // flag gộp thêm
+    "sudo rm -fr /usr",                // sudo + -fr
+    "sh -c 'rm -rf /'",                // wrapper sh -c
+    "bash -c \"rm -rf /etc\"",         // wrapper bash -c
+    "echo cm0gLXJmIC8= | base64 -d | sh",  // base64 pipe-to-shell
+    "echo cm0gLXJmIC8= | base64 --decode | bash",
+    "chmod -R 777 /",                  // 777 không số 0 đầu
+    "chmod -Rf 777 /",                 // gộp flag
+    "dd if=/dev/zero of=/dev/nvme0n1", // ghi đè NVMe
+    "cat evil.img > /dev/sdb",         // redirect block device
   ];
   for (const cmd of cases) {
     it(`deny: ${cmd}`, () => {
@@ -41,6 +56,24 @@ describe("isDangerousCommand — catastrophic patterns", () => {
   for (const cmd of safe) {
     it(`allow-safe: ${cmd}`, () => {
       assert.ok(!isDangerousCommand(cmd), `không phải catastrophic: ${cmd}`);
+    });
+  }
+
+  // Lệnh lành tính phổ biến KHÔNG được chặn sau khi mở rộng pattern
+  const safeExpanded = [
+    "git rm -rf node_modules",            // git rm trong repo
+    "npm ci && npm test",                 // chain lành tính
+    "rm -rf node_modules build",          // dọn deps (không trỏ / hay ~)
+    "rm file.txt",                        // rm đơn
+    "rm ./build/out.o",                   // path tương đối
+    "ls -la && echo base64 decode test",  // nhắc chữ base64 nhưng không pipe
+    "chmod +x script.sh",                 // chmod thường
+    "chmod -R 755 ./dist",                // chmod đệ quy path tương đối
+    "npm run build && node --test",       // build flow
+  ];
+  for (const cmd of safeExpanded) {
+    it(`allow-safe-expanded: ${cmd}`, () => {
+      assert.ok(!isDangerousCommand(cmd), `không được chặn lệnh lành tính: ${cmd}`);
     });
   }
 });

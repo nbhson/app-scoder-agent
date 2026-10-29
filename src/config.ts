@@ -31,6 +31,8 @@ export interface AgentConfig {
   permissionMode: PermissionMode;
   /** Streaming LLM responses */
   stream: boolean;
+  /** Per-model price overrides (USD per 1M tokens) for `scoder cost` estimation */
+  modelPricing?: Record<string, import("./constants.js").ModelPricing>;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -50,6 +52,8 @@ interface RcFile {
   stream?: boolean;
   permission?: string;
   provider?: string;
+  /** Per-model price overrides (USD per 1M tokens) for `scoder cost`. */
+  modelPricing?: Record<string, { input: number; output: number }>;
   mcpServers?: Record<string, McpServerConfig>;
   permissions?: {
     mode?: string;
@@ -64,8 +68,9 @@ function loadRcFile(workdir: string): RcFile {
     if (existsSync(p)) {
       try {
         return JSON.parse(readFileSync(p, "utf8")) as RcFile;
-      } catch {
-        // malformed rc file -> ignore
+      } catch (err) {
+        // malformed rc file -> ignore it, but tell the user why their config is not applied
+        console.error(`⚠  ignoring malformed config file ${name}: ${(err as Error).message}`);
       }
     }
   }
@@ -80,6 +85,29 @@ function parsePermissionMode(raw: string | undefined): PermissionMode {
 function parseList(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter((x): x is string => typeof x === "string");
+}
+
+/** Validate the user-supplied pricing table; drop malformed entries with a warning. */
+function parsePricing(raw: unknown): Record<string, { input: number; output: number }> | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null) {
+    console.error("⚠  ignoring invalid modelPricing in config (expected an object)");
+    return undefined;
+  }
+  const out: Record<string, { input: number; output: number }> = {};
+  for (const key of Object.keys(raw as Record<string, unknown>)) {
+    const p = (raw as Record<string, { input?: unknown; output?: unknown }>)[key];
+    if (
+      typeof p === "object" && p !== null &&
+      typeof p.input === "number" && Number.isFinite(p.input) &&
+      typeof p.output === "number" && Number.isFinite(p.output)
+    ) {
+      out[key] = { input: p.input, output: p.output };
+    } else {
+      console.error(`⚠  ignoring invalid modelPricing entry "${key}" (expected { input: number, output: number })`);
+    }
+  }
+  return out;
 }
 
 export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -137,6 +165,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     stream: overrides.stream ?? (process.env.SCODER_STREAM !== "0" ? true : false),
     permissionMode: overrides.permissionMode ??
       parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
+    modelPricing: parsePricing(rc.modelPricing),
   };
 
   // Secrets hygiene: warn if apiKey is set in the rc file (risk of accidental commit)

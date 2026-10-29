@@ -34,9 +34,18 @@ export interface ChatMessage {
   name?: string;
 }
 
+export interface TokenUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  /** Prompt tokens served from the provider cache (billed cheaper). */
+  cached_tokens?: number;
+  /** Extra usage fields from the provider (e.g. reasoning_tokens). */
+  [key: string]: unknown;
+}
+
 export interface ChatResult {
   message: AssistantMessage;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: TokenUsage;
 }
 
 export interface LlmClientOptions {
@@ -209,11 +218,22 @@ export class LlmClient {
           tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
         };
       }>;
-      usage?: ChatResult["usage"];
+      usage?: TokenUsage;
     };
 
     const choice = data.choices?.[0]?.message;
     if (!choice) throw new LlmError("LLM API returned no message in response");
+
+    // Extract cached prompt tokens when the provider reports them
+    // (OpenAI-style: usage.prompt_tokens_details.cached_tokens).
+    let usage: TokenUsage | undefined;
+    if (data.usage) {
+      usage = { ...data.usage };
+      const details = (usage as { prompt_tokens_details?: { cached_tokens?: number } }).prompt_tokens_details;
+      if (usage.cached_tokens === undefined && typeof details?.cached_tokens === "number") {
+        usage.cached_tokens = details.cached_tokens;
+      }
+    }
 
     return {
       message: {
@@ -226,7 +246,7 @@ export class LlmClient {
           arguments: tc.function?.arguments ?? "",
         })),
       },
-      usage: data.usage,
+      usage,
     };
   }
 
@@ -322,7 +342,7 @@ export class LlmClient {
               };
               finish_reason?: string;
             }>;
-            usage?: ChatResult["usage"];
+            usage?: TokenUsage;
           };
           try {
             chunkData = JSON.parse(json);

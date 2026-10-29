@@ -18,6 +18,13 @@ export interface SessionFile {
   maxSteps: number;
   messages: ChatMessage[];
   lastBuild: { success: boolean; command: string; output: string } | null;
+  /** Accumulated LLM token usage (enterprise cost tracking, optional for older sessions). */
+  usage?: {
+    llmCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+  };
 }
 
 const SESSIONS_DIR = ".scoder/sessions";

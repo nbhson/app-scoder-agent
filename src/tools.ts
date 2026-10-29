@@ -34,8 +34,13 @@ function safePath(workdir: string, p: string): string {
   let realWorkdir = workdir;
   try {
     realWorkdir = realpathSync(workdir);
-  } catch {
-    // workdir must exist; keep lexical fallback
+  } catch (err) {
+    // workdir must exist; keep lexical fallback for a transient ENOENT,
+    // but surface unexpected failures instead of silently swallowing them.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw new Error(`Cannot resolve working directory "${workdir}": ${(err as Error).message}`, { cause: err });
+    }
   }
   // Walk up to the nearest existing ancestor, then verify containment.
   let probe = abs;

@@ -13,9 +13,30 @@ import { createInterface } from "node:readline";
 // ---------------------------------------------------------------------------
 
 const CATASTROPHIC_PATTERNS: RegExp[] = [
+  // rm -rf (original) — kept for backwards compatibility
   /rm\s+-rf\s+[/~"]|(?:rm\s+-rf\s+\/\*)/i,
-  /mkfs\b/i,
+  // rm with whitespace/flag variants: "rm  -rf /", "rm -fr /", "rm -r -f /",
+  // "rm --recursive --force /", "rm -rvf /" … i.e. any rm followed by one or
+  // more option flags and then a target at filesystem root or home.
+  // Does NOT match common safe commands: "rm -rf node_modules", "rm file.txt",
+  // "rm ./build" (target must START with / or ~).
+  /\brm\s+(?:-{1,2}[\w-]+\s+)+["']?[/~](?:\s|$|\/)/,
+  // rm with a single flag token containing both r/R and f (e.g. -fr, -Rf, -rvf)
+  // targeting / or ~ — covered above, but also catch "rm -fr --no-preserve-root".
+  /\brm\s+[^|;&>]*--no-preserve-root/i,
+  // base64/sh -c wrappers used to smuggle destructive commands past filters:
+  //   echo cm0gLXJmIC8= | base64 -d | sh
+  //   sh -c "rm -rf /"
+  /base64\s+(?:-d|-D|--decode)\b[^|;&]*\|\s*(?:ba|z|da)?sh\b/i,
+  /\b(?:ba|z|da)?sh\s+-c\s+["'][^"']*\brm\s+[^"']*\s-[a-zA-Z]*[rf]/i,
+  // Filesystem destruction
+  /\bmkfs(?:\.[a-z0-9]+)?\b/i,
   /dd\s+.*of=\//i,
+  /chmod\s+-R\s+0[77][07][07]\s+[/~]/i,
+  // chmod -R 777 on / or ~ (any flag spelling: -R, -r, -Rf, --recursive)
+  /\bchmod\s+(?:-{1,2}[\w-]+\s+)+[0-7]{3,4}\s+["']?[/~](?:\s|$|\/)/,
+  // Redirect raw writes to block devices: > /dev/sda, > /dev/nvme0n1, dd > disk...
+  />\s*\/dev\/(?:sd[a-z]+|hd[a-z]+|nvme\d+n\d+(?:p\d+)?|disk\d|rdisk\d)/i,
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i,
   // curl/wget pipe-to-shell: match any content between command and '| sh'/'| bash'
   // Handles -qO-, -X POST, etc. flags; URL-like patterns must contain '/' or '.'
@@ -23,9 +44,9 @@ const CATASTROPHIC_PATTERNS: RegExp[] = [
   /curl\s+.*[/.].*\s*\|\s*bash\b/i,
   /wget\s+.*[/.].*\s*\|\s*sh\b/i,
   /wget\s+.*[/.].*\s*\|\s*bash\b/i,
-  /sudo\s+rm\s+-rf/i,
+  // sudo rm with any recursive/force flag combo: "sudo rm -rf x", "sudo rm -fr /usr"
+  /sudo\s+rm\s+[^|;&]*-\w*[rR]/i,
   /\bshutdown\b|\breboot\b|\binit\s+[06]\b/i,
-  /chmod\s+-R\s+0[77][07][07]\s+[/~]/i,
   />\s*\/dev\/sda/i,
   /\|\s*nc\s+-e\s+/i,
   /\|\s*bash\s+-i/i,

@@ -6,6 +6,7 @@ import { loadConfig, type AgentConfig } from "./config.js";
 import { Agent } from "./agent.js";
 import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
 import { JsonlLogger } from "./logger.js";
+import { collectUsage, formatCostReport } from "./cost.js";
 import { getVersion as getPackageVersion } from "./version.js";
 import * as ui from "./ui.js";
 
@@ -25,10 +26,12 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs";
+  subcommand?: "list" | "resume" | "logs" | "cost";
   resumeId?: string;
   logsId?: string;
   logsFilter?: string;
+  costSession?: string;
+  costLast?: number;
   help: boolean;
   version: boolean;
 }
@@ -41,6 +44,8 @@ USAGE
   scoder list                      List saved sessions for this directory
   scoder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
   scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
+  scoder cost [--session <id>] [--last <n>]
+                                    Token usage & estimated cost from JSONL logs
   scoder --version | --help
 
 OPTIONS
@@ -56,6 +61,8 @@ OPTIONS
   --no-save                 Disable session auto-save to .scoder/sessions/
   --log-file                Write a JSONL event log to .scoder/logs/<session>.jsonl
                             (or set SCODER_LOG_FILE=1 / =/path/to/log.jsonl)
+  --session <id>            (cost) Aggregate usage of one specific session
+  --last <n>                (cost) Aggregate usage of the n most recent sessions
   -h, --help                Show this help
   -v, --version             Show version
 
@@ -121,6 +128,17 @@ function parseArgs(argv: string[]): CliArgs {
       case "--log-file":
         args.logFile = true;
         break;
+      case "--session":
+        args.costSession = next();
+        break;
+      case "--last": {
+        const n = Number(next());
+        if (!Number.isFinite(n) || n < 1) {
+          throw new Error(`Invalid --last value (expected a positive integer): ${n}`);
+        }
+        args.costLast = Math.floor(n);
+        break;
+      }
       case "--provider": {
         const p = next();
         if (p !== "openai" && p !== "anthropic") {
@@ -159,6 +177,9 @@ function parseArgs(argv: string[]): CliArgs {
     args.subcommand = "logs";
     args.logsId = rest[1] ?? "last";
     args.logsFilter = rest.length > 2 ? rest.slice(2).join(" ") : undefined;
+  } else if (rest[0] === "cost") {
+    args.subcommand = "cost";
+    args.task = null;
   }
 
   return args as CliArgs;
@@ -248,7 +269,7 @@ async function main(): Promise<void> {
     provider: args.provider as "openai" | "anthropic" ?? undefined,
     noSave: args.noSave,
     logFile: args.logFile,
-  } as never);
+  });
 
   // Subcommands
   if (args.subcommand === "list") {
@@ -304,6 +325,16 @@ async function main(): Promise<void> {
       if (filter && !line.toLowerCase().includes(filter)) continue;
       console.log(line);
     }
+    return;
+  }
+
+  if (args.subcommand === "cost") {
+    const sessionCosts = collectUsage(cfg.workdir, {
+      sessionId: args.costSession,
+      last: args.costLast,
+      pricingOverrides: cfg.modelPricing,
+    });
+    console.log(formatCostReport(sessionCosts));
     return;
   }
 

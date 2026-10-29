@@ -8,7 +8,7 @@
  *  - role:"tool"     -> {role:"user", content:[{type:"tool_result"}]}
  *  - response blocks -> assistant message + tool_calls
  */
-import type { ChatMessage, ChatResult, ToolCall, StreamChunk, ToolSpec } from "./llm.js";
+import type { ChatMessage, ChatResult, TokenUsage, ToolCall, StreamChunk, ToolSpec } from "./llm.js";
 import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal } from "./llm.js";
 import { withRetry } from "./retry.js";
 
@@ -28,7 +28,7 @@ interface AnthropicMessage {
 
 interface AnthropicResponse {
   content?: AnthropicContentBlock[];
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
   error?: { message?: string };
 }
 
@@ -112,16 +112,20 @@ export function fromAnthropicResponse(data: AnthropicResponse): ChatResult {
     }
   }
 
+  const usage: TokenUsage = {
+    prompt_tokens: data.usage?.input_tokens,
+    completion_tokens: data.usage?.output_tokens,
+  };
+  if (typeof data.usage?.cache_read_input_tokens === "number") {
+    usage.cached_tokens = data.usage.cache_read_input_tokens;
+  }
   return {
     message: {
       role: "assistant",
       content: text.length > 0 ? text : null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     },
-    usage: {
-      prompt_tokens: data.usage?.input_tokens,
-      completion_tokens: data.usage?.output_tokens,
-    },
+    usage,
   };
 }
 
@@ -283,8 +287,8 @@ export class AnthropicClient {
         index?: number;
         content_block?: { type?: string; id?: string; name?: string };
         delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
-        message?: { usage?: { input_tokens?: number; output_tokens?: number } };
-        usage?: { input_tokens?: number; output_tokens?: number };
+        message?: { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number } };
+        usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
       };
       try {
         ev = JSON.parse(raw) as typeof ev;
@@ -299,6 +303,9 @@ export class AnthropicClient {
             prompt_tokens: ev.message.usage.input_tokens,
             completion_tokens: ev.message.usage.output_tokens,
           };
+          if (typeof ev.message.usage.cache_read_input_tokens === "number") {
+            usage.cached_tokens = ev.message.usage.cache_read_input_tokens;
+          }
         }
         return null;
       }
@@ -337,6 +344,9 @@ export class AnthropicClient {
             prompt_tokens: usage?.prompt_tokens ?? ev.usage.input_tokens,
             completion_tokens: ev.usage.output_tokens ?? usage?.completion_tokens,
           };
+          if (usage?.cached_tokens === undefined && typeof ev.usage.cache_read_input_tokens === "number") {
+            usage = { ...usage, cached_tokens: ev.usage.cache_read_input_tokens };
+          }
         }
         return null;
       }

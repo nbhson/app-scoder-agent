@@ -1,6 +1,6 @@
 import type { AgentConfig } from "./config.js";
 import { loadPermissionLists } from "./config.js";
-import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolSpec } from "./llm.js";
+import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { AGENT_TOOLS, getTool, type ToolContext } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
@@ -39,6 +39,14 @@ export interface AgentRunResult {
   summary: string;
 }
 
+/** Accumulated token usage for a run (also persisted into session state). */
+export interface UsageTotals {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+}
+
 export class Agent {
   private client: LlmClient | AnthropicClient;
   private messages: ChatMessage[] = [];
@@ -52,6 +60,8 @@ export class Agent {
   private sessionCreatedAt: string | undefined;
   private currentTask = "";
   private lastBuildResult: BuildResult | null = null;
+  /** Accumulated token usage across the current run (session state). */
+  private usageTotals: UsageTotals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
   private mcp: McpManager | null = null;
   /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
   private runSignal = new AbortController();
@@ -100,6 +110,63 @@ export class Agent {
     // Keep the tool context in sync so run_command can observe SIGINT and
     // terminate its child process immediately (long builds must be interruptible).
     this.ctx.signal = this.runSignal.signal;
+  }
+
+  /** Push one tool-result message back into the conversation. */
+  private pushToolResult(tc: ToolCall, content: string): void {
+    this.messages.push({
+      role: "tool",
+      tool_call_id: tc.id,
+      name: tc.name,
+      content,
+    });
+  }
+
+  /**
+   * Handle a rejected tool call (unknown tool, policy denial, user denial):
+   * render the failure, log the event, and push an ERROR tool message so the
+   * LLM can react. Replaces the previously duplicated denied/deny/unknown blocks.
+   */
+  private rejectToolCall(
+    step: number,
+    tc: ToolCall,
+    output: string,
+    logExtra: Record<string, unknown>,
+  ): void {
+    ui.toolResult(tc.name, false, output);
+    this.logger.log({ type: "tool", step, tool: tc.name, ok: false, ...logExtra });
+    this.pushToolResult(tc, output);
+  }
+
+  /**
+   * Record usage of one LLM call: render token counts, log an `llm_usage`
+   * event, and accumulate totals into session state.
+   */
+  private recordLlmUsage(usage: ChatResult["usage"]): void {
+    if (!usage) return;
+    const input = usage.prompt_tokens ?? 0;
+    const output = usage.completion_tokens ?? 0;
+    const cached = usage.cached_tokens ?? 0;
+    this.usageTotals.calls += 1;
+    this.usageTotals.inputTokens += input;
+    this.usageTotals.outputTokens += output;
+    this.usageTotals.cachedTokens += cached;
+    ui.info(`tokens: in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"}`);
+    this.logger.log({
+      type: "llm_usage",
+      model: this.client.model,
+      provider: this.config.provider,
+      usage: {
+        input_tokens: input,
+        output_tokens: output,
+        cached_tokens: cached,
+      },
+    });
+  }
+
+  /** Reset per-run usage accumulation (called when a fresh run starts). */
+  private resetUsageTotals(): void {
+    this.usageTotals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
   }
 
   /**
@@ -190,6 +257,7 @@ export class Agent {
 
     this.currentTask = task;
     this.resetRunSignal();
+    this.resetUsageTotals();
     this.messages = [
       {
         role: "system",
@@ -220,6 +288,7 @@ export class Agent {
     const buildCmd = this.buildCmd;
     this.currentTask = `${this.currentTask}\n${task}`.trim();
     this.resetRunSignal();
+    this.resetUsageTotals();
     this.messages.push({ role: "user", content: task });
     try {
       await this.connectMcp();
@@ -238,6 +307,7 @@ export class Agent {
     this.sessionCreatedAt = session.createdAt;
     this.currentTask = session.task;
     this.resetRunSignal();
+    this.resetUsageTotals();
     this.messages = session.messages ?? [];
 
     ui.header(`RESUME ${session.id}`);
@@ -291,19 +361,14 @@ export class Agent {
         throw err;
       });
       if (this.aborted) break;
-      if (usage) {
-        ui.info(`tokens: in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"}`);
-        this.logger.log({ type: "step", step: steps, usage });
-      } else {
-        this.logger.log({ type: "step", step: steps });
-      }
+      this.recordLlmUsage(usage);
+      this.logger.log({ type: "step", step: steps });
 
       // No tool calls => assistant produced a text answer
       if (!message.tool_calls || message.tool_calls.length === 0) {
         const text = message.content ?? "";
         this.messages.push({ role: "assistant", content: text });
 
-        // If the assistant says it's done without building, force a build check.
         // If the assistant says it's done without building, force a build check.
         if (claimsCompletion(text) && steps < this.config.maxSteps) {
           ui.info("agent claims completion -> verifying with build");
@@ -342,26 +407,14 @@ export class Agent {
         try {
           args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
         } catch {
-          this.messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`,
-          });
+          this.pushToolResult(tc, `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`);
           continue;
         }
 
         ui.toolCall(tc.name, args);
 
         if (!tool && !(this.mcp?.hasTool(tc.name))) {
-          ui.toolResult(tc.name, false, "unknown tool");
-          this.logger.log({ type: "tool", step: steps, tool: tc.name, ok: false, error: "unknown tool" });
-          this.messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: `ERROR: unknown tool "${tc.name}". Available: ${AGENT_TOOLS.map((t) => t.spec.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`,
-          });
+          this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${AGENT_TOOLS.map((t) => t.spec.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
           continue;
         }
 
@@ -375,14 +428,7 @@ export class Agent {
                 ok: false,
                 output: `ERROR: command denied by permission policy (${decision.reason}): ${String(args.command).slice(0, 200)}`,
               };
-              ui.toolResult(tc.name, false, result.output);
-              this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: false, denied: decision.reason });
-              this.messages.push({
-                role: "tool",
-                tool_call_id: tc.id,
-                name: tc.name,
-                content: result.output,
-              });
+              this.rejectToolCall(steps, tc, result.output, { args, denied: decision.reason });
               continue;
             }
             if (decision.decision === "ask") {
@@ -392,14 +438,7 @@ export class Agent {
                   ok: false,
                   output: `ERROR: user denied permission to run: ${String(args.command).slice(0, 200)}`,
                 };
-                ui.toolResult(tc.name, false, result.output);
-                this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: false, denied: "user" });
-                this.messages.push({
-                  role: "tool",
-                  tool_call_id: tc.id,
-                  name: tc.name,
-                  content: result.output,
-                });
+                this.rejectToolCall(steps, tc, result.output, { args, denied: "user" });
                 continue;
               }
             }
@@ -439,12 +478,7 @@ export class Agent {
 
         ui.toolResult(tc.name, result.ok, result.output);
         stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
-        this.messages.push({
-          role: "tool",
-          tool_call_id: tc.id,
-          name: tc.name,
-          content: summariseOutput(result.output),
-        });
+        this.pushToolResult(tc, summariseOutput(result.output));
       }
 
       // After a build-command run, treat success as the terminal condition.
@@ -497,6 +531,12 @@ export class Agent {
         lastBuild: lastBuild
           ? { success: lastBuild.success, command: lastBuild.command, output: lastBuild.output.slice(0, 10_000) }
           : null,
+        usage: {
+          llmCalls: this.usageTotals.calls,
+          inputTokens: this.usageTotals.inputTokens,
+          outputTokens: this.usageTotals.outputTokens,
+          cachedTokens: this.usageTotals.cachedTokens,
+        },
       },
       this.sessionCreatedAt,
     );

@@ -8,5 +8,8 @@
     "mode": "auto",
     "allowCommands": ["npm ", "git ", "npx ", "pnpm ", "make ", "cargo "],
     "denyCommands": ["curl ", "wget "]
+  },
+  "modelPricing": {
+    "gpt-4o-mini": { "input": 0.15, "output": 0.6 }
   }
 }

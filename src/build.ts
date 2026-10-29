@@ -17,8 +17,9 @@ export function detectBuildCommand(workdir: string): string | null {
         scripts?: Record<string, string>;
       };
       if (pkg.scripts?.build) return "npm run build";
-    } catch {
-      // fall through
+    } catch (err) {
+      // malformed package.json -> fall through to the other detectors
+      console.error(`⚠  cannot parse package.json (${(err as Error).message}) — build command detection degraded`);
     }
   }
   if (existsSync(resolve(workdir, "Makefile"))) return "make";
@@ -29,10 +30,6 @@ export function detectBuildCommand(workdir: string): string | null {
   return null;
 }
 
-/**
- * Run the build command. This is the agent's stop condition:
- * exit code 0 == task complete.
- */
 /**
  * Run the build command. This is the agent's stop condition:
  * exit code 0 == task complete.
