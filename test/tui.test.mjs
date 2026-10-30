@@ -46,8 +46,7 @@ const mockPort = await new Promise((resolve, reject) => {
 });
 
 describe("scoder tui — Ink full-screen UI", () => {
-  it("chạy closed-loop trong PTY: header + tool calls + build passed + success, rồi exit sạch", async () => {
-    const outFile = join(tmpdir(), `scoder-tui-out-${Date.now()}.txt`);
+  it("chạy closed-loop trong PTY: header + tool calls + build passed + success, rồi exit sạch", async () => {    const outFile = join(tmpdir(), `scoder-tui-out-${Date.now()}.txt`);
     const proc = spawn(
       "python3",
       [
@@ -82,8 +81,51 @@ describe("scoder tui — Ink full-screen UI", () => {
     assert.ok(/build passed|All done/i.test(clean), `phải render finish (tail: ${clean.slice(-300)})`);
     assert.ok(/success/i.test(clean), "status bar phải chuyển sang success");
     assert.ok(/send · esc abort|abort · ctrl\+c/i.test(clean), "phải có status bar với keybind hints");
+    // Build Rail — bản sắc riêng: đèn build + step fuel gauge
+    assert.ok(/● build (ok|fail)|no build yet/.test(clean), `phải có build lamp trong Build Rail (tail: ${clean.slice(-300)})`);
+    assert.ok(/▰|▱/.test(clean), "phải có step fuel gauge ▰▱ trong Build Rail");
+    // Diff card — ký hiệu ✎ cho file edits
+    assert.ok(/✎/.test(clean), "phải render diff card ✎ cho edit_file/write_file");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode})`);
   }, 45_000);
+
+  it("slash commands trong PTY: /help + /cost hoạt động sau một run, rồi exit sạch", async () => {
+    const outFile = join(tmpdir(), `scoder-tui-slash-${Date.now()}.txt`);
+    const proc = spawn(
+      "python3",
+      [
+        "test/pty-run.py",
+        "--timeout", "30",
+        "--send-after", "build passed:/help\\r",
+        "--send-after", "(scoder tui):/cost\\r",
+        "--send-after", "2:(scoder tui):exit\\r",
+        "--out", outFile,
+        "--",
+        "node", "dist/index.js",
+        "-d", tmp,
+        "tui",
+        "fix the bug in lib.js",
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          SCODER_API_KEY: "test",
+          SCODER_BASE_URL: `http://127.0.0.1:${mockPort}`,
+          SCODER_NO_SAVE: "1",
+        },
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+
+    const exitCode = await new Promise((resolve) => proc.on("exit", (c) => resolve(c ?? 0)));
+    const clean = stripAnsi(readFileSync(outFile, "utf8"));
+
+    assert.ok(/Commands \(scoder tui\)/.test(clean), `phải render /help listing (tail: ${clean.slice(-400)})`);
+    assert.ok(clean.includes("/clear") && clean.includes("/cost"), "/help phải liệt kê /clear, /cost");
+    assert.ok(/no LLM calls yet|session usage/.test(clean), "/cost phải báo usage");
+    assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode})`);
+  }, 30_000);
 });
 
 after(() => {
