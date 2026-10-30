@@ -26,12 +26,14 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs" | "cost";
+  subcommand?: "list" | "resume" | "logs" | "cost" | "serve";
   resumeId?: string;
   logsId?: string;
   logsFilter?: string;
   costSession?: string;
   costLast?: number;
+  serveHost?: string;
+  servePort?: number;
   help: boolean;
   version: boolean;
 }
@@ -46,6 +48,9 @@ USAGE
   scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
   scoder cost [--session <id>] [--last <n>]
                                     Token usage & estimated cost from JSONL logs
+  scoder serve [--port <n>] [--host <addr>]
+                                    Run as an HTTP server: POST tasks, stream
+                                    progress via Server-Sent Events (see below)
   scoder --version | --help
 
 OPTIONS
@@ -147,6 +152,17 @@ function parseArgs(argv: string[]): CliArgs {
         args.provider = p;
         break;
       }
+      case "--port": {
+        const n = Number(next());
+        if (!Number.isInteger(n) || n < 0 || n > 65535) {
+          throw new Error(`Invalid --port value (expected 0-65535): ${n}`);
+        }
+        args.servePort = n;
+        break;
+      }
+      case "--host":
+        args.serveHost = next();
+        break;
       case "-h":
       case "--help":
         args.help = true;
@@ -179,6 +195,9 @@ function parseArgs(argv: string[]): CliArgs {
     args.logsFilter = rest.length > 2 ? rest.slice(2).join(" ") : undefined;
   } else if (rest[0] === "cost") {
     args.subcommand = "cost";
+    args.task = null;
+  } else if (rest[0] === "serve") {
+    args.subcommand = "serve";
     args.task = null;
   }
 
@@ -335,6 +354,33 @@ async function main(): Promise<void> {
       pricingOverrides: cfg.modelPricing,
     });
     console.log(formatCostReport(sessionCosts));
+    return;
+  }
+
+  if (args.subcommand === "serve") {
+    const { startServer } = await import("./server.js");
+    if (!cfg.apiKey) {
+      ui.warn("No API key configured — runs will fail until SCODER_API_KEY (or OPENAI_API_KEY) is set.");
+    }
+    const srv = await startServer(cfg, { host: args.serveHost, port: args.servePort });
+    const token = process.env.SCODER_SERVER_TOKEN ? " · token auth" : "";
+    ui.banner(`scoder serve @ http://${args.serveHost ?? "127.0.0.1"}:${srv.port}${token}`, [
+      ["task", `POST /api/runs { "task": "..." } → 202 { id, eventsUrl }`],
+      ["events", `GET /api/runs/<id>/events → SSE stream`],
+      ["list", `GET /api/runs`],
+      ["abort", `POST /api/runs/<id>/abort`],
+      ["workdir", cfg.workdir],
+      ["model", `${cfg.model}  ·  permission ${cfg.permissionMode}`],
+    ]);
+    const shutdown = async () => {
+      ui.info("shutting down server...");
+      await srv.close();
+      process.exit(0);
+    };
+    process.on("SIGINT", () => {
+      ui.warn("\nSIGINT — shutting down server, aborting in-flight runs...");
+      void shutdown();
+    });
     return;
   }
 
