@@ -145,3 +145,67 @@ describe("loadPermissionLists", () => {
     assert.deepEqual(lists.denyCommands, []);
   });
 });
+
+describe("global config (~/.scoder/config.json, override bằng SCODER_CONFIG)", () => {
+  const SAVED = process.env.SCODER_CONFIG;
+  const GLOBAL = join("/tmp", `scoder-global-test-${process.pid}.json`);
+
+  afterEach(() => {
+    if (SAVED === undefined) delete process.env.SCODER_CONFIG;
+    else process.env.SCODER_CONFIG = SAVED;
+    rmSync(GLOBAL, { force: true });
+  });
+
+  it("global rc cung cấp giá trị khi project không set", () => {
+    process.env.SCODER_CONFIG = GLOBAL;
+    writeFileSync(GLOBAL, JSON.stringify({ model: "global-model", maxSteps: 55 }));
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.model, "global-model");
+    assert.equal(cfg.maxSteps, 55);
+  });
+
+  it("project rc ghi đè global theo field", () => {
+    process.env.SCODER_CONFIG = GLOBAL;
+    writeFileSync(GLOBAL, JSON.stringify({ model: "global-model", buildCmd: "make" }));
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ model: "project-model" }));
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.model, "project-model");
+    assert.equal(cfg.buildCmd, "make");
+  });
+
+  it("mcpServers: global + project gộp theo tên, project thắng", () => {
+    process.env.SCODER_CONFIG = GLOBAL;
+    writeFileSync(GLOBAL, JSON.stringify({
+      mcpServers: {
+        shared: { command: "global-cmd" },
+        onlyGlobal: { command: "x" },
+      },
+    }));
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({
+      mcpServers: { shared: { command: "project-cmd" } },
+    }));
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.deepEqual(cfg.mcpServers?.shared, { command: "project-cmd" });
+    assert.deepEqual(cfg.mcpServers?.onlyGlobal, { command: "x" });
+  });
+
+  it("permissions lists: global + project nối cùng nhau", () => {
+    process.env.SCODER_CONFIG = GLOBAL;
+    writeFileSync(GLOBAL, JSON.stringify({
+      permissions: { allowCommands: ["docker "], denyCommands: ["sudo "] },
+    }));
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({
+      permissions: { allowCommands: ["npm "] },
+    }));
+    const lists = loadPermissionLists(TMP);
+    assert.deepEqual(lists.allowCommands, ["docker ", "npm "]);
+    assert.deepEqual(lists.denyCommands, ["sudo "]);
+  });
+
+  it("global rc hỏng -> bỏ qua, không crash", () => {
+    process.env.SCODER_CONFIG = GLOBAL;
+    writeFileSync(GLOBAL, "{ not json");
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.model, "gpt-4o-mini");
+  });
+});

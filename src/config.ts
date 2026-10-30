@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import type { PermissionMode } from "./permissions.js";
 import type { McpServerConfig } from "./mcp.js";
 
@@ -62,19 +63,57 @@ interface RcFile {
   };
 }
 
+function readRcFile(path: string, label: string): RcFile {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as RcFile;
+  } catch (err) {
+    // malformed rc file -> ignore it, but tell the user why their config is not applied
+    console.error(`⚠  ignoring malformed config file ${label}: ${(err as Error).message}`);
+    return {};
+  }
+}
+
+/**
+ * Global (machine-wide) config file. Overridable via SCODER_CONFIG for tests.
+ * Lowest precedence of all file sources — the project rc wins field-by-field.
+ */
+function globalRcPath(): string {
+  return process.env.SCODER_CONFIG || join(homedir(), ".scoder", "config.json");
+}
+
+/** Merge two rc views: global first, project fields win, maps merge per key. */
+function mergeRc(global: RcFile, project: RcFile): RcFile {
+  const merged: RcFile = { ...global, ...project };
+  if (global.mcpServers || project.mcpServers) {
+    merged.mcpServers = { ...global.mcpServers, ...project.mcpServers };
+  }
+  if (global.modelPricing || project.modelPricing) {
+    merged.modelPricing = { ...global.modelPricing, ...project.modelPricing };
+  }
+  if (global.permissions || project.permissions) {
+    const concat = (a: unknown, b: unknown): unknown => {
+      if (!Array.isArray(a) && !Array.isArray(b)) return b ?? a; // non-arrays pass through (parseList filters)
+      return [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
+    };
+    merged.permissions = {
+      mode: project.permissions?.mode ?? global.permissions?.mode,
+      allowCommands: concat(global.permissions?.allowCommands, project.permissions?.allowCommands) as string[] | undefined,
+      denyCommands: concat(global.permissions?.denyCommands, project.permissions?.denyCommands) as string[] | undefined,
+    };
+  }
+  return merged;
+}
+
 function loadRcFile(workdir: string): RcFile {
+  const global = readRcFile(globalRcPath(), globalRcPath());
   for (const name of [".scoderrc.json", ".scoderrc"]) {
     const p = resolve(workdir, name);
     if (existsSync(p)) {
-      try {
-        return JSON.parse(readFileSync(p, "utf8")) as RcFile;
-      } catch (err) {
-        // malformed rc file -> ignore it, but tell the user why their config is not applied
-        console.error(`⚠  ignoring malformed config file ${name}: ${(err as Error).message}`);
-      }
+      return mergeRc(global, readRcFile(p, name));
     }
   }
-  return {};
+  return global;
 }
 
 function parsePermissionMode(raw: string | undefined): PermissionMode {

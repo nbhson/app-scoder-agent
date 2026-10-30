@@ -131,6 +131,10 @@ For any OpenAI-compatible endpoint, just point `baseUrl`, `apiKey`, and `model` 
 
 Then simply run `scoder "your task"` — values are picked up automatically.
 
+### Global config (~/.scoder/config.json)
+
+Machine-wide defaults shared by **all** projects: `mcpServers`, `model`, `baseUrl`, `permission`, `permissions` lists, `modelPricing`… The project `.scoderrc.json` wins field-by-field; `mcpServers` and lists merge per-key (project entries override same-named global ones). API keys are safe here — the file lives in your home dir, outside any repo.
+
 #### All fields
 
 | Field | Default | Description |
@@ -152,7 +156,7 @@ Values are merged from highest to lowest priority — your `.scoderrc.json` valu
 
 1. **CLI flags** — `-m`, `--base-url`, `-k`, `--provider`, `-B`
 2. **Environment variables** — `SCODER_API_KEY` / `OPENAI_API_KEY`, `SCODER_BASE_URL`, `SCODER_MODEL`, …
-3. **`.scoderrc.json`** (or `.scoderrc`) in the project root — project-local only; there is no global rc file. For a machine-wide default, set the `SCODER_*` env vars in your shell profile instead
+3. **`.scoderrc.json`** (or `.scoderrc`) in the project root, merged over the global `~/.scoder/config.json` — project values win field-by-field; `mcpServers`/lists/pricing merge per-key
 4. Built-in defaults
 
 > 💡 If your config in `.scoderrc.json` seems ignored, check `echo $SCODER_API_KEY` — env vars override the file.
