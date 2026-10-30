@@ -367,6 +367,20 @@ export interface ToolContext {
    * or broadcast them. Only one tool runs at a time per agent.
    */
   onToolOutput?: (name: string, stream: "stdout" | "stderr", delta: string) => void;
+  /**
+   * Session plan store (write_todos tool). The agent owns persistence and
+   * rendering; the tool is a pure CRUD surface.
+   */
+  plan?: {
+    get(): TodoItem[];
+    set(items: TodoItem[]): void;
+  };
+}
+
+/** One row of the agent's session plan (write_todos). */
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
 }
 
 export interface AgentTool {
@@ -384,6 +398,51 @@ const obj = (properties: Record<string, unknown>, required: string[]) => ({
 const str = (description: string) => ({ type: "string", description });
 
 export const AGENT_TOOLS: AgentTool[] = [
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "write_todos",
+        description:
+          "Write the full task plan (replaces the previous list). Use at the start of a multi-step task and update as you go: mark items completed IMMEDIATELY after finishing them, set exactly one item in_progress, and add newly discovered steps. The user sees this list live.",
+        parameters: obj(
+          {
+            todos: {
+              type: "array",
+              description: "The complete todo list (full replacement).",
+              items: {
+                type: "object",
+                properties: {
+                  content: { type: "string", description: "Imperative step, e.g. 'Fix null check in UserService'" },
+                  status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+                },
+                required: ["content", "status"],
+                additionalProperties: false,
+              },
+            },
+          },
+          ["todos"],
+        ),
+      },
+    },
+    run: (ctx, args) => {
+      const todos = (args as { todos?: TodoItem[] }).todos;
+      if (!Array.isArray(todos)) return { ok: false, output: "ERROR: todos must be an array of {content, status}." };
+      const clean: TodoItem[] = [];
+      for (const t of todos) {
+        if (typeof t?.content !== "string" || !t.content.trim()) {
+          return { ok: false, output: "ERROR: every todo needs a non-empty content string." };
+        }
+        if (!["pending", "in_progress", "completed"].includes(t.status)) {
+          return { ok: false, output: `ERROR: invalid status "${String(t.status)}" (pending|in_progress|completed).` };
+        }
+        clean.push({ content: t.content.trim().slice(0, 200), status: t.status });
+      }
+      ctx.plan?.set(clean);
+      const done = clean.filter((t) => t.status === "completed").length;
+      return { ok: true, output: `Plan updated: ${done}/${clean.length} completed.` };
+    },
+  },
   {
     spec: {
       type: "function",

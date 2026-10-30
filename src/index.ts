@@ -358,6 +358,48 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
         console.log(`model: ${cfg.model} · provider: ${cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}`);
         continue;
       }
+      if (slash.cmd === "/skills") {
+        const skills = agent.getSkills();
+        if (skills.length === 0) {
+          console.log("no skills discovered — add .scoder/skills/<name>/SKILL.md (name + description frontmatter)");
+        } else {
+          console.log("Skills:");
+          for (const s of skills) console.log(`  ${s.name.padEnd(20)} ${s.description || "(no description)"}  [${s.scope}]`);
+        }
+        continue;
+      }
+      if (slash.cmd === "/skill") {
+        if (!slash.arg) {
+          ui.error("usage: /skill <name>");
+          continue;
+        }
+        const r = agent.stageSkill(slash.arg);
+        if (r.ok) ui.success(r.message);
+        else ui.error(r.message);
+        continue;
+      }
+      if (slash.cmd === "/mcp") {
+        const status = await agent.mcpStatus();
+        if (status.length === 0) {
+          console.log("no MCP servers configured — add mcpServers to .scoderrc.json");
+          continue;
+        }
+        for (const srv of status) {
+          console.log(`${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}${srv.connected ? ` (${srv.tools.length} tools)` : " (not connected)"}`);
+          for (const t of srv.tools) console.log(`    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`);
+        }
+        continue;
+      }
+      if (slash.cmd === "/permission") {
+        const mode = slash.arg.toLowerCase();
+        if (!["auto", "ask", "readonly"].includes(mode)) {
+          console.log(`permission mode: ${cfg.permissionMode} — usage: /permission <auto|ask|readonly>`);
+          continue;
+        }
+        agent.setPermissionMode(mode as "auto" | "ask" | "readonly");
+        cfg.permissionMode = mode as "auto" | "ask" | "readonly";
+        continue;
+      }
       ui.error(`unknown command ${slash.cmd} — try /help`);
       continue;
     }

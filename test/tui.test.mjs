@@ -96,7 +96,7 @@ describe("scoder tui — Ink full-screen UI", () => {
       [
         "test/pty-run.py",
         "--timeout", "30",
-        "--send-after", "build passed:/help\\r",
+        "--send-after", "All done:/help\\r",
         "--send-after", "(scoder tui):/cost\\r",
         "--send-after", "2:(scoder tui):exit\\r",
         "--out", outFile,

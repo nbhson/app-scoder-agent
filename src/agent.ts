@@ -2,14 +2,31 @@ import type { AgentConfig } from "./config.js";
 import { loadPermissionLists } from "./config.js";
 import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
-import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff } from "./tools.js";
+import { spawnSync } from "node:child_process";
+import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, claimsCompletion } from "./context.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, type SessionFile } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
+import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
 import * as ui from "./ui.js";
+
+/** Marker the model appends to a purely conversational reply (rule 9). */
+const CHAT_DONE_MARKER = "<<CHAT_DONE>>";
+
+/** One-line environment snapshot for the system prompt (cache-stable per run). */
+function buildEnvInfo(workdir: string): string {
+  let git = "";
+  try {
+    const branch = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workdir, encoding: "utf8" });
+    if (branch.status === 0) git = ` · git:${branch.stdout.trim()}`;
+  } catch {
+    /* git unavailable */
+  }
+  return `Environment: ${process.platform} · node ${process.version}${git} · today ${new Date().toISOString().slice(0, 10)}`;
+}
 
 const SYSTEM_PROMPT = `You are Scoder, an autonomous coding agent running in a terminal.
 You complete coding tasks by using tools: reading/writing/editing files, listing
@@ -36,7 +53,16 @@ RULES:
    library/API documentation, a URL found in an error message or code comment,
    current package versions, changelogs, release notes, standards. Skip it when
    the answer is in the working directory or is stable general knowledge. After
-   fetching, ground your edits in what the page actually says.`;
+   fetching, ground your edits in what the page actually says.
+9. CONVERSATIONAL INPUT: if the user's message is purely conversational — a
+   greeting, thanks, a short question, or anything that needs no code changes
+   and no shell commands — do NOT use any tools and do NOT run a build. Reply
+   briefly in the user's language and end your reply with the exact marker
+   <<CHAT_DONE>> on its own last line.
+10. PLANNING: for any multi-step task, FIRST call write_todos with the full
+   plan, then work through it — mark each item completed IMMEDIATELY after it
+   is done (keep exactly one in_progress), and add newly discovered steps.
+   Keep the list current; the user watches it live.`;
 
 export interface AgentRunResult {
   success: boolean;
@@ -57,7 +83,7 @@ export interface UsageTotals {
  * (the `scoder serve` HTTP/SSE API) can render runs without touching the UI.
  */
 export type AgentEvent =
-  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string }
+  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string; permission: string }
   | { type: "step"; step: number; maxSteps: number }
   | { type: "llm_delta"; delta: string }
   | { type: "llm_usage"; usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number } }
@@ -73,6 +99,7 @@ export type AgentEvent =
       diff?: ToolDiff;
     }
   | { type: "build"; success: boolean; command: string; output: string }
+  | { type: "todo"; items: TodoItem[] }
   | { type: "finish"; success: boolean; steps: number; summary: string }
   | { type: "error"; message: string };
 
@@ -98,6 +125,14 @@ export class Agent {
   onEvent: ((ev: AgentEvent) => void) | null = null;
   /** Set while a tool call is executing, for tool_output event correlation. */
   private currentToolCall: { step: number; id: string; name: string } | null = null;
+  /** True once any file-writing tool succeeded during the current run. */
+  private filesModified = false;
+  /** Discovered skills (project + global). */
+  private skills: Skill[] = [];
+  /** Content staged via /skill — injected before the next run/turn. */
+  private pendingContext: string[] = [];
+  /** Session plan (write_todos tool). */
+  private plan: TodoItem[] = [];
 
   constructor(private config: AgentConfig) {
     const commonOpts = {
@@ -123,9 +158,20 @@ export class Agent {
       permissions: this.permissions,
       permissionMode: config.permissionMode,
       onToolOutput: this.handleToolOutput,
+      plan: {
+        get: () => this.plan,
+        set: (items) => {
+          this.plan = items;
+          const done = items.filter((t) => t.status === "completed").length;
+          ui.info(`plan: ${done}/${items.length} completed`);
+          this.emit({ type: "todo", items: [...items] });
+          this.logger.log({ type: "todo", items });
+        },
+      },
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
+    this.skills = discoverSkills(config.workdir);
   }
 
   /**
@@ -289,6 +335,9 @@ export class Agent {
   private async connectMcp(): Promise<void> {
     const servers = this.config.mcpServers ?? {};
     if (Object.keys(servers as Record<string, unknown>).length === 0) return;
+    // Idempotent: /mcp may connect while idle — never spawn a second set of
+    // server processes (the first manager's children would leak).
+    if (this.mcp) return;
     if (this.config.permissionMode === "readonly") {
       ui.warn("readonly mode: MCP tools are disabled (they bypass the permission system)");
     }
@@ -329,15 +378,24 @@ export class Agent {
     this.currentTask = task;
     this.resetRunSignal();
     this.resetUsageTotals();
+    this.filesModified = false;
+    this.plan = [];
+    const skillsBlock =
+      this.skills.length > 0
+        ? `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(this.skills)}\nWhen a task matches a skill, read its SKILL.md with read_file and follow it.`
+        : "";
     this.messages = [
       {
         role: "system",
         content:
           SYSTEM_PROMPT +
-          `\n\nWorking directory: ${this.config.workdir}\nBuild command (stop condition): ${buildCmd}`,
+          `\n\nWorking directory: ${this.config.workdir}\nBuild command (stop condition): ${buildCmd}\n${buildEnvInfo(this.config.workdir)}` +
+          skillsBlock,
       },
+      ...this.pendingContext.map((content) => ({ role: "user" as const, content })),
       { role: "user", content: task },
     ];
+    this.pendingContext = [];
     this.emit({
       type: "run_start",
       task,
@@ -345,6 +403,7 @@ export class Agent {
       provider: this.config.provider,
       workdir: this.config.workdir,
       buildCmd,
+      permission: this.config.permissionMode,
     });
 
     try {
@@ -368,6 +427,10 @@ export class Agent {
     this.currentTask = `${this.currentTask}\n${task}`.trim();
     this.resetRunSignal();
     this.resetUsageTotals();
+    this.filesModified = false;
+    this.plan = [];
+    for (const content of this.pendingContext) this.messages.push({ role: "user", content });
+    this.pendingContext = [];
     this.messages.push({ role: "user", content: task });
     try {
       await this.connectMcp();
@@ -387,12 +450,16 @@ export class Agent {
     this.currentTask = session.task;
     this.resetRunSignal();
     this.resetUsageTotals();
+    this.filesModified = false;
+    this.skills = discoverSkills(this.config.workdir);
     this.messages = session.messages ?? [];
 
     ui.header(`RESUME ${session.id}`);
     ui.info(`previous task: ${session.task} (${session.steps} step(s) done)`);
 
     if (followUp) {
+      for (const content of this.pendingContext) this.messages.push({ role: "user", content });
+      this.pendingContext = [];
       this.messages.push({ role: "user", content: followUp });
     } else {
       this.messages.push({
@@ -424,6 +491,10 @@ export class Agent {
   ): Promise<AgentRunResult> {
     let steps = startSteps;
     let lastBuild: BuildResult | null = initialBuild;
+    let textOnlyStreak = 0;
+    let lastCallSig = "";
+    let sigRepeat = 0;
+    let wrapUpInjected = false;
 
     while (steps < this.config.maxSteps && !this.aborted) {
       steps++;
@@ -444,13 +515,40 @@ export class Agent {
       this.recordLlmUsage(usage);
       this.logger.log({ type: "step", step: steps });
 
+      // Wrap-up prefill: two steps before the budget ends, force the model to
+      // stop starting new work and converge (otherwise it burns the last
+      // steps exploring and the run fails without a summary).
+      if (!wrapUpInjected && this.config.maxSteps - steps === 2) {
+        wrapUpInjected = true;
+        this.messages.push({
+          role: "user",
+          content:
+            "<system-reminder>Step budget nearly exhausted (2 steps left). Stop starting new work: finish the current change, run the build command, and reply with a final summary. If the build cannot pass in the remaining steps, report exactly what remains in your final message.</system-reminder>",
+        });
+      }
+
       // No tool calls => assistant produced a text answer
       if (!message.tool_calls || message.tool_calls.length === 0) {
         const text = message.content ?? "";
         this.messages.push({ role: "assistant", content: text });
 
+        // Conversational reply (rule 9 marker): answer only, no build.
+        if (text.includes(CHAT_DONE_MARKER)) {
+          const clean = text.split(CHAT_DONE_MARKER)[0].trim();
+          this.messages[this.messages.length - 1] = { role: "assistant", content: clean };
+          ui.llm("agent", clean || "(no text)");
+          return this.finish(true, steps, buildCmd, clean || "Conversation turn complete.", true);
+        }
+
         // If the assistant says it's done without building, force a build check.
         if (claimsCompletion(text) && steps < this.config.maxSteps) {
+          // Nothing was written during this run — no build to verify (e.g. the
+          // agent only answered a question after reading the code).
+          if (!this.filesModified) {
+            ui.info("no files modified — skipping build verification");
+            ui.llm("agent", text);
+            return this.finish(true, steps, buildCmd, text);
+          }
           ui.info("agent claims completion -> verifying with build");
           lastBuild = await this.checkBuild(buildCmd);
           if (lastBuild.success) {
@@ -465,6 +563,13 @@ export class Agent {
 
         ui.llm("agent", text);
         // Treat a plain text answer with no build as interim commentary; nudge loop.
+        // Safety valve: if the model only talks for 2 consecutive steps and
+        // hasn't modified any file, end the run instead of burning the step
+        // budget on an unproductive nudge loop (the "chào" failure mode).
+        textOnlyStreak++;
+        if (textOnlyStreak >= 2 && !this.filesModified) {
+          return this.finish(true, steps, buildCmd, text);
+        }
         this.messages.push({
           role: "user",
           content: "Continue working on the task. Use tools. Build must pass before you finish.",
@@ -477,6 +582,7 @@ export class Agent {
         content: message.content ?? null,
         tool_calls: message.tool_calls,
       });
+      textOnlyStreak = 0;
 
       // Execute each tool call (validate args before running)
       const stepToolResults = new Map<string, { ok: boolean; output: string }>();
@@ -558,6 +664,12 @@ export class Agent {
           ui.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
         }
 
+        // Track file modifications — a completion claim with no edits needs no
+        // build verification, and conversational turns never touch files.
+        if (result.ok && (tc.name === "write_file" || tc.name === "edit_file")) {
+          this.filesModified = true;
+        }
+
         this.endToolStream();
         this.currentToolCall = null;
         ui.toolResult(tc.name, result.ok, result.output);
@@ -571,6 +683,23 @@ export class Agent {
         });
         stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
         this.pushToolResult(tc, summariseOutput(result.output));
+      }
+
+      // Doom-loop breaker: identical tool call(s) repeated 3x in a row →
+      // intervene with a strategy-change reminder (models rarely recover on
+      // their own; unattended runs would burn the whole step budget).
+      const callSig = message.tool_calls
+        .map((tc) => `${tc.name}:${tc.arguments}`)
+        .sort()
+        .join("|");
+      sigRepeat = callSig === lastCallSig ? sigRepeat + 1 : 0;
+      lastCallSig = callSig;
+      if (sigRepeat >= 2) {
+        this.messages.push({
+          role: "user",
+          content:
+            "<system-reminder>You have made the identical tool call 3 times in a row. This is a loop: read the last output carefully, change your approach, or report the blocker in your final message. Do NOT repeat the same call again.</system-reminder>",
+        });
       }
 
       // After a build-command run, treat success as the terminal condition.
@@ -646,9 +775,88 @@ export class Agent {
     return res;
   }
 
-  private finish(success: boolean, steps: number, buildCmd: string, summary: string): AgentRunResult {
+  // ── Frontend-facing APIs (REPL/TUI slash commands) ─────────────────────────
+
+  /** Skills visible to this project (for /skills). */
+  getSkills(): Skill[] {
+    return this.skills;
+  }
+
+  /**
+   * Stage a skill's content for injection before the next run/turn (/skill).
+   * Non-destructive: nothing is sent to the LLM until the user submits a task.
+   */
+  stageSkill(name: string): { ok: boolean; message: string } {
+    const skill = findSkill(this.config.workdir, name);
+    if (!skill) {
+      const names = this.skills.map((s) => s.name).join(", ");
+      return { ok: false, message: `skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered (try /skills)"}` };
+    }
+    this.pendingContext.push(`[User loaded skill "${skill.name}" — follow these instructions for the upcoming task]\n\n${skill.body}`);
+    return { ok: true, message: `skill "${skill.name}" staged — it will apply to your next task` };
+  }
+
+  /** MCP server overview (for /mcp): config always; tools once connected. */
+  async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }> }>> {
+    const configs = (this.config.mcpServers ?? {}) as Record<string, { command: string }>;
+    if (!this.mcp) {
+      return Object.entries(configs).map(([name, cfg]) => ({ name, command: cfg.command, connected: false, tools: [] }));
+    }
+    await this.connectMcp();
+    const byServer = new Map(this.mcp.listToolsByServer().map((s) => [s.server, s.tools]));
+    return Object.entries(configs).map(([name, cfg]) => ({
+      name,
+      command: cfg.command,
+      connected: byServer.has(name),
+      tools: byServer.get(name) ?? [],
+    }));
+  }
+
+  /** Call one MCP tool directly by its full name (mcp__server__tool) (/mcp exec). */
+  async callMcpTool(fullName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string }> {
+    if (this.config.permissionMode === "readonly") {
+      return { ok: false, output: "ERROR: readonly mode — MCP tools are disabled (they bypass the permission policy)." };
+    }
+    await this.connectMcp();
+    const reg = this.mcp?.getTool(fullName);
+    if (!reg) {
+      return { ok: false, output: `ERROR: unknown MCP tool "${fullName}" — run /mcp to list servers and tools.` };
+    }
+    try {
+      return await reg.conn.callTool(reg.toolName, args);
+    } catch (err) {
+      return { ok: false, output: `ERROR: ${(err as Error).message}` };
+    }
+  }
+
+  /** Switch permission mode at runtime (/permission) — rebuilds the checker. */
+  setPermissionMode(mode: "auto" | "ask" | "readonly"): void {
+    if (mode === this.config.permissionMode) return;
+    this.config = { ...this.config, permissionMode: mode };
+    const permLists = loadPermissionLists(this.config.workdir);
+    this.permissions = new PermissionChecker({
+      mode,
+      allowCommands: permLists.allowCommands,
+      denyCommands: permLists.denyCommands,
+      nonInteractive: this.config.yes,
+    });
+    this.ctx.permissionMode = mode;
+    ui.info(`permission mode → ${mode}`);
+  }
+
+  private finish(
+    success: boolean,
+    steps: number,
+    buildCmd: string,
+    summary: string,
+    chatOnly = false,
+  ): AgentRunResult {
     if (success) {
-      ui.success(`Task complete in ${steps} step(s). Build passed: ${buildCmd}`);
+      if (chatOnly) {
+        ui.success(`Done in ${steps} step(s).`);
+      } else {
+        ui.success(`Task complete in ${steps} step(s). Build passed: ${buildCmd}`);
+      }
     } else {
       ui.error(`Task NOT complete. ${summary}`);
     }

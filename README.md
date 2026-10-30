@@ -60,7 +60,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoin
 # Run a task
 scoder "add a ping function to src/network.ts"
 
-# Interactive REPL (supports /help, /clear, /cost, /model)
+# Interactive REPL (supports /help, /clear, /cost, /model, /skills, /skill, /mcp, /permission)
 scoder
 ```
 
@@ -203,6 +203,47 @@ Layered checks, in order:
 5. **Mode** — `auto` runs everything else; `ask` prompts; `readonly` denies.
 
 In `ask` mode the prompt offers `[y] yes / [a] always allow "<prefix>" / [n] no / [q] quit`. With `-y` (non-interactive), commands needing confirmation are denied instead of hanging CI.
+
+## Skills (SKILL.md)
+
+scoder can load reusable instruction packs ("skills") into the conversation. A skill is a directory with a `SKILL.md` (YAML-lite frontmatter + markdown body):
+
+```
+.scoder/skills/code-review/SKILL.md     # project-level
+~/.scoder/skills/code-review/SKILL.md   # global (project overrides on name clash)
+```
+
+```markdown
+---
+name: code-review
+description: Review code for bugs, security issues, and style
+---
+Read the current diff. Check for: null derefs, injection risks, ...
+```
+
+- **Advertised to the model** — every run's system prompt lists skill names + descriptions; the agent reads a matching `SKILL.md` itself via `read_file` when a task fits
+- **Explicit load** — `/skill <name>` stages the skill's content; it is injected as context before your next task
+- **`/skills`** lists everything discovered (both scopes)
+
+## Slash commands (REPL + TUI)
+
+| Command | Description |
+|---|---|
+| `/help` | command list |
+| `/clear` | reset conversation + agent context |
+| `/cost` | session token usage |
+| `/model` | active model/provider/build |
+| `/skills` | list discovered skills |
+| `/skill <name>` | stage a skill for the next task |
+| `/mcp` | MCP servers + tools (connects on demand) |
+| `/permission <auto\|readonly>` | switch permission mode at runtime |
+| `/exit` | quit |
+
+In the TUI, **Tab** completes commands (and `/skill` names), **↑/↓** recall sent-message history.
+
+## Planning tool
+
+For multi-step tasks the agent writes a live plan with `write_todos` (`[x]` completed · `[~]` in progress · `[ ]` pending) — rendered inline in the TUI and included in session state. Harness guardrails: a **doom-loop breaker** (3× identical tool call → forced strategy-change reminder), a **wrap-up prefill** (2 steps before the budget ends the agent is told to converge), and **char-budget history trimming** with whole-turn drops (never orphaning a tool result) plus old-tool-result pruning.
 
 ## MCP Servers (stdio)
 

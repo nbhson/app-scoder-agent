@@ -46,6 +46,9 @@ export interface TuiState {
   workdir: string;
   buildCmd: string;
   buildLamp: BuildLamp;
+  permission: string;
+  /** Unix ms when the current/last run started — drives the elapsed timer. */
+  startedAt: number | null;
   usage: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number };
   summary: string | null;
 }
@@ -61,6 +64,8 @@ export function initialState(): TuiState {
     workdir: "",
     buildCmd: "",
     buildLamp: "none",
+    permission: "",
+    startedAt: null,
     usage: { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
     summary: null,
   };
@@ -97,6 +102,8 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.workdir = ev.workdir;
       state.buildCmd = ev.buildCmd;
       state.buildLamp = "none";
+      state.permission = ev.permission;
+      state.startedAt = Date.now();
       state.status = "running";
       state.step = 0;
       state.summary = null;
@@ -185,6 +192,18 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     case "build": {
       state.buildLamp = ev.success ? "ok" : "fail";
       appendItem(state, { kind: "build", success: ev.success, command: ev.command });
+      break;
+    }
+    case "todo": {
+      // Plan updates render as a live checkbox list in the chat pane.
+      const rows = ev.items
+        .map((t) => {
+          const box = t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]";
+          return `  ${box} ${t.content}`;
+        })
+        .join("\n");
+      const done = ev.items.filter((t) => t.status === "completed").length;
+      appendItem(state, { kind: "notice", text: `plan ${done}/${ev.items.length}\n${rows}`, level: "info" });
       break;
     }
     case "finish": {

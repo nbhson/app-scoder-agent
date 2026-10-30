@@ -1,23 +1,56 @@
 import type { ChatMessage } from "./llm.js";
 
 const MAX_MESSAGES = 120; // keep history under control for long runs
+/** Total history char budget (~25k tokens) before oldest turns are dropped. */
+const MAX_HISTORY_CHARS = 100_000;
+/** Tool results older than this many recent tool messages get pruned. */
+const KEEP_RECENT_TOOL_RESULTS = 20;
 
 /**
- * Trim message history to stay within token budget.
- * Strategy: keep system prompt + last N messages, compact older user/assistant pairs.
+ * Trim message history to stay within token budget. Layered strategy
+ * (context engineering — inspired by compaction patterns, from scratch):
+ *   1. Message-count cap: keep system + newest MAX_MESSAGES-1.
+ *   2. Char budget: drop the OLDEST WHOLE TURNS (from a user message up to
+ *      the next user message) until under MAX_HISTORY_CHARS — dropping whole
+ *      turns never orphans an assistant tool_calls / tool result pair.
+ *   3. Old tool results (outside the recent window) are pruned in place to a
+ *      short placeholder — their content dominated the budget anyway.
  */
 export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
-  if (messages.length <= MAX_MESSAGES) return messages;
+  let out = messages;
 
-  // Keep system + last MAX_MESSAGES-1
-  const system = messages[0].role === "system" ? messages[0] : null;
-  const rest = system ? messages.slice(1) : messages;
-  const trimmed = rest.slice(-(MAX_MESSAGES - 1));
-
-  if (system) {
-    return [system, ...trimmed];
+  // 1) Message-count cap
+  if (out.length > MAX_MESSAGES) {
+    const system = out[0].role === "system" ? out[0] : null;
+    const rest = system ? out.slice(1) : out;
+    out = system ? [system, ...rest.slice(-(MAX_MESSAGES - 1))] : rest.slice(-(MAX_MESSAGES - 1));
   }
-  return trimmed;
+
+  const historyChars = (msgs: ChatMessage[]) => msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+
+  // 2) Char budget — drop oldest whole turns, never the system message
+  while (out.length > 2 && historyChars(out) > MAX_HISTORY_CHARS) {
+    const firstIdx = out[0].role === "system" ? 1 : 0;
+    if (out[firstIdx]?.role !== "user") break; // no clean turn boundary — stop
+    let next = firstIdx + 1;
+    while (next < out.length && out[next].role !== "user") next++;
+    out = [...out.slice(0, firstIdx), ...out.slice(next)];
+  }
+
+  // 3) Prune old tool-result contents (safe: contents only, never removals —
+  // removing a tool message would orphan its assistant tool_calls entry).
+  const toolIdx: number[] = [];
+  for (let i = 0; i < out.length; i++) if (out[i].role === "tool") toolIdx.push(i);
+  const pruneBefore = toolIdx.length - KEEP_RECENT_TOOL_RESULTS;
+  if (pruneBefore > 0) {
+    out = out.map((m, i) =>
+      toolIdx.includes(i) && toolIdx.indexOf(i) < pruneBefore && (m.content?.length ?? 0) > 200
+        ? { ...m, content: "[pruned — old tool result]" }
+        : m,
+    );
+  }
+
+  return out;
 }
 
 /**

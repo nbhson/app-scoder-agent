@@ -157,6 +157,48 @@ describe("trimHistory", () => {
     const msgs = [{ role: "user", content: "hi" }];
     assert.equal(trimHistory(msgs).length, 1);
   });
+  it("ngân sách ký tự: drop nguyên turn cũ (không mồ côi tool result)", () => {
+    const turn = (i, withTool = true) => [
+      { role: "user", content: `task ${i}` },
+      ...(withTool
+        ? [
+            { role: "assistant", content: null, tool_calls: [{ id: `c${i}`, type: "function", function: { name: "read_file", arguments: "{}" } }] },
+            { role: "tool", tool_call_id: `c${i}`, content: "x".repeat(60_000) },
+            { role: "assistant", content: `done ${i}` },
+          ]
+        : []),
+    ];
+    const msgs = [
+      { role: "system", content: "sys" },
+      ...turn(1), ...turn(2), ...turn(3), ...turn(4),
+      { role: "user", content: "final question" },
+    ];
+    const out = trimHistory(msgs);
+    const total = out.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+    assert.ok(total <= 100_000 + 200_000 / 2, `budget respected (total=${total})`);
+    // mọi assistant tool_calls vẫn có tool result đi kèm
+    for (let i = 0; i < out.length; i++) {
+      const m = out[i];
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        const ids = m.tool_calls.map((t) => t.id);
+        const hasAll = out.slice(i + 1).some((t) => t.role === "tool" && ids.includes(t.tool_call_id));
+        assert.ok(hasAll, `tool_calls ${ids.join(",")} không bị mồ côi`);
+      }
+    }
+    assert.equal(out[out.length - 1].content, "final question");
+  });
+  it("prune tool result cũ giữ nội dung gần đây", () => {
+    const msgs = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "t" },
+      ...Array.from({ length: 30 }, (_, i) => ({ role: "tool", tool_call_id: `c${i}`, content: `r${i}` + "y".repeat(300) })),
+    ];
+    const out = trimHistory(msgs);
+    const toolMsgs = out.filter((m) => m.role === "tool");
+    const pruned = toolMsgs.filter((m) => m.content === "[pruned — old tool result]");
+    assert.ok(pruned.length > 0, "phải prune tool cũ");
+    assert.equal(toolMsgs[toolMsgs.length - 1].content.startsWith("r29"), true, "tool mới nhất giữ nguyên");
+  });
 });
 
 describe("summariseOutput", () => {

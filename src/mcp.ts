@@ -192,6 +192,17 @@ export class McpManager {
     return this.tools.has(name);
   }
 
+  /** Per-server tool listing (for /mcp status display). */
+  listToolsByServer(): Array<{ server: string; tools: McpTool[] }> {
+    const map = new Map<string, McpTool[]>();
+    for (const t of this.tools.values()) {
+      const arr = map.get(t.serverName) ?? [];
+      arr.push({ name: t.toolName, description: t.def.description, inputSchema: t.def.inputSchema });
+      map.set(t.serverName, arr);
+    }
+    return [...map.entries()].map(([server, tools]) => ({ server, tools }));
+  }
+
   getTool(name: string): RegisteredMcpTool | undefined {
     return this.tools.get(name);
   }

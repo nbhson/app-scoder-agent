@@ -3,20 +3,25 @@
  *
  * Identity (deliberately distinct from chat-first agent UIs): the build is
  * the mission, so the screen is organized around it —
- *   · Build Rail (top): brand, build-status lamp, step fuel gauge ▰▰▰▱▱▱
+ *   · Build Rail (top): brand, model/permission badges, build lamp, fuel gauge
  *   · Flight-recorder log: each tool entry is stamped `07 ▸ name(args)`
  *   · `✎` diff cards rendered inline for every file edit
+ *   · Assistant messages render as markdown (code fences, headers, lists)
+ *   · Input: ↑/↓ history · Tab command completion · live candidates hint
  * Driven entirely by AgentEvents (the same stream the HTTP/SSE server uses).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { AgentConfig } from "../config.js";
-import { Agent } from "../agent.js";
+import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
+import { discoverSkills } from "../skills.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
-import { formatSlashHelp, parseSlashCommand } from "./commands.js";
+import { completeSlashCommand, formatSlashHelp, parseSlashCommand } from "./commands.js";
+import { Markdown } from "./markdown.js";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_MS = 80;
 /** Fuel gauge is scaled to this many cells regardless of maxSteps. */
 const GAUGE_CELLS = 10;
 
@@ -24,10 +29,36 @@ function useSpinner(active: boolean): string {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), SPINNER_MS);
     return () => clearInterval(timer);
   }, [active]);
   return SPINNER_FRAMES[frame];
+}
+
+/**
+ * Isolated spinner: owns its own 80ms timer so animation frames re-render
+ * ONLY this component — not the whole tree (the previous design lifted the
+ * frame state into TuiApp, re-rendering every chat item 12x/second → flicker).
+ */
+function Spinner({ active }: { active: boolean }): React.JSX.Element | null {
+  const frame = useSpinner(active);
+  if (!active) return null;
+  return <Text color="cyan">{frame}</Text>;
+}
+
+/** Live elapsed timer — own 1s interval, re-renders only itself. */
+function Elapsed({ since, active }: { since: number | null; active: boolean }): React.JSX.Element | null {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  if (!since) return null;
+  const secs = Math.max(0, Math.round((Date.now() - since) / 1000));
+  const mm = Math.floor(secs / 60);
+  const ss = String(secs % 60).padStart(2, "0");
+  return <Text dimColor> · {mm}:{ss}</Text>;
 }
 
 function formatArgs(args: Record<string, unknown>): string {
@@ -48,9 +79,9 @@ function fuelGauge(step: number, maxSteps: number): string | null {
 
 const OUTPUT_PREVIEW_LINES = 4;
 
-function ToolItemView({ item, spinner }: { item: Extract<ChatItem, { kind: "tool" }>; spinner: string }): React.JSX.Element {
+function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): React.JSX.Element {
   const running = item.ok === null;
-  const icon = running ? <Text color="cyan">{spinner}</Text> : item.ok ? <Text color="green">✔</Text> : <Text color="red">✘</Text>;
+  const icon = running ? <Spinner active /> : item.ok ? <Text color="green">✔</Text> : <Text color="red">✘</Text>;
   const lines = item.output.length > 0 ? item.output.replace(/\n+$/, "").split("\n") : [];
   const preview = lines.slice(-OUTPUT_PREVIEW_LINES);
   return (
@@ -86,7 +117,14 @@ function DiffItemView({ item }: { item: Extract<ChatItem, { kind: "diff" }> }): 
   const shown = lines.slice(0, MAX_DIFF_RENDER_LINES);
   const hidden = lines.length - shown.length;
   return (
-    <Box flexDirection="column" paddingLeft={2}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="gray"
+      paddingX={1}
+      marginTop={1}
+      marginLeft={1}
+    >
       <Text>
         <Text dimColor>{String(item.step).padStart(2, "0")}▸</Text>{" "}
         <Text color="magenta" bold>
@@ -104,7 +142,7 @@ function DiffItemView({ item }: { item: Extract<ChatItem, { kind: "diff" }> }): 
   );
 }
 
-function ChatItemView({ item, spinner }: { item: ChatItem; spinner: string }): React.JSX.Element | null {
+function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
   switch (item.kind) {
     case "user":
       return (
@@ -115,14 +153,24 @@ function ChatItemView({ item, spinner }: { item: ChatItem; spinner: string }): R
           <Text bold>{item.text}</Text>
         </Box>
       );
-    case "assistant":
+    case "assistant": {
+      // Finalized messages render as markdown; while streaming, raw dim text
+      // (cheap — markdown layout of partial text would jump around anyway).
+      if (item.streaming || !item.text) {
+        return (
+          <Box marginTop={item.text ? 1 : 0} paddingLeft={1}>
+            <Text dimColor={item.streaming}>{item.text || (item.streaming ? "" : "(no text)")}</Text>
+          </Box>
+        );
+      }
       return (
-        <Box marginTop={item.text ? 1 : 0} paddingLeft={1}>
-          <Text dimColor={item.streaming}>{item.text || (item.streaming ? "" : "(no text)")}</Text>
+        <Box marginTop={1} paddingLeft={1}>
+          <Markdown text={item.text} />
         </Box>
       );
+    }
     case "tool":
-      return <ToolItemView item={item} spinner={spinner} />;
+      return <ToolItemView item={item} />;
     case "diff":
       return <DiffItemView item={item} />;
     case "build":
@@ -144,19 +192,22 @@ function ChatItemView({ item, spinner }: { item: ChatItem; spinner: string }): R
   }
 }
 
-/** Build Rail — scoder's signature top bar: lamp + build command + fuel gauge. */
+/** Build Rail — scoder's signature top bar: badges + lamp + fuel gauge. */
 function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
   const lampColor = state.buildLamp === "ok" ? "green" : state.buildLamp === "fail" ? "red" : "gray";
   const lampLabel = state.buildLamp === "ok" ? "build ok" : state.buildLamp === "fail" ? "build fail" : "no build yet";
   const gauge = fuelGauge(state.step, state.maxSteps);
+  const perm = state.permission || config.permissionMode;
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
-      <Text bold color="magenta">
-        scoder
+      <Text>
+        <Text bold color="magenta">scoder</Text>
+        <Text dimColor> · {state.model || config.model || "—"}</Text>
       </Text>
       <Text>
+        <Text color={perm === "readonly" ? "yellow" : perm === "ask" ? "cyan" : "gray"}>⛨ {perm}</Text>
+        <Text> </Text>
         <Text color={lampColor}>● {lampLabel}</Text>
-        <Text dimColor> {state.buildCmd || config.buildCmd || "auto"}</Text>
       </Text>
       <Text>
         {gauge && (
@@ -171,14 +222,17 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
   );
 }
 
-function StatusBar({ state, spinner }: { state: TuiState; spinner: string }): React.JSX.Element {
+function StatusBar({ state }: { state: TuiState }): React.JSX.Element {
   const statusColor = state.status === "running" ? "cyan" : state.status === "success" ? "green" : state.status === "failed" ? "red" : "gray";
   const statusLabel =
     state.status === "running" ? `running ${state.step}/${state.maxSteps}` : state.status === "idle" ? "idle" : state.status;
   return (
     <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
       <Text>
-        <Text color={statusColor}>{state.status === "running" ? `${spinner} ${statusLabel}` : statusLabel}</Text>
+        {state.status === "running" && <Spinner active />}
+        {state.status === "running" ? " " : ""}
+        <Text color={statusColor}>{statusLabel}</Text>
+        <Elapsed since={state.startedAt} active={state.status === "running"} />
         <Text dimColor> · {state.model || "—"}</Text>
         {state.usage.calls > 0 && (
           <Text dimColor>
@@ -188,57 +242,7 @@ function StatusBar({ state, spinner }: { state: TuiState; spinner: string }): Re
           </Text>
         )}
       </Text>
-      <Text dimColor>⏎ send · pgup/pgdn scroll · esc abort · ctrl+c quit</Text>
-    </Box>
-  );
-}
-
-interface InputProps {
-  /** Source of truth — updated synchronously by the parent (submit clears it
-   *  before the next keystroke can arrive, so chunks never merge across a
-   *  submit the way "/help" + "/cost" would become "/help/cost"). */
-  valueRef: React.MutableRefObject<string>;
-  /** Render mirror of valueRef.current. */
-  value: string;
-  onChange: (v: string) => void;
-  /** Called with the final value (handles paste-with-newline chunks too). */
-  onSubmit: (value: string) => void;
-}
-
-function Input({ valueRef, value, onChange, onSubmit }: InputProps): React.JSX.Element {
-  useInput(
-    (input, key) => {
-      const current = valueRef.current;
-      if (key.return) {
-        onSubmit(current);
-        return;
-      }
-      if (key.backspace || key.delete) {
-        const next = current.slice(0, -1);
-        valueRef.current = next;
-        onChange(next);
-        return;
-      }
-      if (input.length > 0 && !key.ctrl && !key.meta && !key.escape && !key.upArrow && !key.downArrow && !key.tab) {
-        // A chunk may contain several pasted chars — even a trailing newline
-        // (terminal pastes / PTY writes deliver "exit\r" as one chunk).
-        const parts = input.split(/[\r\n]+/);
-        const next = current + parts[0];
-        valueRef.current = next;
-        onChange(next);
-        if (parts.length > 1) onSubmit(next); // newline in the chunk = submit
-      }
-    },
-    // Always active: typing while the agent runs is allowed (text is kept,
-    // submit is a no-op until idle) so keystrokes are never silently lost.
-  );
-  return (
-    <Box>
-      <Text color="magenta" bold>
-        {"❯ "}
-      </Text>
-      <Text>{value}</Text>
-      <Text dimColor>▌</Text>
+      <Text dimColor>⏎ send · tab · ↑↓ · pgup/pgdn · esc abort · ctrl+c quit</Text>
     </Box>
   );
 }
@@ -256,6 +260,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   const [state, setState] = useState<TuiState>(initialState);
   const [input, setInput] = useState(initialTask ?? "");
   const [scrollOffset, setScrollOffset] = useState(0); // 0 = pinned to bottom
+  const [permMode, setPermMode] = useState(config.permissionMode);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {
@@ -264,9 +269,62 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     },
     [],
   );
+  const historyRef = useRef<string[]>([]);
   const runningRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
-  const spinner = useSpinner(state.status === "running");
+  const skills = useMemo(() => discoverSkills(config.workdir), [config.workdir]);
+  const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
+
+  // Mirror of state for the submit path (isFirst, /cost, /model) and the
+  // abort handler — kept in sync synchronously by update() below, so it is
+  // exact even between renders (event bursts land between them).
+  const stateRef = useRef<TuiState>(state);
+
+  /**
+   * Central state updater — the single source of truth is stateRef, updated
+   * synchronously so event handlers never race a render cycle.
+   */
+  const update = useCallback((fn: (s: TuiState) => TuiState) => {
+    stateRef.current = fn(stateRef.current);
+    setState(stateRef.current);
+  }, []);
+
+  /**
+   * Event batching: streaming (`llm_delta`) and live tool output (`tool_output`)
+   * can emit hundreds of events per second; each one previously triggered a
+   * full-tree re-render (the flicker). Buffer incoming events and flush them
+   * through the reducer at most every FLUSH_MS (~20 fps, well above what the
+   * eye needs for streaming text).
+   */
+  const FLUSH_MS = 50;
+  const eventQueue = useRef<AgentEvent[]>([]);
+  const flushTimer = useRef<NodeJS.Timeout | null>(null);
+  const flushEvents = useCallback(() => {
+    flushTimer.current = null;
+    const events = eventQueue.current;
+    if (events.length === 0) return;
+    eventQueue.current = [];
+    update((s) => {
+      let next = s;
+      for (const ev of events) next = applyEvent(next, ev);
+      return { ...next, items: [...next.items] };
+    });
+  }, [update]);
+  const queueEvent = useCallback(
+    (ev: AgentEvent) => {
+      eventQueue.current.push(ev);
+      if (!flushTimer.current) flushTimer.current = setTimeout(flushEvents, FLUSH_MS);
+    },
+    [flushEvents],
+  );
+  // Flush on unmount so a trailing burst is never dropped.
+  useEffect(
+    () => () => {
+      if (flushTimer.current) clearTimeout(flushTimer.current);
+      flushEvents();
+    },
+    [flushEvents],
+  );
 
   // Boot notice (e.g. "permission=ask is not supported in the TUI") as a chat
   // item, so it scrolls with the conversation instead of being lost off-screen.
@@ -274,13 +332,13 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   useEffect(() => {
     if (bootedRef.current) return;
     bootedRef.current = true;
-    if (bootNotice) setState((s) => ({ ...s, items: [{ kind: "notice", text: bootNotice, level: "warn" }, ...s.items] }));
-  }, [bootNotice]);
+    if (bootNotice) update((s) => ({ ...s, items: [{ kind: "notice", text: bootNotice, level: "warn" }, ...s.items] }));
+  }, [bootNotice, update]);
 
   const pushNotice = useCallback(
     (text: string, level: "info" | "warn" | "error" = "info") =>
-      setState((s) => ({ ...s, items: [...s.items, { kind: "notice", text, level }] })),
-    [],
+      update((s) => ({ ...s, items: [...s.items, { kind: "notice", text, level }] })),
+    [update],
   );
 
   const submit = useCallback(
@@ -312,7 +370,8 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           runningRef.current = false;
           writeInput("");
           setScrollOffset(0);
-          setState(initialState());
+          eventQueue.current = [];
+          update(() => initialState());
           return;
         }
         if (slash.cmd === "/cost") {
@@ -330,33 +389,80 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           pushNotice(`model: ${s.model || config.model || "—"} · provider: ${s.provider || config.provider || "auto"}`);
           return;
         }
+        if (slash.cmd === "/skills") {
+          if (skills.length === 0) {
+            pushNotice("no skills discovered — add .scoder/skills/<name>/SKILL.md (name + description frontmatter)");
+          } else {
+            pushNotice(
+              "Skills:\n" + skills.map((s) => `  ${s.name.padEnd(20)} ${s.description || "(no description)"} [${s.scope}]`).join("\n"),
+            );
+          }
+          return;
+        }
+        if (slash.cmd === "/skill") {
+          if (!slash.arg) {
+            pushNotice(`usage: /skill <name>${skillNames.length ? ` — available: ${skillNames.join(", ")}` : ""}`, "warn");
+            return;
+          }
+          const hit = skills.find((s) => s.name.toLowerCase() === slash.arg.toLowerCase());
+          if (!hit) {
+            pushNotice(`skill "${slash.arg}" not found — try /skills`, "warn");
+            return;
+          }
+          const agent = agentRef.current ?? createAgent();
+          const r = agent.stageSkill(hit.name);
+          pushNotice(r.message, r.ok ? "info" : "error");
+          return;
+        }
+        if (slash.cmd === "/mcp") {
+          const agent = agentRef.current ?? createAgent();
+          try {
+            const status = await agent.mcpStatus();
+            if (status.length === 0) {
+              pushNotice("no MCP servers configured — add mcpServers to .scoderrc.json");
+            } else {
+              pushNotice(
+                status
+                  .map(
+                    (srv) =>
+                      `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}` +
+                      (srv.connected ? ` (${srv.tools.length} tools)\n` + srv.tools.map((t) => `    mcp__${srv.name}__${t.name}`).join("\n") : " (not connected)"),
+                  )
+                  .join("\n"),
+              );
+            }
+          } catch (err) {
+            pushNotice(`MCP status failed: ${(err as Error).message}`, "error");
+          }
+          return;
+        }
+        if (slash.cmd === "/permission") {
+          const mode = slash.arg.toLowerCase();
+          if (!["auto", "readonly"].includes(mode)) {
+            pushNotice(`permission: ${permMode} — usage: /permission <auto|readonly> (ask is not supported in the TUI)`, "warn");
+            return;
+          }
+          setPermMode(mode as "auto" | "readonly");
+          agentRef.current?.setPermissionMode(mode as "auto" | "readonly");
+          update((s) => ({ ...s, permission: mode }));
+          pushNotice(`permission mode → ${mode}`);
+          return;
+        }
         pushNotice(`unknown command ${slash.cmd} — try /help`, "warn");
         return;
       }
       if (runningRef.current) return; // keep the typed text for when the agent is idle
       writeInput("");
+      historyRef.current = [...historyRef.current, task].slice(-100);
       runningRef.current = true;
       setScrollOffset(0);
       // isFirst must be computed BEFORE pushing the user item below.
       const isFirst = stateRef.current.items.every((i) => i.kind !== "user");
       // runTurn() doesn't emit run_start, so the TUI shows the user's message
       // itself; applyEvent's run_start dedupe keeps turn 1 from doubling.
-      setState((s) => ({ ...s, items: [...s.items, { kind: "user", text: task }], status: "running", summary: null }));
+      update((s) => ({ ...s, items: [...s.items, { kind: "user", text: task }], status: "running", summary: null }));
 
-      let agent = agentRef.current;
-      if (!agent) {
-        agent = new Agent(config);
-        // Functional updates: React feeds each updater the latest queued
-        // state, so events can never land on a stale snapshot (a ref mirror
-        // updated in useEffect races events arriving within one render batch
-        // — tool results then miss their items and stay "running…" forever).
-        agent.onEvent = (ev) =>
-          setState((prev) => {
-            const next = applyEvent(prev, ev);
-            return { ...next, items: [...next.items] };
-          });
-        agentRef.current = agent;
-      }
+      const agent = createAgent();
       try {
         // First submission runs the full closed loop; later ones continue the session.
         const result = isFirst ? await agent.run(task) : await agent.runTurn(task);
@@ -364,20 +470,23 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         runningRef.current = false;
       } catch (err) {
         runningRef.current = false;
-        setState((s) =>
-          applyEvent({ ...s, items: [...s.items] }, { type: "error", message: (err as Error).message }),
-        );
+        update((s) => applyEvent({ ...s, items: [...s.items] }, { type: "error", message: (err as Error).message }));
       }
     },
-    [config, pushNotice, writeInput, exit],
+    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode],
   );
 
-  // Mirror of state for the submit path (isFirst, /cost, /model) and the
-  // abort handler — approximate between renders, exact whenever idle.
-  const stateRef = useRef<TuiState>(state);
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  /** Create (or return) the session agent — permission mode always current. */
+  function createAgent(): Agent {
+    if (agentRef.current) return agentRef.current;
+    const agent = new Agent({ ...config, permissionMode: permMode });
+    // Events go through the batching queue (see FLUSH_MS above): applyEvent
+    // still receives the latest state because update() keeps stateRef in
+    // sync synchronously — tool results can never miss their items.
+    agent.onEvent = queueEvent;
+    agentRef.current = agent;
+    return agent;
+  }
 
   // Esc aborts the running task (like SIGINT in the CLI); when scrolled up,
   // the first Esc returns to the bottom instead.
@@ -394,7 +503,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         return;
       }
       if (runningRef.current) {
-        setState((s) => ({ ...markAborted(s), items: [...s.items] }));
+        update((s) => ({ ...markAborted(s), items: [...s.items] }));
         agentRef.current?.abort();
       }
     }
@@ -406,7 +515,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     if (!key.ctrl || _input !== "c") return;
     if (runningRef.current && ctrlCArmed.current === null) {
       ctrlCArmed.current = Date.now();
-      setState((s) => ({ ...s, items: [...s.items, { kind: "notice", text: "Press Ctrl+C again to quit", level: "warn" }] }));
+      update((s) => ({ ...s, items: [...s.items, { kind: "notice", text: "Press Ctrl+C again to quit", level: "warn" }] }));
       setTimeout(() => (ctrlCArmed.current = null), 2000);
       return;
     }
@@ -431,7 +540,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   // Scrollback viewport: by default pin to the newest items that fit on
   // screen; PgUp/PgDn moves the window over the flight-recorder log.
   const rows = stdout.rows ?? 24;
-  const viewItems = Math.max(6, rows - 9);
+  const viewItems = Math.max(6, rows - 10);
   const total = state.items.length;
   const start = Math.max(0, Math.min(total - viewItems, total - viewItems - scrollOffset));
   const end = Math.max(start, Math.min(total, total - scrollOffset));
@@ -443,16 +552,16 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
       <Box flexDirection="column" paddingX={1} flexGrow={1}>
         {total === 0 && (
           <Text dimColor>
-            Type a task and press Enter. The agent works autonomously until the build passes. (/help for commands)
+            Type a task and press Enter. The agent works autonomously until the build passes. (/help for commands, tab completes)
           </Text>
         )}
         {scrollOffset > 0 && <Text dimColor>↑ scrollback — PgDn to return to the newest</Text>}
         {visible.map((item, i) => (
-          <ChatItemView key={start + i} item={item} spinner={spinner} />
+          <ChatItemView key={start + i} item={item} />
         ))}
         {state.status === "running" && state.step > 0 && (
           <Text dimColor>
-            {spinner} step {state.step}/{state.maxSteps} — thinking…
+            <Spinner active /> step {state.step}/{state.maxSteps} — thinking…
           </Text>
         )}
         {lastSummary && (
@@ -474,9 +583,16 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         )}
       </Box>
       <Box paddingX={1}>
-        <Input valueRef={inputRef} value={input} onChange={writeInput} onSubmit={(v) => void submit(v)} />
+        <Input
+          valueRef={inputRef}
+          value={input}
+          onChange={writeInput}
+          onSubmit={(v) => void submit(v)}
+          historyRef={historyRef}
+          skillNames={skillNames}
+        />
       </Box>
-      <StatusBar state={state} spinner={spinner} />
+      <StatusBar state={state} />
     </Box>
   );
 }
@@ -499,3 +615,111 @@ export async function runTui(config: AgentConfig, initialTask: string | null): P
   process.exit(0);
 }
 
+interface InputProps {
+  /** Source of truth — updated synchronously by the parent (submit clears it
+   *  before the next keystroke can arrive, so chunks never merge across a
+   *  submit the way "/help" + "/cost" would become "/help/cost"). */
+  valueRef: React.MutableRefObject<string>;
+  /** Render mirror of valueRef.current. */
+  value: string;
+  onChange: (v: string) => void;
+  /** Called with the final value (handles paste-with-newline chunks too). */
+  onSubmit: (value: string) => void;
+  /** Sent-message history for ↑/↓ recall. */
+  historyRef: React.MutableRefObject<string[]>;
+  /** Skill names for "/skill <Tab>" argument completion. */
+  skillNames: string[];
+}
+
+function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames }: InputProps): React.JSX.Element {
+  const histIdx = useRef<number | null>(null);
+  const draft = useRef<string>("");
+
+  useInput(
+    (input, key) => {
+      const current = valueRef.current;
+      if (key.return) {
+        histIdx.current = null;
+        onSubmit(current);
+        return;
+      }
+      // ↑/↓ message history recall
+      if (key.upArrow || key.downArrow) {
+        const hist = historyRef.current;
+        if (hist.length === 0) return;
+        if (histIdx.current === null) {
+          if (key.downArrow) return;
+          draft.current = current;
+          histIdx.current = hist.length - 1;
+        } else if (key.upArrow) {
+          histIdx.current = Math.max(0, histIdx.current - 1);
+        } else {
+          histIdx.current += 1;
+          if (histIdx.current >= hist.length) {
+            histIdx.current = null;
+            onChange(draft.current);
+            valueRef.current = draft.current;
+            return;
+          }
+        }
+        const v = hist[histIdx.current];
+        valueRef.current = v;
+        onChange(v);
+        return;
+      }
+      // Tab — complete slash command (and /skill argument)
+      if (key.tab) {
+        const argMatch = /^\/skill\s+(\S*)$/.exec(current);
+        if (argMatch) {
+          const partial = argMatch[1].toLowerCase();
+          const hits = skillNames.filter((n) => n.toLowerCase().startsWith(partial));
+          if (hits.length > 0) {
+            const v = "/skill " + hits[0] + (hits.length === 1 ? " " : "");
+            valueRef.current = v;
+            onChange(v);
+          }
+          return;
+        }
+        const comp = completeSlashCommand(current);
+        if (comp) {
+          valueRef.current = comp.completed;
+          onChange(comp.completed);
+        }
+        return;
+      }
+      if (key.backspace || key.delete) {
+        const next = current.slice(0, -1);
+        valueRef.current = next;
+        onChange(next);
+        return;
+      }
+      if (input.length > 0 && !key.ctrl && !key.meta && !key.escape && !key.upArrow && !key.downArrow && !key.tab) {
+        // A chunk may contain several pasted chars — even a trailing newline
+        // (terminal pastes / PTY writes deliver "exit\r" as one chunk).
+        const parts = input.split(/[\r\n]+/);
+        const next = current + parts[0];
+        valueRef.current = next;
+        onChange(next);
+        if (parts.length > 1) onSubmit(next); // newline in the chunk = submit
+      }
+    },
+    // Always active: typing while the agent runs is allowed (text is kept,
+    // submit is a no-op until idle) so keystrokes are never silently lost.
+  );
+
+  // Live candidates hint while a slash command is partially typed.
+  const hint = value.startsWith("/") && !value.includes(" ") ? completeSlashCommand(value) : null;
+  const candidates = hint && hint.candidates.length > 1 ? hint.candidates.map((c) => c.cmd).join("  ") : null;
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color="magenta" bold>
+          {"❯ "}
+        </Text>
+        <Text>{value}</Text>
+        <Text dimColor>▌</Text>
+      </Box>
+      {candidates && <Text dimColor>  {candidates}  (tab completes)</Text>}
+    </Box>
+  );
+}
