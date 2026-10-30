@@ -3,8 +3,27 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [0.4.0] - 2026-10-29 — Enterprise hardening & cost tracking
+## [0.5.0] - 2026-10-30 — Streaming UI, HTTP server mode & web access
 
+### Added
+- **`web_fetch` tool — internet access** — the agent can fetch public HTTP(S) URLs and read the content as plain text:
+  - HTML → readable text (scripts/styles/comments stripped, entities decoded, `<title>` extracted), JSON pretty-printed, binary content types refused
+  - "Knows when to fetch": tool description + a new system-prompt rule tell the LLM when web access is warranted (external/API docs, URLs in error messages, current versions) vs. not (answer available locally); the tool cannot search, only fetch exact URLs
+  - SSRF guard: private/loopback/link-local addresses blocked on every redirect hop (`SCODER_WEB_ALLOW_PRIVATE=1` allows local dev servers); http/https only; ≤5 redirects; 30 s timeout; SIGINT-abortable; 512 KB body cap; 20k-char output cap (`max_chars` configurable)
+  - Read-only → allowed in `readonly` permission mode
+- **Live tool output streaming** — `run_command` and build output render in real time (dimmed block) while the command runs; streamed into the UI *and* exposed as `tool_output` events for server consumers. Chunks forwarded per-stream (stdout/stderr), capped at 20k chars live; full output still returned to the LLM.
+- **`scoder serve` — HTTP API + SSE** (`src/server.ts`):
+  - `POST /api/runs` starts a background agent run (per-run overrides: `workdir`, `buildCmd`, `model`, `provider`, `maxSteps`, `permission`)
+  - `GET /api/runs/<id>/events` — SSE stream: full replay, then live events (`run_start`, `step`, `llm_delta`, `tool_call`, `tool_output`, `tool_result`, `llm_usage`, `build`, `finish`), closes on finish — safe to reconnect at any time
+  - `GET /api/runs` / `GET /api/runs/<id>` / `POST /api/runs/<id>/abort` (kills the run like SIGINT); `GET /api/health`
+  - Runs are always non-interactive (`ask` rejected); max 4 concurrent runs (429 beyond); optional `Authorization: Bearer` auth via `SCODER_SERVER_TOKEN`; binds `127.0.0.1` by default
+- **Structured agent events** — `Agent` now emits typed `AgentEvent`s (`agent.onEvent`), decoupling progress reporting from the terminal UI
+- **Fresh CLI look** — box-drawing startup banner (task/model/workdir/build/steps), `▸` step markers, dimmed live-output blocks; honors `NO_COLOR` and strips ANSI when piped (CI-friendly)
+
+### Tests
+- 27 new tests: `test/webfetch.test.mjs` (16), `test/server.test.mjs` (8 — run lifecycle via SSE, abort, auth), tool-output streaming (3). Suite now **185 passing**.
+
+## [0.4.0] - 2026-10-29 — Enterprise hardening & cost tracking
 ### Added
 - **`scoder cost` subcommand** — token usage & cost tracking from JSONL logs:
   - new `llm_usage` events (input/output/cached tokens, model, provider) per LLM call

@@ -80,8 +80,21 @@ You (task) → LLM plans → Tools execute code → Build runs → Success? → 
 | `edit_file` | Find-and-replace (unique match required) |
 | `list_files` | Recursive directory listing |
 | `run_command` | Execute any shell command (subject to permission policy) |
+| `web_fetch` | Fetch a public HTTP(S) URL → readable text (HTML→text, JSON pretty-printed) |
 
 File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved via `realpath` and cannot escape the working directory, even through a malicious symlink. `read_file` refuses files larger than 2MB with guidance to use `grep`/`head`/`tail`.
+
+### Web access (`web_fetch`)
+
+The agent can read the internet through the built-in `web_fetch` tool — it fetches exact URLs (it cannot search) and returns readable plain text: HTML is converted to text (scripts/styles stripped, entities decoded, title extracted), JSON is pretty-printed, binary content is refused. The system prompt instructs the agent *when to fetch* (external/API docs, URLs in error messages, current versions, changelogs) and when not to (answer available locally).
+
+Safety defaults:
+
+- **SSRF protection** — `localhost`, private and link-local addresses (10.x, 172.16/12, 192.168.x, 127.x, 169.254.x, IPv6 ULA/link-local) are blocked. Set `SCODER_WEB_ALLOW_PRIVATE=1` to allow local dev servers.
+- Only `http`/`https`; up to 5 redirects — every hop is re-validated against the private-address block list.
+- 30 s timeout, SIGINT-abortable; body capped at 512 KB; extracted text capped at 20k chars (configurable via `max_chars`).
+- HTML is converted to plain text (no JS execution); images/archives/PDFs are refused.
+- Read-only — the tool never writes locally, so it is allowed even in `readonly` permission mode.
 
 ## Configuration
 
@@ -96,6 +109,9 @@ File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved vi
 | `SCODER_MAX_STEPS` | `40` | Max loop iterations before giving up |
 | `SCODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
 | `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
+| `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
+| `SCODER_SERVER_TOKEN` | — | `scoder serve` only: require `Authorization: Bearer <token>` |
+| `SCODER_WEB_ALLOW_PRIVATE` | — | Set to `1` to let `web_fetch` reach localhost/private addresses (local dev) |
 | `SCODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
 
 ### Per-project config file (.scoderrc.json)
@@ -225,7 +241,39 @@ Sessions older than 7 days are pruned automatically on the next run. Use `--no-s
 
 ## Streaming
 
-LLM output is streamed token-by-token by default (`SCODER_STREAM=0` to disable). If a provider doesn't support streaming, scoder automatically falls back to non-streaming requests.
+scoder streams everything it can, live, as it happens:
+
+- **LLM tokens** — assistant text renders character-by-character (OpenAI-compatible SSE and native Anthropic streaming). If a provider doesn't support streaming, scoder automatically falls back to non-streaming requests. Disable with `SCODER_STREAM=0`.
+- **Tool output** — `run_command` and build output print live (dimmed block) while the command runs, instead of appearing only after it finishes. Live output is capped at 20k chars; the full output still goes to the LLM.
+- **SIGINT-safe** — Ctrl+C kills the running command immediately; streamed rendering never blocks the event loop.
+- Output honors `NO_COLOR` and degrades to plain text when piped (CI-friendly).
+
+## HTTP Server Mode (`scoder serve`)
+
+Run scoder as a local HTTP service — submit tasks programmatically and consume progress as Server-Sent Events:
+
+```bash
+scoder serve                    # http://127.0.0.1:0 (random port, printed at startup)
+scoder serve --port 4114        # fixed port
+SCODER_SERVER_TOKEN=secret scoder serve --host 127.0.0.1
+```
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Liveness: `{ ok, running, runs }` |
+| `/api/runs` | POST | Start a run: `{ "task": "...", "workdir?", "buildCmd?", "model?", "provider?", "maxSteps?", "permission?" }` → `202 { id, eventsUrl }` |
+| `/api/runs` | GET | List runs with status/timing |
+| `/api/runs/<id>` | GET | Run status + final result |
+| `/api/runs/<id>/events` | GET | **SSE stream** — full event replay, then live, closes on finish |
+| `/api/runs/<id>/abort` | POST | Abort a running run (equivalent to SIGINT) |
+
+SSE event types: `run_start`, `step`, `llm_delta` (assistant text), `tool_call`, `tool_output` (live stdout/stderr chunks), `tool_result`, `llm_usage`, `build`, `finish`. The stream replays every event from the beginning, then stays live, and closes after `finish` — safe to (re)connect at any time.
+
+Notes:
+
+- Runs are always non-interactive; `permission: "ask"` is rejected — use `auto` or `readonly`.
+- Binds `127.0.0.1` by default. Set `SCODER_SERVER_TOKEN` to require `Authorization: Bearer <token>` on every request.
+- Max 4 concurrent runs (extra requests get `429`); per-run overrides: `workdir`, `buildCmd`, `model`, `provider`, `maxSteps`, `permission`.
 
 ## Logging
 
@@ -268,6 +316,7 @@ scoder detects the build command automatically:
 ```
 scoder [options] "<task>"     Run a task autonomously until the build passes
 scoder                       Start interactive session
+scoder serve [--port] [--host]   HTTP server mode (see above)
 scoder --help | --version     Help and version
 ```
 
@@ -283,6 +332,9 @@ scoder --help | --version     Help and version
 | `-y` | Non-interactive mode (denies commands needing confirmation) |
 | `--provider <name>` | `openai` \| `anthropic` (env SCODER_PROVIDER; auto-detected) |
 | `--no-save` | Disable session auto-save to `.scoder/sessions/` |
+| `--log-file` | Write a structured JSONL event log to `.scoder/logs/` |
+| `--port <n>` | (`serve`) TCP port, `0` = random free port |
+| `--host <addr>` | (`serve`) Bind address (default `127.0.0.1`) |
 
 ## Examples
 
@@ -305,6 +357,15 @@ scoder -m claude-sonnet-4-5 "refactor the parser module"
 
 # CI: non-interactive, no session saving
 scoder --no-save -y "run the full migration"
+
+# Run as an HTTP service and consume progress via SSE
+scoder serve --port 4114 &
+curl -s -X POST localhost:4114/api/runs -H 'Content-Type: application/json' \
+  -d '{"task": "add input validation to the CLI"}'
+curl -N http://127.0.0.1:4114/api/runs/<id>/events     # live progress
+
+# Fetch external docs during a task (agent decides when, via web_fetch)
+scoder "upgrade express to v5 — check the official migration guide first"
 ```
 
 ## Architecture
@@ -312,22 +373,26 @@ scoder --no-save -y "run the full migration"
 ```
 ┌─────────────────────────────────────────────┐
 │  CLI (src/index.ts)                         │
-│   arg parsing, REPL, SIGINT handling        │
-└─────────────────┬───────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────┐
+│   arg parsing, REPL, serve, SIGINT          │
+└───────────────┬─────────────────────────────┘
+                │
+┌───────────────▼─────────────────────────────┐
 │  Agent (src/agent.ts)                       │
-│   Closed-loop orchestrator                  │
-│   history trimming, error injection         │
-└───────┬───────────────────────┬─────────────┘
-        │                       │
-┌───────▼───────┐    ┌─────────▼──────────┐
-│  LLM Client   │    │  Tool Registry       │
-│ (src/llm.ts)  │    │ (src/tools.ts)       │
-│ OpenAI compat │    │ read/write/run/list │
-└───────────────┘    └──────────────────────┘
-        │
-        ▼
+│  Closed-loop orchestrator                   │
+│  history trimming, error injection          │
+│  emits AgentEvent (UI / SSE consumers)      │
+└──────┬─────────────┬───────────────┬────────┘
+       │             │               │
+┌──────▼───────┐  ┌──▼───────────┐  ┌▼──────────────────┐
+│  LLM Client  │  │ Tool Registry│  │ Server            │
+│ (src/llm.ts) │  │(src/tools.ts)│  │ (src/server.ts)   │
+│ OpenAI compat│  │ + web_fetch  │  │ HTTP API + SSE    │
+│ (anthropic:  │  │ (src/        │  │ runs in background│
+│  provider-   │  │  webfetch.ts)│  └───────────────────┘
+│  anthropic)  │  └──────────────┘
+└──────────────┘
+       │
+       ▼
 ┌─────────────────────────────────────────────┐
 │  Build Checker (src/build.ts)               │
 │   run build → exit 0 = stop condition met   │
@@ -337,7 +402,7 @@ scoder --no-save -y "run the full migration"
 ## Integration Testing
 
 ```bash
-npm test          # runs: lint → typecheck → build → 116 unit tests + e2e + MCP smoke
+npm test          # runs: build → unit tests (node --test) → e2e closed-loop → MCP smoke
 npm run lint      # eslint flat config (typescript-eslint + eqeqeq, prefer-const...)
 npm run typecheck # tsc --noEmit
 ```
@@ -345,16 +410,17 @@ npm run typecheck # tsc --noEmit
 Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/permissions.test.mjs` — catastrophic patterns, mode classification, allowlist word-boundary, timeout-denies
 - `test/permission-prompt.test.mjs` — interactive prompt timeout behavior
-- `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list
+- `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list, live `run_command` output streaming
+- `test/webfetch.test.mjs` — HTML→text, JSON, redirects, SSRF guard, binary refusal, truncation
+- `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, live `tool_output` events
 - `test/core.test.mjs` — unified diff, retry backoff, context trimming
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve
+- `test/cost.test.mjs` — token usage & cost aggregation
 - `test/anthropic.test.mjs` — message translation + native SSE streaming
 - `test/llm.test.mjs` — OpenAI-compatible chat + SSE streaming + redaction
 - `test/run-e2e.mjs` — closed-loop integration (mock LLM server)
 - `test/run-mcp-test.mjs` — MCP smoke (mock stdio server)
-
-Coverage (lines): **90.3%** overall — see `npm run coverage`.
 
 ## Exit Codes
 
