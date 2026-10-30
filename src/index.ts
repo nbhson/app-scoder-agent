@@ -8,6 +8,7 @@ import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import { collectUsage, formatCostReport } from "./cost.js";
 import { getVersion as getPackageVersion } from "./version.js";
+import { formatSlashHelp, parseSlashCommand } from "./tui/commands.js";
 import * as ui from "./ui.js";
 
 // Single source of truth: read version from package.json (see src/version.ts).
@@ -26,7 +27,7 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui";
+  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init";
   resumeId?: string;
   logsId?: string;
   logsFilter?: string;
@@ -44,6 +45,7 @@ USAGE
   scoder [options] "<task>"        Run a task autonomously until the build passes
   scoder                           Start interactive session (chat + tools)
   scoder tui [task]                Full-screen terminal UI (chat pane, live tool feed)
+  scoder init                      First-run wizard: writes .scoderrc.json + tests the connection
   scoder list                      List saved sessions for this directory
   scoder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
   scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
@@ -204,6 +206,9 @@ function parseArgs(argv: string[]): CliArgs {
     // scoder tui [initial-task] — full-screen Ink interface
     args.subcommand = "tui";
     args.task = rest.length > 1 ? rest.slice(1).join(" ") : null;
+  } else if (rest[0] === "init") {
+    args.subcommand = "init";
+    args.task = null;
   }
 
   return args as CliArgs;
@@ -227,15 +232,89 @@ async function runOnce(cfg: AgentConfig, task: string): Promise<number> {
   }
 }
 
-async function repl(cfg: AgentConfig): Promise<never> {
-  ui.header(`scoder interactive — model: ${cfg.model}`);
+/**
+ * `scoder init` — first-run wizard: asks for the essentials, writes
+ * .scoderrc.json, then offers a live connection test against the provider.
+ */
+export async function runInit(): Promise<void> {
+  const { existsSync, writeFileSync } = await import("node:fs");
+  const rcPath = resolve(process.cwd(), ".scoderrc.json");
+
+  ui.banner("scoder init — configure this project", [
+    ["file", rcPath],
+    ["note", "answers are saved to .scoderrc.json (env vars still override)"],
+  ]);
+
+  if (existsSync(rcPath)) {
+    const rl0 = createInterface({ input: process.stdin, output: process.stdout });
+    const overwrite = await new Promise<string>((res) =>
+      rl0.question(`.scoderrc.json already exists — overwrite? [y/N] `, res),
+    );
+    rl0.close();
+    if (!/^y(es)?$/i.test(overwrite.trim())) {
+      ui.info("kept the existing .scoderrc.json");
+      return;
+    }
+  }
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q: string, def: string) =>
+    new Promise<string>((res) => rl.question(`${q}${def ? ` [${def}]` : ""}: `, (a) => res(a.trim() || def)));
+  const baseUrl = await ask("API base URL (OpenAI-compatible)", "https://api.openai.com/v1");
+  const apiKey = await ask("API key (SCODER_API_KEY/OPENAI_API_KEY also work at runtime)", "");
+  const model = await ask("Model", "gpt-4o-mini");
+  const buildCmd = await ask("Build command (empty = auto-detect)", "");
+  const permission = (await ask("Permission mode (auto | ask | readonly)", "auto")).toLowerCase();
+  rl.close();
+
+  const provider = /api\.anthropic\.com/.test(baseUrl) || /^claude-/i.test(model) ? "anthropic" : "openai";
+  const rc: Record<string, unknown> = {
+    model,
+    baseUrl,
+    provider,
+    ...(buildCmd ? { buildCmd } : {}),
+    permissions: { mode: ["auto", "ask", "readonly"].includes(permission) ? permission : "auto" },
+  };
+  writeFileSync(rcPath, JSON.stringify(rc, null, 2) + "\n");
+  ui.success(`wrote ${rcPath} (provider: ${provider})`);
+
+  const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+  const doTest = await new Promise<string>((res) => rl2.question("Test the connection now? [Y/n] ", res));
+  rl2.close();
+  if (!/^y(es)?$/i.test(doTest.trim()) && doTest.trim() !== "") {
+    ui.info("skipped connection test");
+    return;
+  }
+  if (!apiKey) {
+    ui.warn("no API key provided — set SCODER_API_KEY/OPENAI_API_KEY before running tasks");
+    return;
+  }
+  ui.info(`connecting to ${baseUrl} (${provider}) …`);
+  try {
+    const { LlmClient } = await import("./llm.js");
+    const { AnthropicClient } = await import("./provider-anthropic.js");
+    const client =
+      provider === "anthropic"
+        ? new AnthropicClient({ baseUrl, apiKey, model, maxTokens: 16, temperature: 0 })
+        : new LlmClient({ baseUrl, apiKey, model, maxTokens: 16, temperature: 0 });
+    const res = await client.chat([{ role: "user", content: "Reply with exactly: OK" }], []);
+    const reply = (res.message.content ?? "").trim();
+    ui.success(`connection OK — model replied: ${JSON.stringify(reply)}`);
+  } catch (err) {
+    ui.error(`connection test failed: ${(err as Error).message}`);
+    process.exitCode = 2;
+  }
+}
+
+async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder interactive — model: ${cfg.model}`);
   ui.info('Type a task and press Enter. "exit" or Ctrl+D to quit.');
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "you> " });
 
   // One shared session for the whole REPL conversation (plan P0.5 §4):
   // every input is a follow-up turn, context carries over, saved continuously.
-  const agent = new Agent(cfg);
+  // /clear swaps in a fresh Agent (the /clear branch reassigns this).
+  let agent = new Agent(cfg);
 
   process.on("SIGINT", () => {
     ui.warn("\nSIGINT — aborting current task...");
@@ -249,6 +328,39 @@ async function repl(cfg: AgentConfig): Promise<never> {
     const input = line.trim();
     if (!input) continue;
     if (input === "exit" || input === "quit") break;
+
+    // Slash commands — handled by the UI, never sent to the LLM.
+    const slash = parseSlashCommand(input);
+    if (slash) {
+      if (slash.cmd === "/exit" || slash.cmd === "/quit") break;
+      if (slash.cmd === "/help") {
+        console.log(formatSlashHelp("scoder"));
+        continue;
+      }
+      if (slash.cmd === "/clear") {
+        agent.abort();
+        agent = new Agent(cfg);
+        first = true;
+        ui.info("conversation cleared — context reset");
+        continue;
+      }
+      if (slash.cmd === "/cost") {
+        const u = agent.getUsage();
+        console.log(
+          u.calls > 0
+            ? `session usage: ${u.calls} LLM calls · tokens in ${u.inputTokens} / out ${u.outputTokens}` +
+                (u.cachedTokens > 0 ? ` (+${u.cachedTokens} cached)` : "")
+            : "no LLM calls yet in this session",
+        );
+        continue;
+      }
+      if (slash.cmd === "/model") {
+        console.log(`model: ${cfg.model} · provider: ${cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}`);
+        continue;
+      }
+      ui.error(`unknown command ${slash.cmd} — try /help`);
+      continue;
+    }
 
     try {
       const result = first ? await agent.run(input) : await agent.runTurn(input);
@@ -296,6 +408,11 @@ async function main(): Promise<void> {
   });
 
   // Subcommands
+  if (args.subcommand === "init") {
+    await runInit();
+    return;
+  }
+
   if (args.subcommand === "list") {
     const sessions = listSessions(cfg.workdir);
     if (sessions.length === 0) {
