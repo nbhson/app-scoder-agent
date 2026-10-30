@@ -30,7 +30,13 @@ RULES:
 6. Never invent requirements beyond the given task.
 7. IMPORTANT: if a run_command is denied by permission policy, you will receive
    an error message. Use this as a signal to find a safer alternative or to
-   communicate the limitation to the user.`;
+   communicate the limitation to the user.
+8. You have web access ONLY through web_fetch (it fetches exact URLs, it cannot
+   search). Use it when the task depends on external or fast-changing knowledge:
+   library/API documentation, a URL found in an error message or code comment,
+   current package versions, changelogs, release notes, standards. Skip it when
+   the answer is in the working directory or is stable general knowledge. After
+   fetching, ground your edits in what the page actually says.`;
 
 export interface AgentRunResult {
   success: boolean;
@@ -39,13 +45,28 @@ export interface AgentRunResult {
   summary: string;
 }
 
-/** Accumulated token usage for a run (also persisted into session state). */
 export interface UsageTotals {
   calls: number;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
 }
+
+/**
+ * Structured run events — emitted by the Agent so alternative frontends
+ * (the `scoder serve` HTTP/SSE API) can render runs without touching the UI.
+ */
+export type AgentEvent =
+  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string }
+  | { type: "step"; step: number; maxSteps: number }
+  | { type: "llm_delta"; delta: string }
+  | { type: "llm_usage"; usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number } }
+  | { type: "tool_call"; step: number; id: string; name: string; args: Record<string, unknown> }
+  | { type: "tool_output"; name: string; stream: "stdout" | "stderr"; delta: string }
+  | { type: "tool_result"; step: number; name: string; ok: boolean; output: string }
+  | { type: "build"; success: boolean; command: string; output: string }
+  | { type: "finish"; success: boolean; steps: number; summary: string }
+  | { type: "error"; message: string };
 
 export class Agent {
   private client: LlmClient | AnthropicClient;
@@ -65,6 +86,10 @@ export class Agent {
   private mcp: McpManager | null = null;
   /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
   private runSignal = new AbortController();
+  /** Optional structured-event sink (used by the HTTP/SSE server frontend). */
+  onEvent: ((ev: AgentEvent) => void) | null = null;
+  /** Set while a tool call is executing, for tool_output event correlation. */
+  private currentToolCall: { step: number; id: string; name: string } | null = null;
 
   constructor(private config: AgentConfig) {
     const commonOpts = {
@@ -89,6 +114,7 @@ export class Agent {
       workdir: config.workdir,
       permissions: this.permissions,
       permissionMode: config.permissionMode,
+      onToolOutput: this.handleToolOutput,
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
@@ -110,6 +136,29 @@ export class Agent {
     // Keep the tool context in sync so run_command can observe SIGINT and
     // terminate its child process immediately (long builds must be interruptible).
     this.ctx.signal = this.runSignal.signal;
+  }
+
+  /** Emit one structured run event to the sink (if attached). */
+  private emit(ev: AgentEvent): void {
+    this.onEvent?.(ev);
+  }
+
+  /**
+   * Live tool-output handler: renders chunks in the terminal (dimmed block) and
+   * forwards them as `tool_output` events. Opens the stream block lazily on the
+   * first chunk; `endToolStream()` closes it after the tool completes.
+   */
+  private handleToolOutput = (name: string, stream: "stdout" | "stderr", delta: string): void => {
+    if (!ui.isToolStreamOpen()) {
+      ui.toolStreamStart();
+    }
+    ui.toolStreamChunk(delta);
+    this.emit({ type: "tool_output", name, stream, delta });
+  };
+
+  /** Close the live tool-output block (if open) before printing the next UI element. */
+  private endToolStream(): void {
+    if (ui.isToolStreamOpen()) ui.toolStreamEnd();
   }
 
   /** Push one tool-result message back into the conversation. */
@@ -134,6 +183,7 @@ export class Agent {
     logExtra: Record<string, unknown>,
   ): void {
     ui.toolResult(tc.name, false, output);
+    this.emit({ type: "tool_result", step, name: tc.name, ok: false, output });
     this.logger.log({ type: "tool", step, tool: tc.name, ok: false, ...logExtra });
     this.pushToolResult(tc, output);
   }
@@ -152,6 +202,10 @@ export class Agent {
     this.usageTotals.outputTokens += output;
     this.usageTotals.cachedTokens += cached;
     ui.info(`tokens: in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"}`);
+    this.emit({
+      type: "llm_usage",
+      usage: { input_tokens: input, output_tokens: output, cached_tokens: cached },
+    });
     this.logger.log({
       type: "llm_usage",
       model: this.client.model,
@@ -190,6 +244,7 @@ export class Agent {
             started = true;
           }
           ui.llmStreamChunk(chunk.contentDelta);
+          this.emit({ type: "llm_delta", delta: chunk.contentDelta });
           streamedText += chunk.contentDelta;
         }
         if (chunk.final) final = chunk.final;
@@ -251,9 +306,13 @@ export class Agent {
     }
 
     const buildCmd = this.buildCmd;
-    ui.header("TASK");
-    ui.info(task);
-    ui.info(`model=${this.client.model}  workdir=${this.config.workdir}  build="${buildCmd}"  maxSteps=${this.config.maxSteps}`);
+    ui.banner("scoder", [
+      ["task", task],
+      ["model", `${this.client.model} (${this.config.provider}${this.config.stream ? ", stream" : ""})`],
+      ["workdir", this.config.workdir],
+      ["build", buildCmd],
+      ["steps", `max ${this.config.maxSteps}  ·  permission ${this.config.permissionMode}`],
+    ]);
 
     this.currentTask = task;
     this.resetRunSignal();
@@ -267,6 +326,14 @@ export class Agent {
       },
       { role: "user", content: task },
     ];
+    this.emit({
+      type: "run_start",
+      task,
+      model: this.client.model,
+      provider: this.config.provider,
+      workdir: this.config.workdir,
+      buildCmd,
+    });
 
     try {
       await this.connectMcp();
@@ -349,6 +416,7 @@ export class Agent {
     while (steps < this.config.maxSteps && !this.aborted) {
       steps++;
       ui.step(steps, this.config.maxSteps, "thinking...");
+      this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
 
       const { message, usage } = await this.chatWithStream().catch((err: unknown) => {
         // SIGINT during the LLM call — stop gracefully instead of crashing
@@ -412,6 +480,8 @@ export class Agent {
         }
 
         ui.toolCall(tc.name, args);
+        this.currentToolCall = { step: steps, id: tc.id, name: tc.name };
+        this.emit({ type: "tool_call", step: steps, id: tc.id, name: tc.name, args });
 
         if (!tool && !(this.mcp?.hasTool(tc.name))) {
           this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${AGENT_TOOLS.map((t) => t.spec.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
@@ -476,7 +546,10 @@ export class Agent {
           ui.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
         }
 
+        this.endToolStream();
+        this.currentToolCall = null;
         ui.toolResult(tc.name, result.ok, result.output);
+        this.emit({ type: "tool_result", step: steps, name: tc.name, ok: result.ok, output: result.output });
         stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
         this.pushToolResult(tc, summariseOutput(result.output));
       }
@@ -544,8 +617,12 @@ export class Agent {
 
   /** Explicitly verify the build (independent of what the LLM claims). */
   private async checkBuild(buildCmd: string): Promise<BuildResult> {
-    const res = await runBuild(this.config.workdir, buildCmd);
+    const res = await runBuild(this.config.workdir, buildCmd, (stream, delta) =>
+      this.handleToolOutput("build", stream, delta),
+    );
+    this.endToolStream();
     ui.buildStatus(res.success, res.output);
+    this.emit({ type: "build", success: res.success, command: buildCmd, output: res.output });
     this.logger.log({ type: "build", success: res.success, command: buildCmd, output: res.output.slice(0, 10_000) });
     return res;
   }
@@ -556,6 +633,7 @@ export class Agent {
     } else {
       ui.error(`Task NOT complete. ${summary}`);
     }
+    this.emit({ type: "finish", success, steps, summary: summary.slice(0, 2000) });
     this.logger.log({ type: "finish", success, steps });
     return { success, steps, buildCmd, summary: summary.slice(0, 2000) };
   }

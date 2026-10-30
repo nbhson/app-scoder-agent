@@ -5,6 +5,7 @@ import type { ToolSpec } from "./llm.js";
 import { unifiedDiff } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
 import * as ui from "./ui.js";
+import { toolWebFetch } from "./webfetch.js";
 
 /** Result of executing one tool. */
 export interface ToolResult {
@@ -225,15 +226,21 @@ function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
   });
 }
 
+/** Live output callback for run_command: called per chunk with its stream source. */
+export type CommandOutputListener = (stream: "stdout" | "stderr", delta: string) => void;
+
 /**
  * Run a shell command asynchronously (async spawn keeps the event loop free,
  * so streaming output renders and SIGINT is handled promptly).
  * Kills the child on timeout or external abort (SIGINT via ctx.signal).
+ * When `onOutput` is provided, stdout/stderr chunks are forwarded live as they
+ * arrive (in addition to being collected into the final ToolResult).
  */
 export async function toolRunCommand(
   workdir: string,
   args: { command: string; timeout_secs?: number },
   signal?: AbortSignal,
+  onOutput?: (stream: "stdout" | "stderr", delta: string) => void,
 ): Promise<ToolResult> {
   const timeoutMs = Math.min(Math.max(args.timeout_secs ?? 120, 1), 600) * 1000;
 
@@ -271,8 +278,16 @@ export async function toolRunCommand(
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
 
-    child.stdout?.on("data", (c: Buffer) => { stdout += c.toString("utf8"); });
-    child.stderr?.on("data", (c: Buffer) => { stderr += c.toString("utf8"); });
+    child.stdout?.on("data", (c: Buffer) => {
+      const s = c.toString("utf8");
+      stdout += s;
+      onOutput?.("stdout", s);
+    });
+    child.stderr?.on("data", (c: Buffer) => {
+      const s = c.toString("utf8");
+      stderr += s;
+      onOutput?.("stderr", s);
+    });
 
     child.on("error", (err) => {
       finish({ ok: false, output: clamp(`$ ${args.command}\n(spawn error) ${err.message}`) });
@@ -316,6 +331,12 @@ export interface ToolContext {
   permissionMode?: PermissionMode;
   /** Aborted on SIGINT — long-running commands observe this and terminate. */
   signal?: AbortSignal;
+  /**
+   * Live tool-output sink. run_command forwards stdout/stderr chunks here as
+   * they arrive; the agent/UI (or the server event bus) decides how to render
+   * or broadcast them. Only one tool runs at a time per agent.
+   */
+  onToolOutput?: (name: string, stream: "stdout" | "stderr", delta: string) => void;
 }
 
 export interface AgentTool {
@@ -406,7 +427,37 @@ export const AGENT_TOOLS: AgentTool[] = [
       },
     },
     run: (ctx, args) =>
-      toolRunCommand(ctx.workdir, args as { command: string; timeout_secs?: number }, ctx.signal),
+      toolRunCommand(
+        ctx.workdir,
+        args as { command: string; timeout_secs?: number },
+        ctx.signal,
+        ctx.onToolOutput ? (stream, delta) => ctx.onToolOutput?.("run_command", stream, delta) : undefined,
+      ),
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "web_fetch",
+        description:
+          "Fetch a public HTTP(S) URL and return its content as readable plain text " +
+          "(HTML converted to text, JSON pretty-printed). WHEN TO USE: the task depends on external, " +
+          "possibly outdated knowledge — library/API documentation, an error message or comment " +
+          "containing a URL, current package versions or changelogs, standards/specs. " +
+          "WHEN NOT TO: the answer is already in the working directory or in the user's request; " +
+          "you need a search engine (this tool fetches exact URLs only, it cannot search); " +
+          "the content is a binary file (images, archives, PDFs are refused). " +
+          "Private/internal addresses (localhost, 10.x, 192.168.x, 127.x) are blocked.",
+        parameters: obj(
+          {
+            url: str("Absolute http(s) URL to fetch"),
+            max_chars: str("Max characters of extracted content to return (default 20000, max 100000)"),
+          },
+          ["url"],
+        ),
+      },
+    },
+    run: (ctx, args) => toolWebFetch(ctx, args as { url: string; max_chars?: number }),
   },
 ];
 

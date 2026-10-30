@@ -173,4 +173,45 @@ describe("toolRunCommand (async spawn)", () => {
     const elapsed = Date.now() - t0;
     assert.ok(elapsed < 1900, `2 lệnh sleep 1s song song phải xong ~1s (thực tế ${elapsed}ms)`);
   }, 10_000);
+
+  describe("toolRunCommand — live output streaming (onOutput)", () => {
+    it("onOutput nhận chunk realtime TRƯỚC khi command kết thúc", async () => {
+      const chunks = [];
+      let firstChunkAt = null;
+      const t0 = Date.now();
+      const r = await toolRunCommand(
+        workdir,
+        { command: "for i in 1 2 3; do echo line$i; sleep 0.3; done" },
+        undefined,
+        (stream, delta) => {
+          chunks.push({ stream, delta });
+          if (firstChunkAt === null) firstChunkAt = Date.now() - t0;
+        },
+      );
+      assert.equal(r.ok, true);
+      assert.ok(chunks.length >= 3, `phải nhận nhiều chunk (thực tế ${chunks.length})`);
+      assert.ok(firstChunkAt < 1500, `chunk đầu phải về sớm (sau ${firstChunkAt}ms), không chờ lệnh xong`);
+      assert.equal(chunks[0].stream, "stdout");
+      assert.equal(chunks.map((c) => c.delta).join(""), "line1\nline2\nline3\n");
+      assert.match(r.output, /line1.*line2.*line3/s, "output cuối vẫn đầy đủ");
+    });
+
+    it("onOutput phân biệt stdout vs stderr", async () => {
+      const sources = [];
+      await toolRunCommand(
+        workdir,
+        { command: "echo out1; echo err1 >&2" },
+        undefined,
+        (stream, delta) => sources.push([stream, delta]),
+      );
+      assert.ok(sources.some(([s, d]) => s === "stdout" && /out1/.test(d)));
+      assert.ok(sources.some(([s, d]) => s === "stderr" && /err1/.test(d)), "stderr phải được forward");
+    });
+
+    it("không có onOutput -> vẫn hoạt động bình thường (backward compatible)", async () => {
+      const r = await toolRunCommand(workdir, { command: "echo ok" });
+      assert.equal(r.ok, true);
+      assert.match(r.output, /\(exit 0\)/);
+    });
+  });
 });
