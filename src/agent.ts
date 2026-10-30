@@ -319,6 +319,12 @@ export class Agent {
       // No finish_reason seen — fall through to non-streaming
       return this.client.chat(this.messages, this.tools);
     } catch (err) {
+      // A timeout is a real failure, not a streaming quirk — falling back to
+      // non-streaming would just wait the full timeout a second time.
+      const e = err as Error;
+      if (e?.name === "TimeoutError" || /timed out|TimeoutError/i.test(e?.message ?? "")) {
+        throw err instanceof LlmError ? err : new LlmError(`LLM request timed out: ${e?.message ?? err}`);
+      }
       if (err instanceof LlmError && !this.streamFallbackWarned) {
         this.streamFallbackWarned = true;
         ui.warn(`streaming unavailable (${err.message.slice(0, 120)}) — falling back to non-streaming`);
@@ -382,7 +388,7 @@ export class Agent {
     this.plan = [];
     const skillsBlock =
       this.skills.length > 0
-        ? `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(this.skills)}\nWhen a task matches a skill, read its SKILL.md with read_file and follow it.`
+        ? `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(this.skills)}\nWhen a task matches a skill, call the load_skill tool with its name and follow the returned instructions.`
         : "";
     this.messages = [
       {

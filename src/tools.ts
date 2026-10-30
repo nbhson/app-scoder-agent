@@ -5,6 +5,7 @@ import type { ToolSpec } from "./llm.js";
 import { unifiedDiff } from "./diff.js";
 import type { DiffResult } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
+import { discoverSkills, findSkill } from "./skills.js";
 import * as ui from "./ui.js";
 import { toolWebFetch } from "./webfetch.js";
 
@@ -398,6 +399,30 @@ const obj = (properties: Record<string, unknown>, required: string[]) => ({
 const str = (description: string) => ({ type: "string", description });
 
 export const AGENT_TOOLS: AgentTool[] = [
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "load_skill",
+        description:
+          "Load the full instructions of a named skill from the AVAILABLE SKILLS index (project + global). Call this at the start of a task when it matches a skill, then follow the returned instructions exactly.",
+        parameters: obj(
+          { name: str("Skill name from the AVAILABLE SKILLS index, e.g. 'prompt-gate-workflow'") },
+          ["name"],
+        ),
+      },
+    },
+    run: (ctx, args) => {
+      const name = String((args as { name?: unknown }).name ?? "").trim();
+      if (!name) return { ok: false, output: "ERROR: name is required — pick one from the AVAILABLE SKILLS index." };
+      const skill = findSkill(ctx.workdir, name);
+      if (!skill) {
+        const names = discoverSkills(ctx.workdir).map((s) => s.name).join(", ");
+        return { ok: false, output: `ERROR: skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered"}.` };
+      }
+      return { ok: true, output: `# skill: ${skill.name} (${skill.scope})\n\n${skill.body}` };
+    },
+  },
   {
     spec: {
       type: "function",

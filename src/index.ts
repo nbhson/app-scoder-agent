@@ -14,6 +14,13 @@ import * as ui from "./ui.js";
 // Single source of truth: read version from package.json (see src/version.ts).
 const VERSION = getPackageVersion();
 
+// Safety net: a stray promise rejection (e.g. a provider socket aborting after
+// its consumer already moved on) must log — never hard-crash the agent.
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+  ui.warn(`background error (ignored): ${msg.slice(0, 200)}`);
+});
+
 interface CliArgs {
   task: string | null;
   model?: string;

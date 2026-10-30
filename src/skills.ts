@@ -84,9 +84,14 @@ function scanRoot(root: string, scope: Skill["scope"]): Skill[] {
   return out;
 }
 
+/** Global skills root — overridable via SCODER_SKILLS for tests. */
+function globalSkillsRoot(): string {
+  return process.env.SCODER_SKILLS || join(homedir(), ".scoder", "skills");
+}
+
 /** Discover all skills visible to a project: global first, project overrides. */
 export function discoverSkills(workdir: string): Skill[] {
-  const global = scanRoot(join(homedir(), ".scoder", "skills"), "global");
+  const global = scanRoot(globalSkillsRoot(), "global");
   const project = scanRoot(join(workdir, ".scoder", "skills"), "project");
   const byName = new Map<string, Skill>();
   for (const s of [...global, ...project]) byName.set(s.name, s); // project wins

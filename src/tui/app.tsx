@@ -11,7 +11,7 @@
  * Driven entirely by AgentEvents (the same stream the HTTP/SSE server uses).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useBoxMetrics, useInput, useWindowSize, type DOMElement } from "ink";
 import type { AgentConfig } from "../config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
@@ -227,8 +227,8 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
 
 /** Build Rail — scoder's signature top bar: badges + lamp + fuel gauge. */
 function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
-  const { stdout } = useStdout();
-  const width = Math.max(40, (stdout.columns ?? 100) - 6); // usable inner width
+  const { columns } = useWindowSize();
+  const width = Math.max(40, (columns ?? 100) - 6); // usable inner width
   const lampColor = state.buildLamp === "ok" ? theme.success : state.buildLamp === "fail" ? theme.error : theme.dim;
   const lampLabel = state.buildLamp === "ok" ? "build ok" : state.buildLamp === "fail" ? "build fail" : "no build yet";
   const gauge = fuelGauge(state.step, state.maxSteps);
@@ -269,16 +269,15 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
   );
 }
 
-function StatusBar({ state }: { state: TuiState }): React.JSX.Element {
-  const { stdout } = useStdout();
-  const width = Math.max(40, (stdout.columns ?? 100) - 6);
+function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null }): React.JSX.Element {
+  const { columns } = useWindowSize();
+  const width = Math.max(40, (columns ?? 100) - 6);
   const statusColor = state.status === "running" ? theme.accent : state.status === "success" ? theme.success : state.status === "failed" ? theme.error : theme.dim;
   const statusLabel =
     state.status === "running" ? `running ${state.step}/${state.maxSteps}` : state.status === "idle" ? "idle" : state.status;
   const model = state.model || "—";
-  // Left: status · elapsed · model · tokens. Right: keybinds. Never overlap:
-  // the left side is built from the whole budget minus the keybind block.
-  const keybinds = "⏎ send · esc abort · ctrl+c quit";
+  // Left: status · elapsed · model · tokens. Right: scroll position or keybinds.
+  const keybinds = scroll ? `↑ scrollback ${scroll} · ⏎ send · ctrl+c quit` : "⏎ send · pgup history · esc abort · ctrl+c quit";
   const leftBudget = Math.max(20, width - keybinds.length - 2);
   const elapsed = state.startedAt ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}` : null;
   let left = statusLabel + (state.status === "running" && elapsed ? ` · ${elapsed}` : "");
@@ -308,10 +307,10 @@ export interface TuiAppProps {
 
 export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.JSX.Element {
   const { exit } = useApp();
-  const { stdout } = useStdout();
   const [state, setState] = useState<TuiState>(initialState);
   const [input, setInput] = useState(initialTask ?? "");
-  const [scrollOffset, setScrollOffset] = useState(0); // 0 = pinned to bottom
+  /** Rows scrolled up from the bottom; 0 = follow the newest content. */
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [permMode, setPermMode] = useState(config.permissionMode);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
@@ -324,6 +323,21 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   const historyRef = useRef<string[]>([]);
   const runningRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
+
+  // ── Scrollable chat viewport (Ink 8 alt-screen) ──
+  // The viewport clips overflow; the inner content wrapper keeps its natural
+  // height so it can be measured and offset upward for scrolling.
+  const viewportRef = useRef<DOMElement | null>(null);
+  const contentRef = useRef<DOMElement | null>(null);
+  const viewport = useBoxMetrics(viewportRef);
+  const content = useBoxMetrics(contentRef);
+  const viewportRowsRef = useRef<number | null>(null);
+  useEffect(() => {
+    viewportRowsRef.current = viewport.clientHeight || null;
+  }, [viewport.clientHeight]);
+  const maxScroll = Math.max(0, content.height - viewport.clientHeight);
+  // scrollOffset counts rows UP from the bottom; 0 = follow the newest item.
+  const scrollTop = Math.max(0, maxScroll - scrollOffset);
   const skills = useMemo(() => discoverSkills(config.workdir), [config.workdir]);
   const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
 
@@ -547,8 +561,14 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     scrollOffsetRef.current = scrollOffset;
   }, [scrollOffset]);
   useInput((_input, key) => {
-    if (key.pageUp) setScrollOffset((o) => Math.min(stateRef.current.items.length, o + 10));
-    if (key.pageDown) setScrollOffset((o) => Math.max(0, o - 10));
+    if (key.pageUp || key.pageDown || key.home || key.end) {
+      const page = Math.max(1, Math.floor((viewportRowsRef.current ?? 20) * 0.8));
+      if (key.pageUp) setScrollOffset((o) => o + page);
+      if (key.pageDown) setScrollOffset((o) => Math.max(0, o - page));
+      if (key.home) setScrollOffset(999_999); // top (clamped to maxScroll in render)
+      if (key.end) setScrollOffset(0); // bottom = follow
+      return;
+    }
     if (key.escape) {
       if (scrollOffsetRef.current > 0) {
         setScrollOffset(0);
@@ -589,62 +609,68 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     return state.summary;
   }, [state.status, state.summary]);
 
-  // Scrollback viewport: by default pin to the newest items that fit on
-  // screen; PgUp/PgDn moves the window over the flight-recorder log.
-  const rows = stdout.rows ?? 24;
-  const viewItems = Math.max(6, rows - 10);
+  // The viewport renders ALL items (state.ts caps at 400) and scrolls with
+  // contentOffsetY — real pixel-accurate scrollback with a sticky frame.
+  const { rows } = useWindowSize();
   const total = state.items.length;
-  const start = Math.max(0, Math.min(total - viewItems, total - viewItems - scrollOffset));
-  const end = Math.max(start, Math.min(total, total - scrollOffset));
-  const visible = state.items.slice(start, end);
+  const visible = state.items;
 
   return (
-    <Box flexDirection="column" height="100%">
+    <Box flexDirection="column" height={rows || 24}>
       <BuildRail state={state} config={config} />
-      <Box flexDirection="column" paddingX={1} flexGrow={1}>
-        {total === 0 ? (
-          <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} gap={1}>
-            <Text>
-              <Text color={theme.brand} bold>◆ scoder</Text>
-              <Text dimColor> · autonomous coding agent</Text>
+      {/* Scrollable chat pane — clips overflow so the BuildRail above and the
+          input + StatusBar below stay pinned no matter how long the history. */}
+      <Box
+        ref={viewportRef}
+        flexDirection="column"
+        flexGrow={1}
+        overflow="hidden"
+        contentOffsetY={scrollTop}
+      >
+        <Box ref={contentRef} flexDirection="column" paddingX={1} flexShrink={0}>
+          {total === 0 ? (
+            <Box flexDirection="column" alignItems="center" gap={1} paddingTop={2}>
+              <Text>
+                <Text color={theme.brand} bold>◆ scoder</Text>
+                <Text dimColor> · autonomous coding agent</Text>
+              </Text>
+              <Text dimColor>type a task — the agent plans, edits, and builds until it passes</Text>
+              <Text>
+                <Text dimColor>tab </Text>
+                <Text dimColor>complete commands · </Text>
+                <Text dimColor>/help </Text>
+                <Text dimColor>all commands · </Text>
+                <Text dimColor>/skills </Text>
+                <Text dimColor>skill packs</Text>
+              </Text>
+            </Box>
+          ) : null}
+          {visible.map((item, i) => (
+            <ChatItemView key={i} item={item} />
+          ))}
+          {state.status === "running" && state.step > 0 && (
+            <Text dimColor>
+              <Spinner active /> step {state.step}/{state.maxSteps} — thinking…
             </Text>
-            <Text dimColor>type a task — the agent plans, edits, and builds until it passes</Text>
-            <Text>
-              <Text dimColor>tab </Text>
-              <Text dimColor>complete commands · </Text>
-              <Text dimColor>/help </Text>
-              <Text dimColor>all commands · </Text>
-              <Text dimColor>/skills </Text>
-              <Text dimColor>skill packs</Text>
-            </Text>
-          </Box>
-        ) : null}
-        {scrollOffset > 0 && <Text dimColor>↑ scrollback — PgDn to return to the newest</Text>}
-        {visible.map((item, i) => (
-          <ChatItemView key={start + i} item={item} />
-        ))}
-        {state.status === "running" && state.step > 0 && (
-          <Text dimColor>
-            <Spinner active /> step {state.step}/{state.maxSteps} — thinking…
-          </Text>
-        )}
-        {lastSummary && (
-          <Box marginTop={1}>
-            {state.status === "success" ? (
-              <Text color="green" bold>
-                ✔ {lastSummary}
-              </Text>
-            ) : state.status === "aborted" ? (
-              <Text color="yellow" bold>
-                ⏹ {lastSummary}
-              </Text>
-            ) : (
-              <Text color="red" bold>
-                ✘ {lastSummary}
-              </Text>
-            )}
-          </Box>
-        )}
+          )}
+          {lastSummary && (
+            <Box marginTop={1}>
+              {state.status === "success" ? (
+                <Text color="green" bold>
+                  ✔ {lastSummary}
+                </Text>
+              ) : state.status === "aborted" ? (
+                <Text color="yellow" bold>
+                  ⏹ {lastSummary}
+                </Text>
+              ) : (
+                <Text color="red" bold>
+                  ✘ {lastSummary}
+                </Text>
+              )}
+            </Box>
+          )}
+        </Box>
       </Box>
       <Box paddingX={1}>
         <Input
@@ -656,7 +682,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           skillNames={skillNames}
         />
       </Box>
-      <StatusBar state={state} />
+      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
     </Box>
   );
 }
@@ -672,7 +698,12 @@ export async function runTui(config: AgentConfig, initialTask: string | null): P
     bootNotice = "permission=ask is not supported in the TUI — falling back to auto";
   }
   const { render } = await import("ink");
-  const { waitUntilExit } = render(<TuiApp config={config} initialTask={initialTask} bootNotice={bootNotice} />);
+  // Alternate screen buffer (vim/htop style): the app owns the whole screen,
+  // the BuildRail stays pinned at the top and the input at the bottom while
+  // the chat pane scrolls internally. Terminal content is restored on exit.
+  const { waitUntilExit } = render(<TuiApp config={config} initialTask={initialTask} bootNotice={bootNotice} />, {
+    alternateScreen: true,
+  });
   await waitUntilExit();
   // Ink restores the terminal on unmount; exit explicitly so provider
   // keep-alive sockets (undici pool) can't keep the event loop alive.

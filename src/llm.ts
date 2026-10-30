@@ -229,21 +229,31 @@ export class LlmClient {
         (attempt, delay, reason) =>
           console.error(`⚠  LLM request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`),
       );
+    } catch (err) {
+      cleanup(); // timer must not survive a failed request
+      throw err;
+    }
+
+    let data;
+    try {
+      // Keep the timeout alive through the body read — a hung body must also
+      // surface as a timeout, not an eternal await.
+      const pending = res.json();
+      pending.catch(() => {}); // no-op catch for the abort path; awaited below
+      data = (await pending) as {
+        choices?: Array<{
+          message?: {
+            role?: string;
+            content?: string | null;
+            stop_reason?: string;
+            tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+          };
+        }>;
+        usage?: TokenUsage;
+      };
     } finally {
       cleanup();
     }
-
-    const data = (await res.json()) as {
-      choices?: Array<{
-        message?: {
-          role?: string;
-          content?: string | null;
-          stop_reason?: string;
-          tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
-        };
-      }>;
-      usage?: TokenUsage;
-    };
 
     const choice = data.choices?.[0]?.message;
     if (!choice) throw new LlmError("LLM API returned no message in response");
@@ -337,7 +347,12 @@ export class LlmClient {
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        // Guard the pending read against a late abort (e.g. the 120s timeout
+        // firing while the consumer paused at a yield): attaching a no-op
+        // catch prevents an unhandled rejection from crashing the process.
+        const pending = reader.read();
+        pending.catch(() => {});
+        const { done, value } = await pending;
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -431,10 +446,23 @@ export class LlmClient {
           }
         }
       }
+    } catch (err) {
+      // Normalize the abort timeout into LlmError so callers handle it as a
+      // normal provider failure instead of a stray DOMException.
+      const e = err as Error;
+      if (e?.name === "TimeoutError" || /TimeoutError/.test(e?.message ?? "")) {
+        throw new LlmError("LLM stream timed out while reading the response");
+      }
+      throw err;
     } finally {
-      // Cancel the body (frees the socket) and clear the request timeout
-      try { reader.cancel(); } catch { /* already released */ }
-      reader.releaseLock();
+      // Cancel the body (frees the socket) and clear the request timeout.
+      // cancel() returns a promise — a rejection after abort must be swallowed
+      // or it becomes an unhandled rejection that kills the process.
+      try {
+        const c = reader.cancel();
+        if (c && typeof (c as Promise<void>).catch === "function") c.catch(() => {});
+      } catch { /* already released */ }
+      try { reader.releaseLock(); } catch { /* lock already released */ }
       cleanup();
     }
 

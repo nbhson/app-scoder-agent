@@ -4,10 +4,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseFrontmatter, loadSkillFile, discoverSkills, findSkill, formatSkillIndex } from "../dist/skills.js";
+import { getTool } from "../dist/tools.js";
 import { completeSlashCommand, parseSlashCommand, formatSlashHelp } from "../dist/tui/commands.js";
 
 describe("skills", () => {
   const root = mkdtempSync(join(tmpdir(), "scoder-skills-"));
+  // Cách ly khỏi ~/.scoder/skills thật trên máy — global root trỏ vào thư mục test.
+  const fakeGlobalRoot = join(root, "home", ".scoder", "skills");
+  const SAVED_SKILLS = process.env.SCODER_SKILLS;
+  process.env.SCODER_SKILLS = fakeGlobalRoot;
   const proj = join(root, "proj");
   mkdirSync(join(proj, ".scoder", "skills", "review"), { recursive: true });
   mkdirSync(join(proj, ".scoder", "skills", "plain"), { recursive: true });
@@ -102,5 +107,39 @@ describe("slash command completion", () => {
     assert.match(help, /\/skills/);
     assert.match(help, /\/mcp/);
     assert.match(help, /\/permission/);
+  });
+});
+
+describe("load_skill tool", () => {
+  const root = mkdtempSync(join(tmpdir(), "scoder-loadskill-"));
+  const proj = join(root, "proj");
+  mkdirSync(join(proj, ".scoder", "skills", "gate"), { recursive: true });
+  writeFileSync(
+    join(proj, ".scoder", "skills", "gate", "SKILL.md"),
+    '---\nname: prompt-gate-workflow\ndescription: gate flow\n---\n\nFollow the gate flow.\n',
+  );
+  const tool = getTool("load_skill");
+  const ctx = { workdir: proj };
+
+  after(() => rmSync(root, { recursive: true, force: true }));
+
+  it("trả body của skill theo tên (case-insensitive)", () => {
+    const r = tool.run(ctx, { name: "PROMPT-GATE-WORKFLOW" });
+    assert.equal(r.ok, true);
+    assert.match(r.output, /# skill: prompt-gate-workflow/);
+    assert.match(r.output, /Follow the gate flow\./);
+  });
+
+  it("sai tên -> lỗi kèm danh sách skill khả dụng", () => {
+    const r = tool.run(ctx, { name: "nope" });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /not found/);
+    assert.match(r.output, /prompt-gate-workflow/);
+  });
+
+  it("thiếu name -> lỗi rõ ràng", () => {
+    const r = tool.run(ctx, {});
+    assert.equal(r.ok, false);
+    assert.match(r.output, /name is required/);
   });
 });
