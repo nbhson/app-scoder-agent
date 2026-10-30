@@ -3,6 +3,28 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.6.0] - 2026-10-30 — Mission Control TUI, unified diffs in the event stream, slash commands & `scoder init`
+
+### Added
+- **Diff cards in the event stream** — `toolWriteFile` / `toolEditFile` now compute a unified diff (`ToolDiff`: path, text, added/removed line counts, `truncated` flag) and attach it to the `tool_result` event, so **every frontend gets diffs for free**: the TUI renders `✎` diff cards (`+` green / `-` red / `@@` cyan) and SSE consumers receive the same payload.
+- **"Mission Control" TUI identity** (`src/tui/app.tsx`) — a rebrand with its own character, not an OpenCode clone:
+  - **Build Rail** top bar: brand, build lamp (`● build ok / fail / no build yet`), permission mode, and a **step fuel gauge** (`▰▰▰▱▱▱▱▱▱▱`, one cell per 10% of the step budget)
+  - **Flight-recorder step gutter** — tool items prefixed with their step number (`03▸`), so you can read the run's history at a glance
+  - **Diff cards** (`✎`) for every file write/edit (see above)
+  - **Scrollback** — `PgUp`/`PgDn` scroll the chat history (10 lines/page), `Esc` returns to the live tail before aborting
+  - border style `single`, magenta brand accent, lamp/gauge state in the reducer (`buildLamp`)
+- **Slash commands, shared by both frontends** (`src/tui/commands.ts`): `/help`, `/clear`, `/cost`, `/model`, `/exit` (`/quit`) — same parser + help formatter used by the classic REPL *and* the TUI, so the surfaces can't drift.
+- **`scoder init` setup wizard** — interactive prompts (base URL, API key, model, build command, permission mode) that write `.scoderrc.json`, with an optional live connection test ("Reply with exactly: OK") against the configured provider.
+- **`Agent.getUsage()`** — public getter for session token usage (used by REPL `/cost`).
+- `test/tui-state.test.mjs` — 10 unit tests for the reducer, diff items, build lamp, slash-command parser & help formatter.
+
+### Fixed
+- **TUI stale-state races** (found via a closed-loop PTY investigation):
+  - `onEvent` now uses **functional `setState`** — events landing within one render batch can no longer hit a stale `stateRef` snapshot, which left tool items stuck at `running…` forever.
+  - The input field keeps a **`MutableRefObject` as source of truth** (state is only a render mirror) — keystrokes arriving right after a submit can no longer merge with the old text (`/help` + `/cost` becoming `/help/cost`).
+  - Slash-command submissions now clear the input field (previously only task submissions did).
+- PTY test harness: the second `--send-after` rule was swallowed by argparse (missing flag repetition), producing spurious `ENOENT` failures.
+
 ## [0.5.0] - 2026-10-30 — Streaming UI, full-screen TUI, HTTP server mode & web access
 
 ### Added

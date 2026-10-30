@@ -50,14 +50,17 @@ npx app-scoder-agent "your task"
 ## Quick Start
 
 ```bash
-# Set your API key
+# One-time setup wizard — writes .scoderrc.json (base URL, key, model, build cmd)
+scoder init
+
+# …or set your API key manually
 export SCODER_API_KEY=sk-...          # any OpenAI-compatible key (OpenAI, Groq, OpenRouter, Ollama, …)
 export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoints
 
 # Run a task
 scoder "add a ping function to src/network.ts"
 
-# Interactive REPL
+# Interactive REPL (supports /help, /clear, /cost, /model)
 scoder
 ```
 
@@ -250,7 +253,7 @@ scoder streams everything it can, live, as it happens:
 
 ## Full-Screen TUI (`scoder tui`)
 
-An OpenCode-style terminal UI built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals) — chat pane, live tool feed, and status bar, driven by the same `AgentEvent` stream the HTTP API exposes:
+**Mission Control for the build loop** — a terminal UI built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals), driven by the same `AgentEvent` stream the HTTP API exposes:
 
 ```bash
 scoder tui                     # start an interactive full-screen session
@@ -259,10 +262,14 @@ scoder tui "fix the bug"       # auto-submit an initial task
 
 Features:
 
-- **Chat pane** — your messages, streaming assistant text, and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running)
-- **Status bar** — step counter (`running 3/40`), model, token usage (input/output/cached), keybind hints
+- **Build Rail** (top bar) — brand, build lamp (`● build ok` / `● build fail` / `no build yet`), permission mode, and a step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`) that fills as the agent burns through its step budget
+- **Chat pane** — your messages, streaming assistant text, and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running), prefixed with a flight-recorder step number (`03▸`)
+- **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
+- **Status bar** — model, token usage (input/output/cached), keybind hints
+- **Slash commands** — `/help`, `/clear`, `/cost`, `/model`, `/exit` (identical to the REPL)
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
-- **Keybinds** — `Enter` send · `Esc` abort the running task · `Ctrl+C` quit
+- **Scrollback** — `PgUp`/`PgDn` page through history; `Esc` returns to the live tail (press again to abort)
+- **Keybinds** — `Enter` send · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+C` quit
 - Non-TTY environments (CI, pipes) automatically fall back to the classic REPL
 - `permission: "ask"` is not supported in the TUI (no readline prompts on the alt screen) — it falls back to `auto`
 
@@ -334,7 +341,8 @@ scoder detects the build command automatically:
 ```
 scoder [options] "<task>"     Run a task autonomously until the build passes
 scoder                       Start interactive session
-scoder tui [task]            Full-screen terminal UI (chat pane, live tool feed)
+scoder init                  Setup wizard — writes .scoderrc.json (+ connection test)
+scoder tui [task]            Full-screen terminal UI (Mission Control)
 scoder serve [--port] [--host]   HTTP server mode (see above)
 scoder --help | --version     Help and version
 ```
@@ -436,7 +444,8 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list, live `run_command` output streaming
 - `test/webfetch.test.mjs` — HTML→text, JSON, redirects, SSRF guard, binary refusal, truncation
 - `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, live `tool_output` events
-- `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + clean exit
+- `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + slash commands (`/help`, `/cost`) + clean exit
+- `test/tui-state.test.mjs` — event reducer unit tests: diff items, build lamp, abort marking, slash-command parsing & help formatting
 - `test/core.test.mjs` — unified diff, retry backoff, context trimming
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve
