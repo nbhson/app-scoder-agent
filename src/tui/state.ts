@@ -18,6 +18,10 @@ export type ChatItem =
       ok: boolean | null;
       output: string;
       step: number;
+      /** Wall-clock start of the tool call — pairs with durationMs. */
+      startedAt?: number;
+      /** Set when the tool finishes — shown next to the tool line. */
+      durationMs?: number;
     }
   | { kind: "notice"; text: string; level: "info" | "warn" | "error" }
   | { kind: "build"; success: boolean; command: string }
@@ -148,7 +152,15 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       break;
     }
     case "tool_call": {
-      appendItem(state, { kind: "tool", name: ev.name, args: ev.args, ok: null, output: "", step: ev.step });
+      appendItem(state, {
+        kind: "tool",
+        name: ev.name,
+        args: ev.args,
+        ok: null,
+        output: "",
+        step: ev.step,
+        startedAt: Date.now(),
+      });
       break;
     }
     case "tool_output": {
@@ -170,6 +182,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         const it = state.items[i];
         if (it.kind === "tool" && it.name === ev.name && it.ok === null) {
           it.ok = ev.ok;
+          if (it.startedAt != null) it.durationMs = Date.now() - it.startedAt;
           // Prefer the final (complete) result over accumulated live chunks.
           if (ev.output.length >= it.output.length) it.output = ev.output;
           break;

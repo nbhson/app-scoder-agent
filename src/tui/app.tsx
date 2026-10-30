@@ -78,6 +78,12 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
           ? fit(Object.keys(item.args).join(","), 24)
           : "";
   const preview = previewLines(item.output);
+  const elapsed =
+    item.durationMs != null
+      ? item.durationMs >= 10_000
+        ? `${(item.durationMs / 1000).toFixed(0)}s`
+        : `${(item.durationMs / 1000).toFixed(1)}s`
+      : null;
   return (
     <Box flexDirection="column" paddingLeft={1}>
       <Text>
@@ -85,6 +91,7 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
         {icon} <Text color={theme.accent}>{toolIcon(item.name)} {item.name}</Text>
         {keyArg && <Text dimColor> {keyArg}</Text>}
         {running && <Text dimColor> …</Text>}
+        {elapsed && <Text dimColor> ({elapsed})</Text>}
       </Text>
       {preview.map((line, i) => (
         <Text key={i} dimColor>
@@ -190,6 +197,7 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
           <Box marginTop={item.text ? 1 : 0} paddingLeft={1}>
             <AgentMark />
             <Text dimColor={item.streaming}>{item.text || (item.streaming ? "" : "(no text)")}</Text>
+            {item.streaming && <Text color={theme.accent}>▋</Text>}
           </Box>
         );
       }
