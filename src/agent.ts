@@ -2,7 +2,7 @@ import type { AgentConfig } from "./config.js";
 import { loadPermissionLists } from "./config.js";
 import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
-import { AGENT_TOOLS, getTool, type ToolContext } from "./tools.js";
+import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, claimsCompletion } from "./context.js";
 import { PermissionChecker } from "./permissions.js";
@@ -63,7 +63,15 @@ export type AgentEvent =
   | { type: "llm_usage"; usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number } }
   | { type: "tool_call"; step: number; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool_output"; name: string; stream: "stdout" | "stderr"; delta: string }
-  | { type: "tool_result"; step: number; name: string; ok: boolean; output: string }
+  | {
+      type: "tool_result";
+      step: number;
+      name: string;
+      ok: boolean;
+      output: string;
+      /** Present for file-writing tools — unified diff of the change. */
+      diff?: ToolDiff;
+    }
   | { type: "build"; success: boolean; command: string; output: string }
   | { type: "finish"; success: boolean; steps: number; summary: string }
   | { type: "error"; message: string };
@@ -192,8 +200,12 @@ export class Agent {
    * Record usage of one LLM call: render token counts, log an `llm_usage`
    * event, and accumulate totals into session state.
    */
-  private recordLlmUsage(usage: ChatResult["usage"]): void {
-    if (!usage) return;
+  /** Token usage totals accumulated in this session (for REPL `/cost`). */
+  getUsage(): UsageTotals {
+    return { ...this.usageTotals };
+  }
+
+  private recordLlmUsage(usage: ChatResult["usage"]): void {    if (!usage) return;
     const input = usage.prompt_tokens ?? 0;
     const output = usage.completion_tokens ?? 0;
     const cached = usage.cached_tokens ?? 0;
@@ -549,7 +561,14 @@ export class Agent {
         this.endToolStream();
         this.currentToolCall = null;
         ui.toolResult(tc.name, result.ok, result.output);
-        this.emit({ type: "tool_result", step: steps, name: tc.name, ok: result.ok, output: result.output });
+        this.emit({
+          type: "tool_result",
+          step: steps,
+          name: tc.name,
+          ok: result.ok,
+          output: result.output,
+          ...(result.diff ? { diff: result.diff } : {}),
+        });
         stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
         this.pushToolResult(tc, summariseOutput(result.output));
       }

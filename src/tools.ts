@@ -3,14 +3,26 @@ import { spawn } from "node:child_process";
 import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
 import { unifiedDiff } from "./diff.js";
+import type { DiffResult } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
 import * as ui from "./ui.js";
 import { toolWebFetch } from "./webfetch.js";
+
+/** Structured diff attached to file-write tool results (for TUI / SSE rendering). */
+export interface ToolDiff {
+  path: string;
+  text: string;
+  added: number;
+  removed: number;
+  truncated: boolean;
+}
 
 /** Result of executing one tool. */
 export interface ToolResult {
   ok: boolean;
   output: string;
+  /** Unified diff of the file change, when the tool modified a file. */
+  diff?: ToolDiff;
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -100,21 +112,25 @@ function toolReadFile(workdir: string, args: { path: string }): ToolResult {
   });
 }
 
+function toToolDiff(path: string, diff: DiffResult): ToolDiff | undefined {
+  if (!diff.text && !diff.truncated) return undefined;
+  return { path, text: diff.text, added: diff.added, removed: diff.removed, truncated: diff.truncated };
+}
+
 /** Shared permission/diff gate for file writes. Returns null = approved. */
 async function gateWrite(
   ctx: ToolContext,
   path: string,
-  oldContent: string | null,
-  newContent: string,
+  diff: DiffResult,
 ): Promise<ToolResult | null> {
   const mode: PermissionMode = ctx.permissionMode ?? "auto";
-  const diff = unifiedDiff(path, oldContent, newContent);
 
   if (mode === "readonly") {
     if (diff.text) ui.printDiff(diff.text);
     return {
       ok: false,
       output: `ERROR: readonly mode — write to ${path} denied. The diff above is shown for review only; nothing was written.`,
+      diff: toToolDiff(path, diff),
     };
   }
 
@@ -122,7 +138,11 @@ async function gateWrite(
     if (diff.text) ui.printDiff(diff.text);
     const allowed = await ctx.permissions.confirmEdit(path, diff.text);
     if (!allowed) {
-      return { ok: false, output: `ERROR: user rejected the write to ${path}. Try a different approach or explain why it is needed.` };
+      return {
+        ok: false,
+        output: `ERROR: user rejected the write to ${path}. Try a different approach or explain why it is needed.`,
+        diff: toToolDiff(path, diff),
+      };
     }
   } else if (diff.text && !diff.truncated) {
     ui.printDiff(diff.text);
@@ -147,12 +167,17 @@ async function toolWriteFile(ctx: ToolContext, args: { path: string; content: st
     // new file
   }
 
-  const gate = await gateWrite(ctx, args.path, oldContent, args.content);
+  const diff = unifiedDiff(args.path, oldContent, args.content);
+  const gate = await gateWrite(ctx, args.path, diff);
   if (gate) return gate;
 
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, args.content, "utf8");
-  return { ok: true, output: `Wrote ${args.content.split("\n").length} lines to ${args.path}` };
+  return {
+    ok: true,
+    output: `Wrote ${args.content.split("\n").length} lines to ${args.path}`,
+    diff: toToolDiff(args.path, diff),
+  };
 }
 
 async function toolEditFile(
@@ -177,11 +202,16 @@ async function toolEditFile(
   // which would corrupt literal text like "$&" in the new content.
   const newContent = content.replace(args.old_string, () => args.new_string);
 
-  const gate = await gateWrite(ctx, args.path, content, newContent);
+  const diff = unifiedDiff(args.path, content, newContent);
+  const gate = await gateWrite(ctx, args.path, diff);
   if (gate) return gate;
 
   writeFileSync(abs, newContent, "utf8");
-  return { ok: true, output: `Edited ${args.path}` };
+  return {
+    ok: true,
+    output: `Edited ${args.path}`,
+    diff: toToolDiff(args.path, diff),
+  };
 }
 
 function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
