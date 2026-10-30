@@ -19,6 +19,7 @@ import { discoverSkills } from "../skills.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
 import { completeSlashCommand, formatSlashHelp, parseSlashCommand } from "./commands.js";
 import { Markdown } from "./markdown.js";
+import { AgentMark, fit, theme, toolIcon } from "./theme.js";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 80;
@@ -46,30 +47,6 @@ function Spinner({ active }: { active: boolean }): React.JSX.Element | null {
   return <Text color="cyan">{frame}</Text>;
 }
 
-/** Live elapsed timer — own 1s interval, re-renders only itself. */
-function Elapsed({ since, active }: { since: number | null; active: boolean }): React.JSX.Element | null {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [active]);
-  if (!since) return null;
-  const secs = Math.max(0, Math.round((Date.now() - since) / 1000));
-  const mm = Math.floor(secs / 60);
-  const ss = String(secs % 60).padStart(2, "0");
-  return <Text dimColor> · {mm}:{ss}</Text>;
-}
-
-function formatArgs(args: Record<string, unknown>): string {
-  return Object.entries(args)
-    .map(([k, v]) => {
-      const s = typeof v === "string" ? v : JSON.stringify(v) ?? "";
-      return `${k}=${s.length > 60 ? s.slice(0, 60) + "…" : s.replace(/\n/g, " ")}`;
-    })
-    .join(" ");
-}
-
 /** Scaled step fuel gauge: ▰ filled / ▱ remaining, e.g. ▰▰▰▰▱▱▱▱ 4/40. */
 function fuelGauge(step: number, maxSteps: number): string | null {
   if (maxSteps <= 0) return null;
@@ -77,24 +54,41 @@ function fuelGauge(step: number, maxSteps: number): string | null {
   return "▰".repeat(filled) + "▱".repeat(GAUGE_CELLS - filled);
 }
 
-const OUTPUT_PREVIEW_LINES = 4;
+const OUTPUT_PREVIEW_LINES = 2;
+
+/** Collapse run_command scaffolding ("--- stdout ---" etc.) to real content. */
+function previewLines(output: string): string[] {
+  const lines = output
+    .replace(/\n+$/, "")
+    .split("\n")
+    .filter((l) => !/^--- (stdout|stderr) ---$/.test(l.trim()));
+  return lines.slice(-OUTPUT_PREVIEW_LINES);
+}
 
 function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): React.JSX.Element {
   const running = item.ok === null;
-  const icon = running ? <Spinner active /> : item.ok ? <Text color="green">✔</Text> : <Text color="red">✘</Text>;
-  const lines = item.output.length > 0 ? item.output.replace(/\n+$/, "").split("\n") : [];
-  const preview = lines.slice(-OUTPUT_PREVIEW_LINES);
+  const icon = running ? <Spinner active /> : item.ok ? <Text color={theme.success}>✔</Text> : <Text color={theme.error}>✘</Text>;
+  // One meaningful arg per tool type keeps the line scannable.
+  const keyArg =
+    typeof item.args.command === "string"
+      ? fit(item.args.command, 48)
+      : typeof item.args.path === "string"
+        ? fit(item.args.path, 40)
+        : Object.keys(item.args).length > 0
+          ? fit(Object.keys(item.args).join(","), 24)
+          : "";
+  const preview = previewLines(item.output);
   return (
     <Box flexDirection="column" paddingLeft={1}>
       <Text>
-        <Text dimColor>{String(item.step).padStart(2, "0")}▸</Text> {icon}{" "}
-        <Text color="cyan">{item.name}</Text>
-        <Text dimColor>({formatArgs(item.args)})</Text>
-        {running && <Text dimColor> · running…</Text>}
+        <Text dimColor>{String(item.step).padStart(2, "0")}▸ </Text>
+        {icon} <Text color={theme.accent}>{toolIcon(item.name)} {item.name}</Text>
+        {keyArg && <Text dimColor> {keyArg}</Text>}
+        {running && <Text dimColor> …</Text>}
       </Text>
       {preview.map((line, i) => (
-        <Text key={i} dimColor={i < preview.length - 1}>
-          {line.length > 160 ? line.slice(0, 160) + "…" : line}
+        <Text key={i} dimColor>
+          {"  └ "}{line.length > 140 ? line.slice(0, 140) + "…" : line}
         </Text>
       ))}
     </Box>
@@ -142,12 +136,47 @@ function DiffItemView({ item }: { item: Extract<ChatItem, { kind: "diff" }> }): 
   );
 }
 
+/** Live plan — checkbox list with per-status colors. */
+function TodoItemView({ item }: { item: Extract<ChatItem, { kind: "todo" }> }): React.JSX.Element {
+  const done = item.items.filter((t) => t.status === "completed").length;
+  return (
+    <Box flexDirection="column" paddingLeft={1} marginTop={1}>
+      <Text>
+        <AgentMark />
+        <Text bold>plan </Text>
+        <Text dimColor>{done}/{item.items.length}</Text>
+      </Text>
+      {item.items.map((t, i) => (
+        <Text key={i}>
+          <Text> </Text>
+          {t.status === "completed" ? (
+            <>
+              <Text color={theme.success}>✔ </Text>
+              <Text color={theme.success} dimColor>{fit(t.content, 80)}</Text>
+            </>
+          ) : t.status === "in_progress" ? (
+            <>
+              <Text color={theme.accent}>◆ </Text>
+              <Text color={theme.accent} bold>{fit(t.content, 80)}</Text>
+            </>
+          ) : (
+            <>
+              <Text dimColor>○ </Text>
+              <Text dimColor>{fit(t.content, 80)}</Text>
+            </>
+          )}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
 function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
   switch (item.kind) {
     case "user":
       return (
         <Box marginTop={1}>
-          <Text color="blue" bold>
+          <Text color={theme.user} bold>
             ❯{" "}
           </Text>
           <Text bold>{item.text}</Text>
@@ -159,12 +188,14 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
       if (item.streaming || !item.text) {
         return (
           <Box marginTop={item.text ? 1 : 0} paddingLeft={1}>
+            <AgentMark />
             <Text dimColor={item.streaming}>{item.text || (item.streaming ? "" : "(no text)")}</Text>
           </Box>
         );
       }
       return (
         <Box marginTop={1} paddingLeft={1}>
+          <AgentMark />
           <Markdown text={item.text} />
         </Box>
       );
@@ -173,17 +204,19 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
       return <ToolItemView item={item} />;
     case "diff":
       return <DiffItemView item={item} />;
+    case "todo":
+      return <TodoItemView item={item} />;
     case "build":
       return (
         <Box paddingLeft={1}>
-          {item.success ? <Text color="green" bold>✔ build passed</Text> : <Text color="red" bold>✘ build failed</Text>}
+          {item.success ? <Text color={theme.success} bold>✔ build passed</Text> : <Text color={theme.error} bold>✘ build failed</Text>}
           <Text dimColor> — {item.command}</Text>
         </Box>
       );
     case "notice":
       return (
         <Box paddingLeft={1}>
-          <Text color={item.level === "error" ? "red" : item.level === "warn" ? "yellow" : "gray"}>
+          <Text color={item.level === "error" ? theme.error : item.level === "warn" ? theme.warn : theme.dim}>
             {item.level === "error" ? "✘ " : "⚠ "}
             {item.text.length > 500 ? item.text.slice(0, 500) + "…" : item.text}
           </Text>
@@ -194,25 +227,35 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
 
 /** Build Rail — scoder's signature top bar: badges + lamp + fuel gauge. */
 function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
-  const lampColor = state.buildLamp === "ok" ? "green" : state.buildLamp === "fail" ? "red" : "gray";
+  const { stdout } = useStdout();
+  const width = Math.max(40, (stdout.columns ?? 100) - 6); // usable inner width
+  const lampColor = state.buildLamp === "ok" ? theme.success : state.buildLamp === "fail" ? theme.error : theme.dim;
   const lampLabel = state.buildLamp === "ok" ? "build ok" : state.buildLamp === "fail" ? "build fail" : "no build yet";
   const gauge = fuelGauge(state.step, state.maxSteps);
   const perm = state.permission || config.permissionMode;
+  const model = state.model || config.model || "—";
+
+  const right = gauge
+    ? `${gauge} ${state.step}/${state.maxSteps}`
+    : "— idle";
+  const middle = `⛨ ${perm}  ● ${lampLabel}`;
+  // Guarantee no overlap: shrink the model name first.
+  const leftBudget = Math.max(8, width - right.length - middle.length - 4);
   return (
-    <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
+    <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between">
       <Text>
-        <Text bold color="magenta">scoder</Text>
-        <Text dimColor> · {state.model || config.model || "—"}</Text>
+        <Text bold color={theme.brand}>scoder</Text>
+        <Text dimColor> · {fit(model, leftBudget - "scoder · ".length)}</Text>
       </Text>
       <Text>
-        <Text color={perm === "readonly" ? "yellow" : perm === "ask" ? "cyan" : "gray"}>⛨ {perm}</Text>
+        <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
         <Text> </Text>
         <Text color={lampColor}>● {lampLabel}</Text>
       </Text>
       <Text>
         {gauge && (
           <>
-            <Text color="magenta">{gauge}</Text>
+            <Text color={theme.brand}>{gauge}</Text>
             <Text dimColor> {state.step}/{state.maxSteps}</Text>
           </>
         )}
@@ -223,26 +266,31 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
 }
 
 function StatusBar({ state }: { state: TuiState }): React.JSX.Element {
-  const statusColor = state.status === "running" ? "cyan" : state.status === "success" ? "green" : state.status === "failed" ? "red" : "gray";
+  const { stdout } = useStdout();
+  const width = Math.max(40, (stdout.columns ?? 100) - 6);
+  const statusColor = state.status === "running" ? theme.accent : state.status === "success" ? theme.success : state.status === "failed" ? theme.error : theme.dim;
   const statusLabel =
     state.status === "running" ? `running ${state.step}/${state.maxSteps}` : state.status === "idle" ? "idle" : state.status;
+  const model = state.model || "—";
+  // Left: status · elapsed · model · tokens. Right: keybinds. Never overlap:
+  // the left side is built from the whole budget minus the keybind block.
+  const keybinds = "⏎ send · esc abort · ctrl+c quit";
+  const leftBudget = Math.max(20, width - keybinds.length - 2);
+  const elapsed = state.startedAt ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}` : null;
+  let left = statusLabel + (state.status === "running" && elapsed ? ` · ${elapsed}` : "");
+  const tokens = state.usage.calls > 0 ? ` · tok ${state.usage.inputTokens}/${state.usage.outputTokens}` : "";
+  const modelPart = ` · ${model}`;
+  if (left.length + modelPart.length + tokens.length <= leftBudget) left += modelPart + tokens;
+  else if (left.length + modelPart.length <= leftBudget) left += modelPart;
+  else left = fit(left, leftBudget);
   return (
-    <Box borderStyle="single" borderColor="gray" paddingX={1} justifyContent="space-between">
+    <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between">
       <Text>
         {state.status === "running" && <Spinner active />}
         {state.status === "running" ? " " : ""}
-        <Text color={statusColor}>{statusLabel}</Text>
-        <Elapsed since={state.startedAt} active={state.status === "running"} />
-        <Text dimColor> · {state.model || "—"}</Text>
-        {state.usage.calls > 0 && (
-          <Text dimColor>
-            {" "}
-            · tok {state.usage.inputTokens}/{state.usage.outputTokens}
-            {state.usage.cachedTokens > 0 ? ` (+${state.usage.cachedTokens} cached)` : ""}
-          </Text>
-        )}
+        <Text color={statusColor}>{left}</Text>
       </Text>
-      <Text dimColor>⏎ send · tab · ↑↓ · pgup/pgdn · esc abort · ctrl+c quit</Text>
+      <Text dimColor>{keybinds}</Text>
     </Box>
   );
 }
@@ -550,11 +598,23 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     <Box flexDirection="column" height="100%">
       <BuildRail state={state} config={config} />
       <Box flexDirection="column" paddingX={1} flexGrow={1}>
-        {total === 0 && (
-          <Text dimColor>
-            Type a task and press Enter. The agent works autonomously until the build passes. (/help for commands, tab completes)
-          </Text>
-        )}
+        {total === 0 ? (
+          <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1} gap={1}>
+            <Text>
+              <Text color={theme.brand} bold>◆ scoder</Text>
+              <Text dimColor> · autonomous coding agent</Text>
+            </Text>
+            <Text dimColor>type a task — the agent plans, edits, and builds until it passes</Text>
+            <Text>
+              <Text dimColor>tab </Text>
+              <Text dimColor>complete commands · </Text>
+              <Text dimColor>/help </Text>
+              <Text dimColor>all commands · </Text>
+              <Text dimColor>/skills </Text>
+              <Text dimColor>skill packs</Text>
+            </Text>
+          </Box>
+        ) : null}
         {scrollOffset > 0 && <Text dimColor>↑ scrollback — PgDn to return to the newest</Text>}
         {visible.map((item, i) => (
           <ChatItemView key={start + i} item={item} />

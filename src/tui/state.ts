@@ -21,6 +21,7 @@ export type ChatItem =
     }
   | { kind: "notice"; text: string; level: "info" | "warn" | "error" }
   | { kind: "build"; success: boolean; command: string }
+  | { kind: "todo"; items: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | {
       kind: "diff";
       path: string;
@@ -196,14 +197,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     }
     case "todo": {
       // Plan updates render as a live checkbox list in the chat pane.
-      const rows = ev.items
-        .map((t) => {
-          const box = t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]";
-          return `  ${box} ${t.content}`;
-        })
-        .join("\n");
-      const done = ev.items.filter((t) => t.status === "completed").length;
-      appendItem(state, { kind: "notice", text: `plan ${done}/${ev.items.length}\n${rows}`, level: "info" });
+      appendItem(state, { kind: "todo", items: ev.items.map((t) => ({ ...t })) });
       break;
     }
     case "finish": {

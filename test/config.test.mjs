@@ -9,13 +9,18 @@ import { loadConfig, loadPermissionLists } from "../dist/config.js";
 
 const TMP = join("/tmp", `scoder-config-test-${process.pid}`);
 
+const GLOBAL_ISOLATION = join(TMP, "no-global-config.json"); // không tồn tại
+
 beforeEach(() => {
   rmSync(TMP, { recursive: true, force: true });
   mkdirSync(TMP, { recursive: true });
+  // Cách ly khỏi ~/.scoder/config.json thật trên máy — test phải độc lập môi trường.
+  process.env.SCODER_CONFIG = GLOBAL_ISOLATION;
 });
 
 afterEach(() => {
   rmSync(TMP, { recursive: true, force: true });
+  if (process.env.SCODER_CONFIG === GLOBAL_ISOLATION) delete process.env.SCODER_CONFIG;
   delete process.env.SCODER_API_KEY;
   delete process.env.SCODER_LOG_FILE;
   delete process.env.SCODER_PERMISSION;
