@@ -248,6 +248,24 @@ scoder streams everything it can, live, as it happens:
 - **SIGINT-safe** — Ctrl+C kills the running command immediately; streamed rendering never blocks the event loop.
 - Output honors `NO_COLOR` and degrades to plain text when piped (CI-friendly).
 
+## Full-Screen TUI (`scoder tui`)
+
+An OpenCode-style terminal UI built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals) — chat pane, live tool feed, and status bar, driven by the same `AgentEvent` stream the HTTP API exposes:
+
+```bash
+scoder tui                     # start an interactive full-screen session
+scoder tui "fix the bug"       # auto-submit an initial task
+```
+
+Features:
+
+- **Chat pane** — your messages, streaming assistant text, and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running)
+- **Status bar** — step counter (`running 3/40`), model, token usage (input/output/cached), keybind hints
+- **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
+- **Keybinds** — `Enter` send · `Esc` abort the running task · `Ctrl+C` quit
+- Non-TTY environments (CI, pipes) automatically fall back to the classic REPL
+- `permission: "ask"` is not supported in the TUI (no readline prompts on the alt screen) — it falls back to `auto`
+
 ## HTTP Server Mode (`scoder serve`)
 
 Run scoder as a local HTTP service — submit tasks programmatically and consume progress as Server-Sent Events:
@@ -316,6 +334,7 @@ scoder detects the build command automatically:
 ```
 scoder [options] "<task>"     Run a task autonomously until the build passes
 scoder                       Start interactive session
+scoder tui [task]            Full-screen terminal UI (chat pane, live tool feed)
 scoder serve [--port] [--host]   HTTP server mode (see above)
 scoder --help | --version     Help and version
 ```
@@ -373,30 +392,34 @@ scoder "upgrade express to v5 — check the official migration guide first"
 ```
 ┌─────────────────────────────────────────────┐
 │  CLI (src/index.ts)                         │
-│   arg parsing, REPL, serve, SIGINT          │
-└───────────────┬─────────────────────────────┘
-                │
-┌───────────────▼─────────────────────────────┐
-│  Agent (src/agent.ts)                       │
-│  Closed-loop orchestrator                   │
-│  history trimming, error injection          │
-│  emits AgentEvent (UI / SSE consumers)      │
-└──────┬─────────────┬───────────────┬────────┘
-       │             │               │
-┌──────▼───────┐  ┌──▼───────────┐  ┌▼──────────────────┐
-│  LLM Client  │  │ Tool Registry│  │ Server            │
-│ (src/llm.ts) │  │(src/tools.ts)│  │ (src/server.ts)   │
-│ OpenAI compat│  │ + web_fetch  │  │ HTTP API + SSE    │
-│ (anthropic:  │  │ (src/        │  │ runs in background│
-│  provider-   │  │  webfetch.ts)│  └───────────────────┘
-│  anthropic)  │  └──────────────┘
-└──────────────┘
-       │
-       ▼
-┌─────────────────────────────────────────────┐
-│  Build Checker (src/build.ts)               │
-│   run build → exit 0 = stop condition met   │
-└─────────────────────────────────────────────┘
+│   arg parsing, REPL, serve, tui, SIGINT     │
+└───────┬─────────────────────┬───────────────┘
+        │                     │
+┌───────▼───────────┐  ┌──────▼─────────────────────┐
+│  TUI (src/tui/)   │  │  Agent (src/agent.ts)      │
+│  Ink/React full-  │  │  Closed-loop orchestrator  │
+│  screen chat UI,  │─▶│  history trimming, error   │
+│  renders the same │  │  injection                 │
+│  AgentEvent stream│  │  emits AgentEvent          │
+└───────────────────┘  └──┬──────────┬──────────────┘
+                          │          │
+                          │          └────────────────────┐
+                          ▼                               ▼
+┌───────────────────────────────┐   ┌──────────────────────────┐
+│  LLM Client (src/llm.ts)      │   │  Server (src/server.ts)  │
+│  OpenAI-compatible + native   │   │  HTTP API + SSE          │
+│  Anthropic provider           │   │  runs in background      │
+└──────────────┬────────────────┘   └──────────────────────────┘
+               ▼
+┌────────────────────────────────────────┐
+│  Tool Registry (src/tools.ts)          │
+│  + web_fetch (src/webfetch.ts)         │
+└──────────────┬─────────────────────────┘
+               ▼
+┌───────────────────────────────┐
+│  Build Checker (src/build.ts) │
+│  run build → exit 0 = stop    │
+└───────────────────────────────┘
 ```
 
 ## Integration Testing
@@ -413,12 +436,13 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list, live `run_command` output streaming
 - `test/webfetch.test.mjs` — HTML→text, JSON, redirects, SSRF guard, binary refusal, truncation
 - `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, live `tool_output` events
+- `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + clean exit
 - `test/core.test.mjs` — unified diff, retry backoff, context trimming
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve
 - `test/cost.test.mjs` — token usage & cost aggregation
 - `test/anthropic.test.mjs` — message translation + native SSE streaming
-- `test/llm.test.mjs` — OpenAI-compatible chat + SSE streaming + redaction
+- `test/llm.test.mjs` — OpenAI-compatible chat + SSE streaming + redaction + wire-format normalization
 - `test/run-e2e.mjs` — closed-loop integration (mock LLM server)
 - `test/run-mcp-test.mjs` — MCP smoke (mock stdio server)
 

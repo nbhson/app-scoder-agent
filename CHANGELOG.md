@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [0.5.0] - 2026-10-30 — Streaming UI, HTTP server mode & web access
+## [0.5.0] - 2026-10-30 — Streaming UI, full-screen TUI, HTTP server mode & web access
 
 ### Added
 - **`web_fetch` tool — internet access** — the agent can fetch public HTTP(S) URLs and read the content as plain text:
@@ -19,9 +19,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   - Runs are always non-interactive (`ask` rejected); max 4 concurrent runs (429 beyond); optional `Authorization: Bearer` auth via `SCODER_SERVER_TOKEN`; binds `127.0.0.1` by default
 - **Structured agent events** — `Agent` now emits typed `AgentEvent`s (`agent.onEvent`), decoupling progress reporting from the terminal UI
 - **Fresh CLI look** — box-drawing startup banner (task/model/workdir/build/steps), `▸` step markers, dimmed live-output blocks; honors `NO_COLOR` and strips ANSI when piped (CI-friendly)
+- **Full-Screen TUI (`scoder tui`)** — OpenCode-style terminal interface built with Ink + React (`src/tui/`):
+  - chat pane (user messages, streaming assistant text, live tool feed with `✔/✘` status + output preview), status bar (step counter, model, token usage, keybinds)
+  - multi-turn: type follow-ups after a task finishes — context carries over, same as the REPL
+  - typed-while-running is preserved; `exit`/`quit` always quits (aborts a running agent first); `Esc` aborts; non-TTY falls back to the classic REPL; `permission: "ask"` falls back to `auto`
+  - pure `AgentEvent` reducer (`src/tui/state.ts`) — the TUI renders nothing but the event stream, same contract as the HTTP SSE API
+  - new runtime deps: `ink`, `react`
+
+### Fixed
+- **OpenAI wire format for assistant `tool_calls`** — internal history (`{id, name, arguments}`) was sent verbatim; strict providers (Upstage solar-pro4) reject it with `Invalid function name: ''`. Both `chat()` and `streamChat()` now normalize to the wire shape `{id, type: "function", function: {name, arguments}}`.
 
 ### Tests
 - 27 new tests: `test/webfetch.test.mjs` (16), `test/server.test.mjs` (8 — run lifecycle via SSE, abort, auth), tool-output streaming (3). Suite now **185 passing**.
+- TUI integration test in a real PTY (`test/tui.test.mjs`, runner `test/pty-run.py`) + wire-format regression tests. Suite now **188 passing**.
 
 ## [0.4.0] - 2026-10-29 — Enterprise hardening & cost tracking
 ### Added
