@@ -239,13 +239,17 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
     ? `${gauge} ${state.step}/${state.maxSteps}`
     : "— idle";
   const middle = `⛨ ${perm}  ● ${lampLabel}`;
+  // MCP badge — server names from config (global + project), visible at a glance.
+  const mcpNames = Object.keys(config.mcpServers ?? {});
+  const mcpLabel = mcpNames.length > 0 ? ` · 🔌 ${mcpNames.join(",")}` : "";
   // Guarantee no overlap: shrink the model name first.
   const leftBudget = Math.max(8, width - right.length - middle.length - 4);
   return (
     <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between">
       <Text>
         <Text bold color={theme.brand}>scoder</Text>
-        <Text dimColor> · {fit(model, leftBudget - "scoder · ".length)}</Text>
+        <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length - mcpLabel.length - 2))}</Text>
+        {mcpLabel && <Text color={theme.accent}>{mcpLabel}</Text>}
       </Text>
       <Text>
         <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
