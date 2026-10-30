@@ -17,7 +17,7 @@ import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
-import { completeSlashCommand, formatSlashHelp, parseSlashCommand } from "./commands.js";
+import { completeSlashCommand, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
 import { Markdown } from "./markdown.js";
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
 
@@ -226,7 +226,7 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
         <Box paddingLeft={1}>
           <Text color={item.level === "error" ? theme.error : item.level === "warn" ? theme.warn : theme.dim}>
             {item.level === "error" ? "✘ " : "⚠ "}
-            {item.text.length > 500 ? item.text.slice(0, 500) + "…" : item.text}
+            {item.text.length > 2000 ? item.text.slice(0, 2000) + "…" : item.text}
           </Text>
         </Box>
       );
@@ -468,7 +468,10 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
             pushNotice("no skills discovered — add .scoder/skills/<name>/SKILL.md (name + description frontmatter)");
           } else {
             pushNotice(
-              "Skills:\n" + skills.map((s) => `  ${s.name.padEnd(20)} ${s.description || "(no description)"} [${s.scope}]`).join("\n"),
+              "Skills:\n" +
+                skills
+                  .map((s) => `  ${s.name.padEnd(26)} ${fit(s.description || "(no description)", 72)} [${s.scope}]`)
+                  .join("\n"),
             );
           }
           return;
@@ -490,23 +493,45 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         }
         if (slash.cmd === "/mcp") {
           const agent = agentRef.current ?? createAgent();
-          try {
-            const status = await agent.mcpStatus();
-            if (status.length === 0) {
-              pushNotice("no MCP servers configured — add mcpServers to .scoderrc.json");
-            } else {
-              pushNotice(
-                status
-                  .map(
-                    (srv) =>
-                      `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}` +
-                      (srv.connected ? ` (${srv.tools.length} tools)\n` + srv.tools.map((t) => `    mcp__${srv.name}__${t.name}`).join("\n") : " (not connected)"),
-                  )
-                  .join("\n"),
-              );
+          const exec = parseMcpExec(slash.arg);
+          if (exec === null) {
+            // list mode
+            try {
+              const status = await agent.mcpStatus();
+              if (status.length === 0) {
+                pushNotice("no MCP servers configured — add mcpServers to .scoderrc.json");
+              } else {
+                pushNotice(
+                  status
+                    .map(
+                      (srv) =>
+                        `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}` +
+                        (srv.connected ? ` (${srv.tools.length} tools)\n` + srv.tools.map((t) => `    mcp__${srv.name}__${t.name}`).join("\n") : " (not connected)"),
+                    )
+                    .join("\n"),
+                );
+              }
+            } catch (err) {
+              pushNotice(`MCP status failed: ${(err as Error).message}`, "error");
             }
+            return;
+          }
+          if ("error" in exec) {
+            pushNotice(exec.error, "warn");
+            return;
+          }
+          // exec mode — call one MCP tool directly (long calls stream nothing; show busy notice first)
+          pushNotice(`→ ${exec.fullName} …`);
+          try {
+            const r = await agent.callMcpTool(exec.fullName, exec.args);
+            pushNotice(
+              r.ok
+                ? `${exec.fullName} →\n${r.output.length > 2000 ? r.output.slice(0, 2000) + "… (truncated)" : r.output}`
+                : r.output,
+              r.ok ? "info" : "error",
+            );
           } catch (err) {
-            pushNotice(`MCP status failed: ${(err as Error).message}`, "error");
+            pushNotice(`MCP exec failed: ${(err as Error).message}`, "error");
           }
           return;
         }

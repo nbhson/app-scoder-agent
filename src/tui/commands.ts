@@ -60,3 +60,40 @@ export function formatSlashHelp(commandName: string): string {
   const rows = SLASH_COMMANDS.map((c) => `  ${c.cmd.padEnd(12)} ${c.desc}`).join("\n");
   return `Commands (${commandName}):\n${rows}\n  Anything else is sent to the agent as a task.\n  Tab completes commands; ↑/↓ recalls history.`;
 }
+
+/**
+ * Parse a `/mcp` exec invocation into (fullName, args).
+ *
+ * Forms:
+ *   /mcp                                  → list (no exec)
+ *   /mcp server tool {"k":"v"}            → mcp__server__tool
+ *   /mcp mcp__server__tool {"k":"v"}      → as-is (full name)
+ * The JSON part is optional (tools with no args); bad JSON → error message.
+ */
+export function parseMcpExec(arg: string): { fullName: string; args: Record<string, unknown> } | { error: string } | null {
+  const trimmed = arg.trim();
+  if (!trimmed) return null; // list mode
+  const tokens = trimmed.split(/\s+/);
+  let fullName: string;
+  let rest: string;
+  if (tokens[0].startsWith("mcp__")) {
+    fullName = tokens[0];
+    rest = trimmed.slice(tokens[0].length).trim();
+  } else {
+    if (tokens.length < 2) return { error: "usage: /mcp <server> <tool> [json-args] — list servers with bare /mcp" };
+    fullName = `mcp__${tokens[0]}__${tokens[1]}`;
+    // Preserve the JSON part verbatim (it may contain spaces).
+    const m = /^(\S+)\s+(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+    rest = m?.[3] ?? "";
+  }
+  if (!rest) return { fullName, args: {} };
+  try {
+    const parsed = JSON.parse(rest) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { error: "json args must be an object, e.g. {\"prompt\": \"...\"}" };
+    }
+    return { fullName, args: parsed as Record<string, unknown> };
+  } catch {
+    return { error: `invalid JSON args: ${rest.slice(0, 80)}` };
+  }
+}

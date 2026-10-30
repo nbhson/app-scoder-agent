@@ -304,6 +304,9 @@ export class LlmClient {
       temperature: this.opts.temperature,
       max_tokens: this.opts.maxTokens,
       stream: true,
+      // OpenAI-compatible providers only include usage in streaming responses
+      // when this flag is set — without it token accounting silently zeros out.
+      stream_options: { include_usage: true },
     });
 
     let res: Response;
@@ -340,6 +343,7 @@ export class LlmClient {
     }> = [];
 
     let finalResult: ChatResult | undefined;
+    let finalUsage: TokenUsage | undefined;
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -388,6 +392,10 @@ export class LlmClient {
           } catch {
             continue; // skip malformed JSON lines
           }
+
+          // Usage-only final chunk: many providers send usage in a chunk with
+          // an empty choices array — must not be skipped.
+          if (chunkData.usage) finalUsage = { ...chunkData.usage };
 
           const choice = chunkData.choices?.[0];
           if (!choice) continue;
@@ -466,6 +474,9 @@ export class LlmClient {
       cleanup();
     }
 
+    // Attach usage collected from a usage-only chunk (choices: []) if the
+    // finish chunk itself didn't carry it.
+    if (finalResult && !finalResult.usage && finalUsage) finalResult.usage = finalUsage;
     yield { done: true, final: finalResult };
   }
 }

@@ -8,7 +8,7 @@ import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import { collectUsage, formatCostReport } from "./cost.js";
 import { getVersion as getPackageVersion } from "./version.js";
-import { formatSlashHelp, parseSlashCommand } from "./tui/commands.js";
+import { formatSlashHelp, parseSlashCommand, parseMcpExec } from "./tui/commands.js";
 import * as ui from "./ui.js";
 
 // Single source of truth: read version from package.json (see src/version.ts).
@@ -386,15 +386,28 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
         continue;
       }
       if (slash.cmd === "/mcp") {
-        const status = await agent.mcpStatus();
-        if (status.length === 0) {
-          console.log("no MCP servers configured — add mcpServers to .scoderrc.json");
+        const exec = parseMcpExec(slash.arg);
+        if (exec === null) {
+          // list mode
+          const status = await agent.mcpStatus();
+          if (status.length === 0) {
+            console.log("no MCP servers configured — add mcpServers to .scoderrc.json");
+            continue;
+          }
+          for (const srv of status) {
+            console.log(`${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}${srv.connected ? ` (${srv.tools.length} tools)` : " (not connected)"}`);
+            for (const t of srv.tools) console.log(`    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`);
+          }
           continue;
         }
-        for (const srv of status) {
-          console.log(`${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}${srv.connected ? ` (${srv.tools.length} tools)` : " (not connected)"}`);
-          for (const t of srv.tools) console.log(`    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`);
+        if ("error" in exec) {
+          ui.error(exec.error);
+          continue;
         }
+        ui.info(`→ ${exec.fullName}`);
+        const r = await agent.callMcpTool(exec.fullName, exec.args);
+        if (r.ok) console.log(r.output.length > 4000 ? r.output.slice(0, 4000) + "\n… (truncated)" : r.output);
+        else ui.error(r.output);
         continue;
       }
       if (slash.cmd === "/permission") {
