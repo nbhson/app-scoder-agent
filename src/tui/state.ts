@@ -20,9 +20,21 @@ export type ChatItem =
       step: number;
     }
   | { kind: "notice"; text: string; level: "info" | "warn" | "error" }
-  | { kind: "build"; success: boolean; command: string };
+  | { kind: "build"; success: boolean; command: string }
+  | {
+      kind: "diff";
+      path: string;
+      text: string;
+      added: number;
+      removed: number;
+      truncated: boolean;
+      step: number;
+    };
 
 export type RunStatus = "idle" | "running" | "success" | "failed" | "aborted";
+
+/** State of the last build event — drives the Build Rail lamp. */
+export type BuildLamp = "none" | "ok" | "fail";
 
 export interface TuiState {
   items: ChatItem[];
@@ -33,6 +45,7 @@ export interface TuiState {
   provider: string;
   workdir: string;
   buildCmd: string;
+  buildLamp: BuildLamp;
   usage: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number };
   summary: string | null;
 }
@@ -47,6 +60,7 @@ export function initialState(): TuiState {
     provider: "",
     workdir: "",
     buildCmd: "",
+    buildLamp: "none",
     usage: { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
     summary: null,
   };
@@ -82,6 +96,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.provider = ev.provider;
       state.workdir = ev.workdir;
       state.buildCmd = ev.buildCmd;
+      state.buildLamp = "none";
       state.status = "running";
       state.step = 0;
       state.summary = null;
@@ -152,9 +167,23 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
           break;
         }
       }
+      // File-writing tools attach a unified diff — render it as its own item
+      // so edits are reviewable at a glance (the scoder "✎" signature).
+      if (ev.diff) {
+        appendItem(state, {
+          kind: "diff",
+          path: ev.diff.path,
+          text: ev.diff.text,
+          added: ev.diff.added,
+          removed: ev.diff.removed,
+          truncated: ev.diff.truncated,
+          step: ev.step,
+        });
+      }
       break;
     }
     case "build": {
+      state.buildLamp = ev.success ? "ok" : "fail";
       appendItem(state, { kind: "build", success: ev.success, command: ev.command });
       break;
     }
