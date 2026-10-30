@@ -137,6 +137,76 @@ describe("LlmClient.streamChat — SSE parsing", () => {
   });
 });
 
+describe("LlmClient wire format (provider compatibility)", () => {
+  let server;
+  let port;
+  let bodies;
+
+  before(async () => {
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(body));
+        const wantsStream = JSON.parse(body).stream === true;
+        if (wantsStream) {
+          res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "close" });
+          res.end(
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{}"}}]},"finish_reason":null}]}\n\n' +
+              'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+          );
+        } else {
+          res.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
+          res.end(
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "ok" } }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+          );
+        }
+      });
+    });
+    await new Promise((res) => server.listen(0, "127.0.0.1", res));
+    port = server.address().port;
+  });
+
+  after(() => new Promise((res) => { server.closeAllConnections?.(); server.close(() => res()); }));
+
+  const historyWithToolCall = [
+    { role: "user", content: "go" },
+    {
+      role: "assistant",
+      content: null,
+      // Internal shape (như streamChat tích luỹ) — KHÔNG phải wire format
+      tool_calls: [{ id: "c1", name: "write_file", arguments: '{"path":"x"}' }],
+    },
+    { role: "tool", tool_call_id: "c1", name: "write_file", content: "Wrote 1 line" },
+  ];
+
+  it("chat(): assistant tool_calls trong history được normalize sang wire format", async () => {
+    bodies = [];
+    await makeClient(port).chat(historyWithToolCall, []);
+    const sent = bodies[0].messages[1];
+    assert.equal(sent.tool_calls[0].type, "function", "phải có type=function");
+    assert.deepEqual(
+      sent.tool_calls[0].function,
+      { name: "write_file", arguments: '{"path":"x"}' },
+      "tool_call phải bọc trong function={name,arguments}",
+    );
+    assert.equal(sent.tool_calls[0].name, undefined, "không còn field name ở tầng trên");
+  });
+
+  it("streamChat(): history cũng được normalize sang wire format", async () => {
+    bodies = [];
+    for await (const _chunk of makeClient(port).streamChat(historyWithToolCall, [])) {
+      void _chunk;
+    }
+    const sent = bodies[0].messages[1];
+    assert.equal(sent.tool_calls[0].type, "function");
+    assert.equal(sent.tool_calls[0].function.name, "write_file");
+  });
+});
+
 describe("LlmClient error paths", () => {
   it("401 -> LlmError fail-fast (không retry)", async () => {
     const s = createServer((req, res) => {

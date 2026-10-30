@@ -159,6 +159,30 @@ function parseSSELine(line: string): string | null {
 // LlmClient
 // ---------------------------------------------------------------------------
 
+/**
+ * Serialize conversation history to the OpenAI wire format. Internal ToolCall
+ * shape is `{id, name, arguments}`; the API expects
+ * `{id, type: "function", function: {name, arguments}}`. Some providers
+ * (Upstage/solar) reject assistant tool_calls in the internal shape with a
+ * misleading "Invalid function name: ''" error — always normalize here.
+ */
+function toWireMessages(messages: ChatMessage[]): unknown[] {
+  return messages.map((m) => {
+    if (m.role === "assistant" && m.tool_calls) {
+      return {
+        role: m.role,
+        content: m.content,
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: "function",
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      };
+    }
+    return m;
+  });
+}
+
 export class LlmClient {
   private streamEnabled: boolean;
 
@@ -181,7 +205,7 @@ export class LlmClient {
     const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const body = JSON.stringify({
       model: this.opts.model,
-      messages,
+      messages: toWireMessages(messages),
       tools: tools.length > 0 ? tools : undefined,
       temperature: this.opts.temperature,
       max_tokens: this.opts.maxTokens,
@@ -265,7 +289,7 @@ export class LlmClient {
     const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const bodyStr = JSON.stringify({
       model: this.opts.model,
-      messages,
+      messages: toWireMessages(messages),
       tools: tools.length > 0 ? tools : undefined,
       temperature: this.opts.temperature,
       max_tokens: this.opts.maxTokens,
