@@ -26,7 +26,7 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs" | "cost" | "serve";
+  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui";
   resumeId?: string;
   logsId?: string;
   logsFilter?: string;
@@ -43,6 +43,7 @@ const HELP = `scoder — autonomous coding agent CLI
 USAGE
   scoder [options] "<task>"        Run a task autonomously until the build passes
   scoder                           Start interactive session (chat + tools)
+  scoder tui [task]                Full-screen terminal UI (chat pane, live tool feed)
   scoder list                      List saved sessions for this directory
   scoder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
   scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
@@ -199,6 +200,10 @@ function parseArgs(argv: string[]): CliArgs {
   } else if (rest[0] === "serve") {
     args.subcommand = "serve";
     args.task = null;
+  } else if (rest[0] === "tui") {
+    // scoder tui [initial-task] — full-screen Ink interface
+    args.subcommand = "tui";
+    args.task = rest.length > 1 ? rest.slice(1).join(" ") : null;
   }
 
   return args as CliArgs;
@@ -354,6 +359,20 @@ async function main(): Promise<void> {
       pricingOverrides: cfg.modelPricing,
     });
     console.log(formatCostReport(sessionCosts));
+    return;
+  }
+
+  if (args.subcommand === "tui") {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      ui.warn("TUI requires an interactive terminal (TTY) — falling back to the classic REPL.");
+      await repl(cfg);
+      return;
+    }
+    if (!cfg.apiKey) {
+      ui.warn("No API key configured — tasks will fail until SCODER_API_KEY (or OPENAI_API_KEY) is set.");
+    }
+    const { runTui } = await import("./tui/app.js");
+    await runTui(cfg, args.task);
     return;
   }
 

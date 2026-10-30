@@ -3,6 +3,16 @@ import process from "node:process";
 // Honor NO_COLOR and non-TTY output: drop ANSI codes so logs/CI stay clean.
 const COLOR = process.env.NO_COLOR === undefined && process.stdout.isTTY === true;
 
+// When a full-screen TUI is active (scoder tui), the Agent's console output
+// would corrupt Ink's alt-screen rendering. The TUI renders from AgentEvents
+// instead; setting QUIET suppresses every direct ui.* write.
+let QUIET = false;
+
+/** Suppress all direct console writes from ui.* (used by the Ink TUI frontend). */
+export function setQuiet(quiet: boolean): void {
+  QUIET = quiet;
+}
+
 const RESET = COLOR ? "\x1b[0m" : "";
 const BOLD = COLOR ? "\x1b[1m" : "";
 const DIM = COLOR ? "\x1b[2m" : "";
@@ -17,30 +27,37 @@ function ts(): string {
 }
 
 export function info(msg: string): void {
+  if (QUIET) return;
   console.log(`${DIM}[${ts()}]${RESET} ${msg}`);
 }
 
 export function step(stepNum: number, total: number, msg: string): void {
+  if (QUIET) return;
   console.log(`${BLUE}[${String(stepNum).padStart(2)}/${total}]${RESET} ${BOLD}▸ ${msg}${RESET}`);
 }
 
 export function success(msg: string): void {
+  if (QUIET) return;
   console.log(`${GREEN}✓${RESET} ${GREEN}${msg}${RESET}`);
 }
 
 export function warn(msg: string): void {
+  if (QUIET) return;
   console.log(`${YELLOW}⚠${RESET} ${YELLOW}${msg}${RESET}`);
 }
 
 export function error(msg: string): void {
+  if (QUIET) return;
   console.error(`${RED}✗${RESET} ${RED}${msg}${RESET}`);
 }
 
 export function llm(prefix: string, content: string): void {
+  if (QUIET) return;
   console.log(`${CYAN}${prefix}:${RESET} ${content.slice(0, 300)}${content.length > 300 ? " ..." : ""}`);
 }
 
 export function toolCall(name: string, args: Record<string, unknown>): void {
+  if (QUIET) return;
   const a = Object.entries(args)
     .map(([k, v]) => `${k}=${JSON.stringify(v)?.slice(0, 80)}`)
     .join(" ");
@@ -48,22 +65,26 @@ export function toolCall(name: string, args: Record<string, unknown>): void {
 }
 
 export function toolResult(name: string, ok: boolean, output: string): void {
+  if (QUIET) return;
   const preview = output.split("\n")[0]?.slice(0, 120) ?? "";
   const icon = ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
   console.log(`${icon} ${CYAN}${name}${RESET} ${DIM}→${RESET} ${preview}`);
 }
 
 export function buildStatus(success: boolean, output: string): void {
+  if (QUIET) return;
   const icon = success ? `${GREEN}✓ BUILD SUCCESS` : `${RED}✗ BUILD FAILED`;
   console.log(`\n${icon}${RESET}\n${output.split("\n").slice(-10).join("\n")}\n`);
 }
 
 export function header(msg: string): void {
+  if (QUIET) return;
   console.log(`\n${BOLD}${CYAN}── ${msg} ${"─".repeat(Math.max(2, 60 - msg.length))}${RESET}`);
 }
 
 /** Startup banner: a clean key/value box (plain-text fallback when piped). */
 export function banner(title: string, rows: Array<[string, string]>): void {
+  if (QUIET) return;
   const keyWidth = Math.max(8, ...rows.map(([k]) => k.length));
   const inner = Math.max(
     title.length + 4,
@@ -92,6 +113,7 @@ let _streamPrefix = "";
 
 /** Start a streaming line. Call llmStreamChunk() for each delta, then llmStreamEnd(). */
 export function llmStreamStart(prefix = "assistant", color = CYAN): void {
+  if (QUIET) return;
   _streamLine = "";
   _streamColor = color;
   _streamPrefix = prefix;
@@ -100,12 +122,14 @@ export function llmStreamStart(prefix = "assistant", color = CYAN): void {
 
 /** Append a text delta to the current streaming line. */
 export function llmStreamChunk(delta: string): void {
+  if (QUIET) return;
   _streamLine += delta;
   process.stdout.write(delta);
 }
 
 /** Finish the streaming line (append suffix + newline). */
 export function llmStreamEnd(suffix = ""): string {
+  if (QUIET) return "";
   const line = _streamLine;
   _streamLine = "";
   process.stdout.write(`${suffix}\n`);
@@ -121,7 +145,7 @@ let _toolStreamChars = 0;
 
 /** Begin a live tool-output block. Output is printed dimmed, capped at 20k chars. */
 export function toolStreamStart(): void {
-  if (_toolStreamOpen) return;
+  if (QUIET || _toolStreamOpen) return;
   _toolStreamOpen = true;
   _toolStreamLineOpen = false;
   _toolStreamChars = 0;
@@ -130,7 +154,7 @@ export function toolStreamStart(): void {
 
 /** Append a tool-output delta to the live block. */
 export function toolStreamChunk(delta: string): void {
-  if (!_toolStreamOpen) return;
+  if (QUIET || !_toolStreamOpen) return;
   if (_toolStreamChars >= TOOL_STREAM_MAX_CHARS) return;
   _toolStreamChars += delta.length;
   if (_toolStreamChars >= TOOL_STREAM_MAX_CHARS) {
@@ -149,7 +173,7 @@ export function toolStreamChunk(delta: string): void {
 
 /** Finish the live tool-output block (closes the partial last line). */
 export function toolStreamEnd(): void {
-  if (!_toolStreamOpen) return;
+  if (QUIET || !_toolStreamOpen) return;
   _toolStreamOpen = false;
   process.stdout.write(_toolStreamLineOpen ? `\n${DIM}└${RESET}\n` : `${DIM}└${RESET}\n`);
 }
@@ -163,6 +187,7 @@ export function isToolStreamOpen(): boolean {
 
 /** Print a unified diff with colors (+ green, - red, @@ cyan). */
 export function printDiff(diffText: string): void {
+  if (QUIET) return;
   for (const line of diffText.split("\n")) {
     if (line.startsWith("+++") || line.startsWith("---")) {
       console.log(`${BOLD}${line}${RESET}`);
@@ -180,5 +205,6 @@ export function printDiff(diffText: string): void {
 
 /** Print a one-line diff summary: "✎ +12 -3 lines → src/foo.ts". */
 export function diffSummary(path: string, added: number, removed: number): void {
+  if (QUIET) return;
   console.log(`${CYAN}✎${RESET} ${BOLD}${path}${RESET} ${GREEN}+${added}${RESET} ${RED}-${removed}${RESET} lines`);
 }
