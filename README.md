@@ -84,6 +84,9 @@ You (task) → LLM plans → Tools execute code → Build runs → Success? → 
 | `list_files` | Recursive directory listing |
 | `run_command` | Execute any shell command (subject to permission policy) |
 | `web_fetch` | Fetch a public HTTP(S) URL → readable text (HTML→text, JSON pretty-printed) |
+| `write_todos` | Live plan for multi-step tasks (checkbox list, kept current) |
+| `load_skill` | Load a SKILL.md into context when the task matches its description |
+| `mcp__<server>__<tool>` | Tools from configured MCP servers (routed transparently) |
 
 File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved via `realpath` and cannot escape the working directory, even through a malicious symlink. `read_file` refuses files larger than 2MB with guidance to use `grep`/`head`/`tail`.
 
@@ -239,7 +242,7 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | `/model` | active model/provider/build |
 | `/skills` | list discovered skills |
 | `/skill <name>` | stage a skill for the next task |
-| `/mcp` | MCP servers + tools (connects on demand) |
+| `/mcp` | MCP servers + tools; exec one directly: `/mcp <server> <tool> [json]` or `/mcp mcp__server__tool [json]` |
 | `/permission <auto\|readonly>` | switch permission mode at runtime |
 | `/exit` | quit |
 
@@ -247,7 +250,35 @@ In the TUI, **Tab** completes commands (and `/skill` names), **↑/↓** recall 
 
 ## Planning tool
 
-For multi-step tasks the agent writes a live plan with `write_todos` (`[x]` completed · `[~]` in progress · `[ ]` pending) — rendered inline in the TUI and included in session state. Harness guardrails: a **doom-loop breaker** (3× identical tool call → forced strategy-change reminder), a **wrap-up prefill** (2 steps before the budget ends the agent is told to converge), and **char-budget history trimming** with whole-turn drops (never orphaning a tool result) plus old-tool-result pruning.
+For multi-step tasks the agent writes a live plan with `write_todos` (`[x]` completed · `[~]` in progress · `[ ]` pending) — rendered inline in the TUI and included in session state.
+
+## Guardrails (Guardrail Engine)
+
+The autonomous loop is wrapped by a configurable rule engine (`src/guardrails.ts`) — every rule is a pure function over the step context that returns a decision (`inject` a reminder / `finish` / `verify-build` / `trim`), and every triggered decision is logged to the JSONL log (`type: "guardrail"`) and surfaced as an `AgentEvent` for frontends:
+
+| Rule | What it does |
+|---|---|
+| `wrap-up` | Injects a converge-now reminder 2 steps before the budget ends |
+| `chat-done` | Ends conversational turns (marker-based) without a build |
+| `completion-claim` | Never trusts "the task is complete" — forces an independent build verification |
+| `text-only-streak` | Ends the run after 2 consecutive tool-less steps with no file changes (the "chào" failure mode) |
+| `continue-nudge` | Nudges plain-text answers back to work |
+| `doom-loop` | Intervenes after 3× identical consecutive tool-call batches |
+| `build-stop` | Ends the run when the exact build command succeeds; re-verifies on failure |
+| `history-trim` | Char-budget history trimming with whole-turn drops + old-tool-result pruning |
+
+Thresholds are configurable via `GuardrailOptions` (`textOnlyStreakLimit`, `doomLoopRepeats`, `wrapUpStepsBeforeEnd`) without touching the loop, and custom rules can be added via `GuardrailEngine.register()`.
+
+## Usage & cost metrics
+
+`scoder cost` reads the JSONL logs and reports per session and total: LLM calls, tokens (in/out/cached), estimated cost, **steps, average LLM latency, tool calls, guardrail interventions, and the session success rate**:
+
+```
+  20261031-110353-d034  calls=1  in=4,042  out=88  cost≈$0.0022  |  steps=1 llm-avg=7.5s tools=1 guardrails=1 ✓success
+TOTAL (1 session(s))  ...  |  success-rate=1/1
+```
+
+The system prompt is versioned (`PROMPT_VERSION` in `src/prompt.ts`) and stamped into every session log (`type: "prompt_version"`) so prompt quality can be compared across versions.
 
 ## MCP Servers (stdio)
 
@@ -307,13 +338,15 @@ scoder tui "fix the bug"       # auto-submit an initial task
 
 Features:
 
-- **Build Rail** (top bar) — brand, build lamp (`● build ok` / `● build fail` / `no build yet`), permission mode, and a step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`) that fills as the agent burns through its step budget
-- **Chat pane** — your messages, streaming assistant text, and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running), prefixed with a flight-recorder step number (`03▸`)
+- **Alternate screen buffer** (vim/htop style) — the app owns the full screen: the header stays pinned at the top, input + status bar at the bottom, the chat pane scrolls internally, and your terminal content is restored on exit. Terminals without alt-screen support (`TERM=dumb`, non-TTY) automatically render inline instead.
+- **Build Rail** (pinned top bar) — brand, build lamp (`● build ok` / `● build fail` / `no build yet`), permission mode, and a step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`) that fills as the agent burns through its step budget
+- **Phase breadcrumb + live metrics** (second header row, while running) — `plan › explore › edit › build › verify` (current phase highlighted) on the left; tokens in/out, elapsed time, guardrail interventions, and the last guardrail rule on the right
+- **Chat pane** — your messages, streaming assistant text with a live block cursor (`▋`), and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running, wall-clock duration per tool), prefixed with a flight-recorder step number (`03▸`)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
-- **Status bar** — model, token usage (input/output/cached), keybind hints
-- **Slash commands** — `/help`, `/clear`, `/cost`, `/model`, `/exit` (identical to the REPL)
+- **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
+- **Slash commands** — `/help`, `/clear`, `/cost`, `/model`, `/skills`, `/skill`, `/mcp`, `/permission`, `/exit` (identical to the REPL)
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
-- **Scrollback** — `PgUp`/`PgDn` page through history; `Esc` returns to the live tail (press again to abort)
+- **Scrollback** — `PgUp`/`PgDn` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
 - **Keybinds** — `Enter` send · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+C` quit
 - Non-TTY environments (CI, pipes) automatically fall back to the classic REPL
 - `permission: "ask"` is not supported in the TUI (no readline prompts on the alt screen) — it falls back to `auto`
@@ -354,7 +387,7 @@ scoder --log-file "fix the failing test"
 cat .scoder/logs/<session-id>.jsonl | jq 'select(.type == "error")'
 ```
 
-Events: `step` (with token usage), `tool` (args, ok, elapsedMs, denied reason), `build`, `finish`. One JSON object per line — pipe to `jq` or any log consumer.
+Events: `step` (with `durationMs` LLM latency + tool-call count), `tool` (args, ok, elapsedMs, denied reason), `build`, `guardrail` (rule/action/reason for every Guardrail Engine decision), `prompt_version`, `finish`. One JSON object per line — pipe to `jq` or any log consumer.
 
 ## Reliability
 
@@ -450,9 +483,9 @@ scoder "upgrade express to v5 — check the official migration guide first"
         │                     │
 ┌───────▼───────────┐  ┌──────▼─────────────────────┐
 │  TUI (src/tui/)   │  │  Agent (src/agent.ts)      │
-│  Ink/React full-  │  │  Closed-loop orchestrator  │
-│  screen chat UI,  │─▶│  history trimming, error   │
-│  renders the same │  │  injection                 │
+│  Ink/React alt-   │  │  Closed-loop orchestrator  │
+│  screen UI,       │─▶│  + Guardrail Engine        │
+│  renders the same │  │  (src/guardrails.ts)       │
 │  AgentEvent stream│  │  emits AgentEvent          │
 └───────────────────┘  └──┬──────────┬──────────────┘
                           │          │
@@ -494,7 +527,9 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/core.test.mjs` — unified diff, retry backoff, context trimming
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve
-- `test/cost.test.mjs` — token usage & cost aggregation
+- `test/cost.test.mjs` — token usage & cost aggregation, session metrics (latency/success/guardrails)
+- `test/guardrails.test.mjs` — Guardrail Engine: rule registry, default rules, configurable thresholds, decision logging, priority order
+- `test/prompt.test.mjs` — system prompt versioning (`PROMPT_VERSION`) + dynamic assembly
 - `test/anthropic.test.mjs` — message translation + native SSE streaming
 - `test/llm.test.mjs` — OpenAI-compatible chat + SSE streaming + redaction + wire-format normalization
 - `test/run-e2e.mjs` — closed-loop integration (mock LLM server)
