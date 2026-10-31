@@ -6,6 +6,7 @@
  * Luôn deny catastrophic commands bất kể mode nào.
  */
 
+import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 
 // ---------------------------------------------------------------------------
@@ -423,6 +424,66 @@ export class PermissionChecker {
       this.config.denyCommands,
       this.sessionAllow,
     );
+  }
+
+  /**
+   * Shell decision with AST scanner (pattern from opencode: every extracted
+   * subcommand is checked individually; scanner errors ⇒ ask, never execute
+   * unverified). Falls back to whole-line rules when the scanner is
+   * unavailable (e.g. native module failed to load).
+   */
+  classifyShell(command: string): PermissionResult {
+    let scan: import("./shell-scanner.js").ShellScan | null;
+    try {
+      // Lazy require so a broken native build degrades instead of crashing.
+      // (ESM dist — plain `require` is undefined; use createRequire.)
+      const req = createRequire(import.meta.url);
+      const { scanCommand } = req("./shell-scanner.js") as typeof import("./shell-scanner.js");
+      scan = scanCommand(command);
+    } catch {
+      scan = null; // scanner unavailable — fall back to whole-line behavior
+    }
+
+    if (scan && !scan.ok) {
+      return {
+        decision: "ask",
+        reason: `shell scanner: ${scan.error}`,
+        alwaysAllowPrefix: extractFirstWord(command) + " ",
+      };
+    }
+
+    if (scan && scan.ok && scan.commandLines.length > 1) {
+      // Compound command — aggregate per-subcommand rule effects.
+      const effects = scan.commandLines.map((l) => {
+        const e = matchRule(this.activeRules(), "shell", l);
+        if (e) return e;
+        // No rule for this subcommand → fall back to whole-line decision chain
+        // to keep legacy behavior (allowCommands/denyCommands prefixes).
+        return this.classify(l).decision;
+      });
+      const agg = aggregate(effects);
+      if (agg) {
+        return {
+          decision: agg,
+          reason: `compound command (${scan.commandLines.length} subcommands) — aggregated: ${agg}`,
+          alwaysAllowPrefix: agg === "ask" ? extractFirstWord(command) + " " : undefined,
+        };
+      }
+    }
+
+    // Dynamic eval without a rule → ask (never execute unverified dynamic code).
+    if (scan?.ok && scan.hasDynamicEval) {
+      const e = matchRule(this.activeRules(), "shell", command);
+      if (e !== "allow") {
+        return {
+          decision: "ask",
+          reason: "dynamic evaluation (eval/source) — approval required",
+          alwaysAllowPrefix: extractFirstWord(command) + " ",
+        };
+      }
+    }
+
+    return this.classify(command);
   }
 
   /**

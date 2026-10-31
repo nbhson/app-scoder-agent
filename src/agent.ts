@@ -576,7 +576,7 @@ export class Agent {
         try {
           // Permission gate for shell commands
           if (tc.name === "run_command" && typeof args.command === "string") {
-            const decision = this.permissions.classify(args.command as string);
+            const decision = this.permissions.classifyShell(args.command as string);
             if (decision.decision === "deny") {
               result = {
                 ok: false,
