@@ -5,7 +5,8 @@ import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
 import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
-import { trimHistory, summariseOutput, claimsCompletion } from "./context.js";
+import { trimHistory, summariseOutput } from "./context.js";
+import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, type SessionFile } from "./session.js";
 import { JsonlLogger } from "./logger.js";
@@ -13,8 +14,7 @@ import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
 import * as ui from "./ui.js";
 
-/** Marker the model appends to a purely conversational reply (rule 9). */
-const CHAT_DONE_MARKER = "<<CHAT_DONE>>";
+// CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
 
 /** One-line environment snapshot for the system prompt (cache-stable per run). */
 function buildEnvInfo(workdir: string): string {
@@ -100,6 +100,8 @@ export type AgentEvent =
     }
   | { type: "build"; success: boolean; command: string; output: string }
   | { type: "todo"; items: TodoItem[] }
+  /** Guardrail Engine kích hoạt một rule (dùng cho metrics/debug frontend). */
+  | { type: "guardrail"; rule: string; action: string; reason: string }
   | { type: "finish"; success: boolean; steps: number; summary: string }
   | { type: "error"; message: string };
 
@@ -133,6 +135,15 @@ export class Agent {
   private pendingContext: string[] = [];
   /** Session plan (write_todos tool). */
   private plan: TodoItem[] = [];
+  /** Guardrail Engine — các rule an toàn/tiến trình của runLoop. */
+  private guardrails = createGuardrailEngine({}, (d) => this.logGuardrailDecision(d));
+
+  /** Log một quyết định guardrail ra JSONL + event (quan sát được, không ồn ào UI). */
+  private logGuardrailDecision(d: GuardrailDecision): void {
+    const kind = d.action.kind;
+    this.logger.log({ type: "guardrail", rule: d.rule, action: kind, reason: d.reason });
+    this.emit({ type: "guardrail", rule: d.rule, action: kind, reason: d.reason });
+  }
 
   constructor(private config: AgentConfig) {
     const commonOpts = {
@@ -511,7 +522,7 @@ export class Agent {
         // SIGINT during the LLM call — stop gracefully instead of crashing
         if (this.aborted) {
           return {
-            message: { role: "assistant", content: null, tool_calls: undefined },
+            message: { role: "assistant" as const, content: null, tool_calls: undefined },
             usage: undefined,
           };
         }
@@ -521,78 +532,39 @@ export class Agent {
       this.recordLlmUsage(usage);
       this.logger.log({ type: "step", step: steps });
 
-      // Wrap-up prefill: two steps before the budget ends, force the model to
-      // stop starting new work and converge (otherwise it burns the last
-      // steps exploring and the run fails without a summary).
-      if (!wrapUpInjected && this.config.maxSteps - steps === 2) {
-        wrapUpInjected = true;
-        this.messages.push({
-          role: "user",
-          content:
-            "<system-reminder>Step budget nearly exhausted (2 steps left). Stop starting new work: finish the current change, run the build command, and reply with a final summary. If the build cannot pass in the remaining steps, report exactly what remains in your final message.</system-reminder>",
-        });
+      // ── Chuẩn bị context cho Guardrail Engine ─────────────────────────────
+      // Chat marker được làm sạch ở đây để rule nhận text đã chuẩn hoá.
+      const hasToolCalls = !!message.tool_calls && message.tool_calls.length > 0;
+      let text = message.content ?? "";
+      let chatDone = false;
+      if (!hasToolCalls && text.includes(CHAT_DONE_MARKER)) {
+        chatDone = true;
+        text = text.split(CHAT_DONE_MARKER)[0].trim();
       }
 
-      // No tool calls => assistant produced a text answer
-      if (!message.tool_calls || message.tool_calls.length === 0) {
-        const text = message.content ?? "";
+      if (!hasToolCalls) {
         this.messages.push({ role: "assistant", content: text });
-
-        // Conversational reply (rule 9 marker): answer only, no build.
-        if (text.includes(CHAT_DONE_MARKER)) {
-          const clean = text.split(CHAT_DONE_MARKER)[0].trim();
-          this.messages[this.messages.length - 1] = { role: "assistant", content: clean };
-          ui.llm("agent", clean || "(no text)");
-          return this.finish(true, steps, buildCmd, clean || "Conversation turn complete.", true);
-        }
-
-        // If the assistant says it's done without building, force a build check.
-        if (claimsCompletion(text) && steps < this.config.maxSteps) {
-          // Nothing was written during this run — no build to verify (e.g. the
-          // agent only answered a question after reading the code).
-          if (!this.filesModified) {
-            ui.info("no files modified — skipping build verification");
-            ui.llm("agent", text);
-            return this.finish(true, steps, buildCmd, text);
-          }
-          ui.info("agent claims completion -> verifying with build");
-          lastBuild = await this.checkBuild(buildCmd);
-          if (lastBuild.success) {
-            return this.finish(true, steps, buildCmd, text);
-          }
-          this.messages.push({
-            role: "user",
-            content: `Build still FAILED after your claimed completion. Output:\n${summariseOutput(lastBuild.output)}\nFix and continue.`,
-          });
-          continue;
-        }
-
-        ui.llm("agent", text);
-        // Treat a plain text answer with no build as interim commentary; nudge loop.
-        // Safety valve: if the model only talks for 2 consecutive steps and
-        // hasn't modified any file, end the run instead of burning the step
-        // budget on an unproductive nudge loop (the "chào" failure mode).
         textOnlyStreak++;
-        if (textOnlyStreak >= 2 && !this.filesModified) {
-          return this.finish(true, steps, buildCmd, text);
-        }
+        ui.llm("agent", text);
+      } else {
         this.messages.push({
-          role: "user",
-          content: "Continue working on the task. Use tools. Build must pass before you finish.",
+          role: "assistant",
+          content: message.content ?? null,
+          tool_calls: message.tool_calls,
         });
-        continue;
+        textOnlyStreak = 0;
+        // Doom-loop tracking: chữ ký chuỗi tool call so với bước trước.
+        const callSig = message
+          .tool_calls!.map((tc) => `${tc.name}:${tc.arguments}`)
+          .sort()
+          .join("|");
+        sigRepeat = callSig === lastCallSig ? sigRepeat + 1 : 0;
+        lastCallSig = callSig;
       }
-
-      this.messages.push({
-        role: "assistant",
-        content: message.content ?? null,
-        tool_calls: message.tool_calls,
-      });
-      textOnlyStreak = 0;
 
       // Execute each tool call (validate args before running)
       const stepToolResults = new Map<string, { ok: boolean; output: string }>();
-      for (const tc of message.tool_calls) {
+      for (const tc of message.tool_calls ?? []) {
         if (this.aborted) break;
         const tool = getTool(tc.name);
         let args: Record<string, unknown>;
@@ -691,47 +663,66 @@ export class Agent {
         this.pushToolResult(tc, summariseOutput(result.output));
       }
 
-      // Doom-loop breaker: identical tool call(s) repeated 3x in a row →
-      // intervene with a strategy-change reminder (models rarely recover on
-      // their own; unattended runs would burn the whole step budget).
-      const callSig = message.tool_calls
-        .map((tc) => `${tc.name}:${tc.arguments}`)
-        .sort()
-        .join("|");
-      sigRepeat = callSig === lastCallSig ? sigRepeat + 1 : 0;
-      lastCallSig = callSig;
-      if (sigRepeat >= 2) {
-        this.messages.push({
-          role: "user",
-          content:
-            "<system-reminder>You have made the identical tool call 3 times in a row. This is a loop: read the last output carefully, change your approach, or report the blocker in your final message. Do NOT repeat the same call again.</system-reminder>",
-        });
-      }
-
-      // After a build-command run, treat success as the terminal condition.
-      // Match the FULL build command (not just its first word): matching "npm"
-      // would falsely trigger on "npm install" mid-task and end the agent.
-      const buildCall = message.tool_calls.find(
-        (tc) => tc.name === "run_command" && tc.arguments.includes(buildCmd),
-      );
+      // ── Guardrail Engine — đánh giá toàn bộ rule sau khi tools chạy xong ──
+      // Thông tin build stop condition: có tool call nào chạy ĐÚNG buildCmd?
+      const buildCall = hasToolCalls
+        ? message.tool_calls!.find((tc) => tc.name === "run_command" && tc.arguments.includes(buildCmd))
+        : undefined;
+      let buildPassedThisStep = false;
       if (buildCall) {
-        // Reuse the tool result when the agent ran the exact build command —
-        // avoids executing the build a second time just to verify.
-        const result = stepToolResults.get(buildCall.id);
-        if (result && result.ok) {
-          return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");
-        }
-        lastBuild = await this.checkBuild(buildCmd);
-        if (lastBuild.success) {
-          return this.finish(true, steps, buildCmd, message.content ?? "Build passed.");
-        }
-        this.messages.push({
-          role: "user",
-          content: `Build FAILED (stop condition not met). Error output:\n${summariseOutput(lastBuild.output)}\nAnalyze the errors, fix the code, and rebuild.`,
-        });
+        const r = stepToolResults.get(buildCall.id);
+        if (r && r.ok) buildPassedThisStep = true;
       }
 
-      this.messages = trimHistory(this.messages);
+      const decisions = this.guardrails.evaluate({
+        step: steps,
+        maxSteps: this.config.maxSteps,
+        text,
+        message,
+        hasToolCalls,
+        buildPassedThisStep,
+        buildCallPresent: !!buildCall,
+        filesModified: this.filesModified,
+        textOnlyStreak,
+        sigRepeat,
+        wrapUpInjected,
+        chatDone,
+      });
+
+      // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
+      let reminders: string[] = [];
+      let doTrim = false;
+      for (const d of decisions) {
+        const a = d.action;
+        if (a.kind === "inject") {
+          if (d.rule === "wrap-up") wrapUpInjected = true; // chỉ inject một lần / run
+          reminders.push(a.reminder);
+          continue;
+        }
+        if (a.kind === "trim") {
+          doTrim = true;
+          continue;
+        }
+        if (a.kind === "verify-build") {
+          // Xác minh độc lập với lời của model (async — loop tự chạy build).
+          lastBuild = await this.checkBuild(buildCmd);
+          if (lastBuild.success) {
+            if (doTrim) this.messages = trimHistory(this.messages);
+            return this.finish(true, steps, buildCmd, a.successSummary);
+          }
+          reminders.push(`${a.failReminder}\n${summariseOutput(lastBuild.output)}\nFix and continue.`);
+          continue;
+        }
+        if (a.kind === "finish") {
+          // Giữ nguyên thứ tự tin nhắn như bản inline cũ: reminder (wrap-up)
+          // đã đẩy trước khi kết thúc.
+          for (const r of reminders) this.messages.push({ role: "user", content: r });
+          if (doTrim) this.messages = trimHistory(this.messages);
+          return this.finish(a.success, steps, buildCmd, a.summary, a.chatOnly ?? false);
+        }
+      }
+      for (const r of reminders) this.messages.push({ role: "user", content: r });
+      if (doTrim) this.messages = trimHistory(this.messages);
 
       // Persist session state after every step (enables resume after crash/SIGINT)
       this.saveSession(steps, buildCmd, lastBuild);
