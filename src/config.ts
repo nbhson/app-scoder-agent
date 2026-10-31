@@ -36,6 +36,8 @@ export interface AgentConfig {
   permissionRules?: PermissionRule[];
   /** Streaming LLM responses */
   stream: boolean;
+  /** Compaction: false disables; object overrides trigger/keep/buffer/contextWindow (H-10). */
+  compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost` estimation */
   modelPricing?: Record<string, import("./constants.js").ModelPricing>;
 }
@@ -71,6 +73,8 @@ interface RcFile {
     /** Rule engine v2 (see NOTICE — pattern from opencode): {action, resource, effect}. */
     rules?: unknown;
   };
+  /** Auto-compaction (H-10): false = off, object = overrides. */
+  compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
 }
 
 function readRcFile(path: string, label: string): RcFile {
@@ -241,6 +245,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     permissionMode: overrides.permissionMode ??
       parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
     permissionRules: parsePermissionRules(rc.permissions?.rules),
+    compaction: rc.compaction ?? undefined,
     modelPricing: parsePricing(rc.modelPricing),
   };
 

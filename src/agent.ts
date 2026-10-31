@@ -10,6 +10,7 @@ import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from 
 import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
+import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
@@ -569,6 +570,10 @@ export class Agent {
     let lastCallSig = "";
     let sigRepeat = 0;
     let wrapUpInjected = false;
+    // H-10 compaction config (false = disabled → mechanical trim only).
+    const compactionCfg: CompactionConfig | null = this.config.compaction === false
+      ? null
+      : { ...DEFAULT_COMPACTION, ...(this.config.compaction ?? {}) };
 
     while (steps < this.config.maxSteps && !this.aborted) {
       // ── Safe step boundary: deliver steered user input (H-08) ────────────
@@ -851,6 +856,29 @@ export class Agent {
       }
       for (const r of reminders) this.messages.push({ role: "user", content: r });
       if (doTrim) this.messages = trimHistory(this.messages);
+
+      // H-10: LLM compaction when history approaches the context window.
+      if (compactionCfg && shouldCompact(this.messages, compactionCfg)) {
+        try {
+          ui.info("compaction: summarizing older history…");
+          const summaryInput = extractSummaryInput(this.currentTask, this.messages);
+          const summaryRes = await this.client.chat(
+            [
+              ...this.messages,
+              { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}` },
+            ],
+            [], // no tools for the summarizer call
+            { signal: this.runSignal.signal },
+          );
+          this.messages = applyCompaction(this.messages, summaryRes.message.content ?? "History summarized.", compactionCfg);
+          this.events.append({ type: "compaction.ran", tokensBefore: 0, summary: (summaryRes.message.content ?? "").slice(0, 2000) });
+          ui.info(`compaction: done (history now ${this.messages.length} messages)`);
+        } catch (err) {
+          // Compaction is best-effort — mechanical trim stays as fallback.
+          ui.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
+          this.messages = trimHistory(this.messages);
+        }
+      }
 
       // Persist session state after every step (enables resume after crash/SIGINT)
       this.saveSession(steps, buildCmd, lastBuild);
