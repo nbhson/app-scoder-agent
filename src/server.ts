@@ -18,6 +18,7 @@ import type { AgentConfig } from "./config.js";
  *   GET  /api/runs/:id            -> run status + result
  *   GET  /api/runs/:id/events     -> SSE stream (full replay, then live, closes on finish)
  *   POST /api/runs/:id/abort      -> abort a running run (like SIGINT)
+ *   POST /api/runs/:id/steer      -> steer a running run { text } (delivered at next step boundary)
  *
  * Auth: when SCODER_SERVER_TOKEN is set, every request must send
  * `Authorization: Bearer <token>`. The server binds 127.0.0.1 by default.
@@ -268,7 +269,7 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
     }
 
     // ── /api/runs/:id[...] ──
-    const runMatch = path.match(/^\/api\/runs\/([0-9a-f-]{36})(\/events|\/abort)?$/i);
+    const runMatch = path.match(/^\/api\/runs\/([0-9a-f-]{36})(\/events|\/abort|\/steer)?$/i);
     if (runMatch) {
       const record = runs.get(runMatch[1]);
       if (!record) {
@@ -287,6 +288,31 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
         record.abortRequested = true;
         record.agent.abort();
         sendJson(res, 200, { ok: true, status: "running (aborting...)" });
+        return;
+      }
+      if (runMatch[2] === "/steer" && req.method === "POST") {
+        if (record.status !== "running" || !record.agent) {
+          sendJson(res, 409, { error: `run is not running (status: ${record.status})` });
+          return;
+        }
+        let body = "";
+        req.on("data", (c: Buffer) => {
+          body += c.toString();
+          if (body.length > 1_000_000) req.destroy(); // 1MB cap
+        });
+        req.on("end", () => {
+          try {
+            const text = (JSON.parse(body) as { text?: unknown }).text;
+            if (typeof text !== "string" || !text.trim()) {
+              sendJson(res, 400, { error: "body must be {text: string}" });
+              return;
+            }
+            record.agent?.steer(text);
+            sendJson(res, 200, { ok: true, delivered: "next step boundary" });
+          } catch {
+            sendJson(res, 400, { error: "invalid JSON body" });
+          }
+        });
         return;
       }
       if (!runMatch[2] && req.method === "GET") {

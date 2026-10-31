@@ -66,6 +66,10 @@ export type AgentEvent =
     }
   | { type: "build"; success: boolean; command: string; output: string }
   | { type: "todo"; items: TodoItem[] }
+  /** User steering input accepted into the inbox (delivered at next step boundary). */
+  | { type: "steer_queued"; mode: "steer" | "queue"; text: string }
+  /** Steering batch delivered into the conversation at a step boundary. */
+  | { type: "steer_delivered"; count: number }
   /** MCP connect/status line (routed through the event stream, not stderr). */
   | { type: "mcp_status"; line: string }
   /** Guardrail Engine kích hoạt một rule (dùng cho metrics/debug frontend). */
@@ -92,6 +96,8 @@ export class Agent {
   private usageTotals: UsageTotals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
   private mcp: McpManager | null = null;
   /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
+  /** Steering inbox — user input delivered at safe step boundaries (H-08). */
+  private steerInbox: string[] = [];
   private runSignal = new AbortController();
   /** Optional structured-event sink (used by the HTTP/SSE server frontend). */
   onEvent: ((ev: AgentEvent) => void) | null = null;
@@ -167,6 +173,35 @@ export class Agent {
   abort(): void {
     this.aborted = true;
     this.runSignal.abort(new DOMException("interrupted by user", "AbortError"));
+  }
+
+  /**
+   * Steer: user input delivered at the NEXT safe step boundary (pattern from
+   * opencode "steer by default"). Injected as a user message before the next
+   * LLM call; resets the doom-loop text-allowance once for the whole batch.
+   */
+  steer(text: string): void {
+    const t = text.trim();
+    if (!t) return;
+    this.steerInbox.push(t);
+    this.events.append({ type: "steer.enqueued", mode: "steer", text: t });
+    this.emit({ type: "steer_queued", mode: "steer", text: t });
+  }
+
+  /** Queue: same inbox, but only relevant when the agent is idle (queued run). */
+  queue(text: string): void {
+    const t = text.trim();
+    if (!t) return;
+    this.steerInbox.push(t);
+    this.events.append({ type: "steer.enqueued", mode: "queue", text: t });
+    this.emit({ type: "steer_queued", mode: "queue", text: t });
+  }
+
+  /** Drain the steering inbox; delivered at the top of the next step. */
+  private drainSteerInbox(): string[] {
+    const drained = this.steerInbox;
+    this.steerInbox = [];
+    return drained;
   }
 
   /** Reset the run-signal so a new run() can use a fresh controller. */
@@ -507,6 +542,19 @@ export class Agent {
     let wrapUpInjected = false;
 
     while (steps < this.config.maxSteps && !this.aborted) {
+      // ── Safe step boundary: deliver steered user input (H-08) ────────────
+      const steered = this.drainSteerInbox();
+      if (steered.length > 0) {
+        for (const s of steered) {
+          this.messages.push({ role: "user", content: s });
+          this.events.append({ type: "message.added", message: { role: "user", content: s } });
+        }
+        // One allowance reset for the whole steering batch (opencode behavior).
+        textOnlyStreak = 0;
+        this.emit({ type: "steer_delivered", count: steered.length });
+        ui.info(`steer: +${steered.length} user message(s) delivered`);
+      }
+
       steps++;
       ui.step(steps, this.config.maxSteps, "thinking...");
       this.events.claimExecution(steps);

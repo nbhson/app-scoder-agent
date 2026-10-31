@@ -742,8 +742,12 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         return;
       }
       if (runningRef.current) {
-        // Never swallow input silently — tell the user why nothing happened.
-        pushNotice("agent is still running — press Esc to abort, or wait for it to finish", "warn");
+        // Steer: user input while the agent runs — deliver at next step
+        // boundary (H-08, "steer by default" — pattern from opencode).
+        writeInput("");
+        historyRef.current = [...historyRef.current, task].slice(-100);
+        agentRef.current?.steer(task);
+        update((s) => ({ ...s, items: [...s.items, { kind: "user", text: `${task}  (steered)` }] }));
         return;
       }
       writeInput("");
