@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import type { PermissionMode, PermissionRule, PermissionEffect } from "./permissions.js";
-import type { McpServerConfig } from "./mcp.js";
+import { parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 
 export interface AgentConfig {
   /** OpenAI-compatible base URL, e.g. https://api.openai.com/v1 */
@@ -36,6 +36,10 @@ export interface AgentConfig {
   permissionMode: PermissionMode;
   /** Rule engine v2 (from rc permissions.rules). */
   permissionRules?: PermissionRule[];
+  /** Resolved provider definition (I-01 registry — built-in or custom). */
+  providerDef?: import("./provider-registry.js").ProviderDef;
+  /** Model context window in tokens (from catalog I-02 or provider default). */
+  contextWindow?: number;
   /** Streaming LLM responses */
   stream: boolean;
   /** Compaction: false disables; object overrides trigger/keep/buffer/contextWindow (H-10). */
@@ -63,11 +67,13 @@ interface RcFile {
   provider?: string;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost`. */
   modelPricing?: Record<string, { input: number; output: number }>;
+  /** Custom providers (I-01): id -> {baseUrl, apiKeyEnv, kind}. */
+  providers?: unknown;
   /** Max steps before wrap-up reminder injection. */
   wrapUpStepsBeforeEnd?: number;
   /** Guardrail thresholds override (rc: "guardrails": {...}). */
   guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number };
-  mcpServers?: Record<string, McpServerConfig>;
+  mcpServers?: Record<string, import("./mcp.js").McpServerConfig>;
   permissions?: {
     mode?: string;
     allowCommands?: string[];
@@ -212,6 +218,19 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       /^claude-/i.test(overrides.model ?? process.env.SCODER_MODEL ?? rc.model ?? ""));
   const provider: ProviderName = providerRaw === "anthropic" || isAnthropic ? "anthropic" : "openai";
 
+  // I-01: provider registry — support "provider/model" syntax + custom providers.
+  const customProviders = parseCustomProviders(rc.providers);
+  const rawModel = overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? "";
+  const [providerPrefix, modelFromSlash] = splitProviderModel(rawModel);
+  const providerId = providerPrefix ?? (overrides as { provider?: string }).provider ?? process.env.SCODER_PROVIDER ?? rc.provider ?? (isAnthropic ? "anthropic" : "openai");
+  const providerResolution = resolveProvider(providerId, customProviders);
+  const providerDef = "def" in providerResolution ? providerResolution.def : undefined;
+  if ("error" in providerResolution) {
+    console.error(`⚠  provider: ${providerResolution.error} — falling back to openai-compatible behavior`);
+  }
+  // API key: provider-specific env var wins (registry), then legacy chain.
+  const providerKeyEnv = providerDef ? process.env[providerDef.apiKeyEnv] : undefined;
+
   // Validate maxSteps: NaN/0/negative would silently break the agent loop
   // (steps < NaN is always false → the loop never runs).
   const rawMaxSteps = Number(process.env.SCODER_MAX_STEPS ?? rc.maxSteps ?? 40);
@@ -223,11 +242,14 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     apiKey:
       overrides.apiKey ??
       process.env.SCODER_API_KEY ??
+      providerKeyEnv ??
       (isAnthropic ? process.env.ANTHROPIC_API_KEY : undefined) ??
       process.env.OPENAI_API_KEY ??
       rc.apiKey ??
       "",
-    model: overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL),
+    model: overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (modelFromSlash || (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL)),
+    providerDef,
+    contextWindow: (providerDef as { contextWindow?: number } | undefined)?.contextWindow,
     workdir,
     buildCmd: overrides.buildCmd ?? process.env.SCODER_BUILD_CMD ?? rc.buildCmd ?? null,
     maxSteps: overrides.maxSteps ?? validatedMaxSteps,

@@ -134,8 +134,9 @@ export class Agent {
       maxTokens: config.maxTokens,
       temperature: config.temperature,
     };
+    // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
     this.client =
-      config.provider === "anthropic"
+      config.providerDef?.kind === "anthropic" || (!config.providerDef && config.provider === "anthropic")
         ? new AnthropicClient(commonOpts)
         : new LlmClient({ ...commonOpts, stream: config.stream });
     const permLists = loadPermissionLists(config.workdir);
