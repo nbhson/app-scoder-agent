@@ -18,12 +18,19 @@ function fill(n, role = "user") {
 }
 
 describe("estimateTokens", () => {
-  it("~4 chars/token heuristic", () => {
-    assert.equal(estimateTokens([{ role: "user", content: "a".repeat(400) }]), 100);
+  it("token-accurate (gpt-tokenizer, I-10) — repeated chars nén tốt", () => {
+    const t = estimateTokens([{ role: "user", content: "a".repeat(400) }]);
+    // "aaaa…" nén mạnh (~50 tokens); char-heuristic cũ sẽ cho 100.
+    assert.ok(t > 0 && t <= 100, `tokens=${t}`);
   });
   it("counts tool_calls arguments too", () => {
     const t = estimateTokens([{ role: "assistant", content: null, tool_calls: [{ id: "1", name: "run_command", arguments: '{"command":"'.concat("x".repeat(396), '"}') }] }]);
-    assert.ok(t >= 100);
+    assert.ok(t > 20);
+  });
+  it("prose tiếng Anh ~4 chars/token", () => {
+    const prose = "The quick brown fox jumps over the lazy dog. ".repeat(10); // 460 chars
+    const t = estimateTokens([{ role: "user", content: prose }]);
+    assert.ok(t >= 80 && t <= 160, `tokens=${t}`);
   });
 });
 

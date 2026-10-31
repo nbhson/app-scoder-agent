@@ -184,7 +184,7 @@ describe("trimHistory", () => {
     const msgs = [{ role: "user", content: "hi" }];
     assert.equal(trimHistory(msgs).length, 1);
   });
-  it("ngân sách ký tự: drop nguyên turn cũ (không mồ côi tool result)", () => {
+  it("ngân sách token: drop nguyên turn cũ (không mồ côi tool result)", async () => {
     const turn = (i, withTool = true) => [
       { role: "user", content: `task ${i}` },
       ...(withTool
@@ -201,8 +201,10 @@ describe("trimHistory", () => {
       { role: "user", content: "final question" },
     ];
     const out = trimHistory(msgs);
-    const total = out.reduce((n, m) => n + (m.content?.length ?? 0), 0);
-    assert.ok(total <= 100_000 + 200_000 / 2, `budget respected (total=${total})`);
+    // I-10: token-accurate budget — mỗi turn 60k chars ≫ budget nên chỉ turn
+    // cuối sống; assert theo token count (x64 repeated chars nén ~ x tokens).
+    const { estimateTokens } = await import("../dist/compaction.js");
+    assert.ok(estimateTokens(out) < 90_000, `budget respected (tokens=${estimateTokens(out)})`);
     // mọi assistant tool_calls vẫn có tool result đi kèm
     for (let i = 0; i < out.length; i++) {
       const m = out[i];

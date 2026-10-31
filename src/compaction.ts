@@ -11,6 +11,7 @@
  * results — compaction only cuts at whole turn boundaries (user → next user).
  */
 import type { ChatMessage } from "./llm.js";
+import { encode } from "gpt-tokenizer";
 
 export interface CompactionConfig {
   /** Fraction of contextWindow that triggers compaction (default 0.8). */
@@ -30,16 +31,25 @@ export const DEFAULT_COMPACTION: CompactionConfig = {
   contextWindow: 128_000,
 };
 
-/** ~4 chars per token heuristic — good enough for trigger decisions. */
+/**
+ * Token-accurate count (I-10): gpt-tokenizer (offline, MIT) thay heuristic
+ * ~4 chars/token. Fallback char/4 nếu encode lỗi (never throw).
+ */
 export function estimateTokens(messages: ChatMessage[]): number {
   let chars = 0;
+  const texts: string[] = [];
   for (const m of messages) {
-    chars += m.content?.length ?? 0;
+    if (m.content) texts.push(m.content);
     if (m.tool_calls) {
-      for (const tc of m.tool_calls) chars += tc.name.length + tc.arguments.length;
+      for (const tc of m.tool_calls) texts.push(tc.name + tc.arguments);
     }
   }
-  return Math.ceil(chars / 4);
+  try {
+    return encode(texts.join("\n")).length + texts.length;
+  } catch {
+    for (const t of texts) chars += t.length;
+    return Math.ceil(chars / 4);
+  }
 }
 
 /** True when the history should be compacted now. */

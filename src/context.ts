@@ -1,19 +1,37 @@
 import type { ChatMessage } from "./llm.js";
+import { encode } from "gpt-tokenizer";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const MAX_MESSAGES = 120; // keep history under control for long runs
-/** Total history char budget (~25k tokens) before oldest turns are dropped. */
-const MAX_HISTORY_CHARS = 100_000;
+/**
+ * Total history token budget (I-10: token-accurate via gpt-tokenizer, thay
+ * char heuristic 100k chars ≈ 25k tokens). Conservative: system prompt +
+ * tool defs + reply buffer chiếm phần còn lại của contextWindow.
+ */
+const MAX_HISTORY_TOKENS = 90_000;
 /** Tool results older than this many recent tool messages get pruned. */
 const KEEP_RECENT_TOOL_RESULTS = 20;
+
+/** Token count for one message (tool_calls arguments included). Never throws. */
+function messageTokens(m: ChatMessage): number {
+  let text = m.content ?? "";
+  if (m.tool_calls) for (const tc of m.tool_calls) text += tc.name + tc.arguments;
+  try {
+    return encode(text).length;
+  } catch {
+    return Math.ceil(text.length / 4);
+  }
+}
+
+const historyTokens = (msgs: ChatMessage[]) => msgs.reduce((n, m) => n + messageTokens(m), 0);
 
 /**
  * Trim message history to stay within token budget. Layered strategy
  * (context engineering — inspired by compaction patterns, from scratch):
  *   1. Message-count cap: keep system + newest MAX_MESSAGES-1.
- *   2. Char budget: drop the OLDEST WHOLE TURNS (from a user message up to
- *      the next user message) until under MAX_HISTORY_CHARS — dropping whole
+ *   2. Token budget: drop the OLDEST WHOLE TURNS (from a user message up to
+ *      the next user message) until under MAX_HISTORY_TOKENS — dropping whole
  *      turns never orphans an assistant tool_calls / tool result pair.
  *   3. Old tool results (outside the recent window) are pruned in place to a
  *      short placeholder — their content dominated the budget anyway.
@@ -28,10 +46,8 @@ export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
     out = system ? [system, ...rest.slice(-(MAX_MESSAGES - 1))] : rest.slice(-(MAX_MESSAGES - 1));
   }
 
-  const historyChars = (msgs: ChatMessage[]) => msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0);
-
-  // 2) Char budget — drop oldest whole turns, never the system message
-  while (out.length > 2 && historyChars(out) > MAX_HISTORY_CHARS) {
+  // 2) Token budget — drop oldest whole turns, never the system message
+  while (out.length > 2 && historyTokens(out) > MAX_HISTORY_TOKENS) {
     const firstIdx = out[0].role === "system" ? 1 : 0;
     if (out[firstIdx]?.role !== "user") break; // no clean turn boundary — stop
     let next = firstIdx + 1;
