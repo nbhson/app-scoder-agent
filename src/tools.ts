@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
 import { unifiedDiff } from "./diff.js";
@@ -254,6 +254,116 @@ function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
 
   walk(root, 0);
   return { ok: true, output: out.length > 0 ? clamp(out.join("\n")) : "(empty directory)" };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// grep / glob (I-07)
+// ---------------------------------------------------------------------------
+
+const SEARCH_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
+const MAX_SEARCH_HITS = 50;
+
+/** Walk files under root (bounded depth, skip noise dirs), collect relative paths. */
+function walkFiles(root: string, cb: (rel: string, abs: string) => void, depth = 8): void {
+  if (depth <= 0) return;
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (SEARCH_SKIP.has(e.name)) continue;
+    const abs = join(root, e.name);
+    if (e.isDirectory()) walkFiles(abs, cb, depth - 1);
+    else if (e.isFile()) cb(e.name, abs);
+  }
+}
+
+/** ripgrep if on PATH; else grep -rn wrapper. Returns formatted hits or error. */
+export function toolGrep(workdir: string, args: { pattern: string; path?: string; include?: string }): ToolResult {
+  return toResult(() => {
+    const pattern = String(args.pattern ?? "").trim();
+    if (!pattern) return { ok: false, output: "ERROR: pattern is required." };
+    const root = safePath(workdir, args.path ?? ".");
+
+    // Fast path: ripgrep (respects .gitignore, fast, JSON output). Skip
+    // common noise dirs even when the project has no .gitignore.
+    const rgArgs = [
+      "--json", "--max-count", "5", "-e", pattern, root,
+      // rg globs match the printed (absolute) path — bare dir name excludes it
+      // anywhere in the tree; ** forms do NOT match absolute-path matches.
+      "--glob", "!node_modules", "--glob", "!.git", "--glob", "!dist",
+      "--glob", "!build", "--glob", "!.next", "--glob", "!__pycache__",
+      "--glob", "!.venv",
+    ];
+    if (args.include) rgArgs.push("-g", args.include);
+    const rg = spawnSync("rg", rgArgs, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    const lines: string[] = [];
+    let count = 0;
+    if ((rg.status ?? 2) === 0 || rg.stdout) {
+      for (const line of rg.stdout.split("\n")) {
+        if (!line || count >= MAX_SEARCH_HITS) break;
+        try {
+          const j = JSON.parse(line) as { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
+          if (j.type !== "match" || !j.data) continue;
+          const rel = relative(workdir, j.data.path?.text ?? "");
+          lines.push(`${rel}:${j.data.line_number}: ${(j.data.lines?.text ?? "").trimEnd().slice(0, 200)}`);
+          count++;
+        } catch { /* skip malformed */ }
+      }
+      if ((rg.status ?? 2) <= 1) {
+        return { ok: true, output: lines.length > 0 ? clamp(lines.join("\n")) : "(no matches)" };
+      }
+      // status >= 2 → rg error; fall through to grep fallback.
+    }
+
+    // Fallback: grep -rn (portable) — output already path:line:text.
+    const g = spawnSync("grep", ["-rn", "--binary-files=without-match", "-I", "-m", "5", "-e", pattern, root], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    const hits = (g.stdout ?? "").split("\n").filter(Boolean).slice(0, MAX_SEARCH_HITS)
+      .map((l) => l.startsWith(root) ? relative(workdir, root) + l.slice(root.length) : l);
+    if ((g.status ?? 2) > 1) return { ok: false, output: `ERROR: grep failed: ${(g.stderr ?? "").slice(0, 200)}` };
+    return { ok: true, output: hits.length > 0 ? clamp(hits.join("\n")) : "(no matches)" };
+  });
+}
+
+/** Mini glob: supports **, *, ?, {a,b}. Implemented over walkFiles (no deps). */
+export function globToRegExp(pattern: string): RegExp {
+  let rx = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        rx += ".*";
+        i++;
+        if (pattern[i + 1] === "/") i++; // `**/` also matches zero dirs
+      } else rx += "[^/]*";
+    } else if (c === "?") rx += "[^/]";
+    else if (c === "{") {
+      // {a,b} → (a|b)
+      const end = pattern.indexOf("}", i);
+      const inner = pattern.slice(i + 1, end).replace(/,/g, "|");
+      rx += `(${inner})`;
+      i = end;
+    } else rx += c.replace(/[.+^$()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${rx}$`);
+}
+
+export function toolGlob(workdir: string, args: { pattern: string; path?: string }): ToolResult {
+  return toResult(() => {
+    const pattern = String(args.pattern ?? "").trim();
+    if (!pattern) return { ok: false, output: "ERROR: pattern is required (e.g. 'src/**/*.ts')." };
+    const root = safePath(workdir, args.path ?? ".");
+    const rx = globToRegExp(pattern);
+    const out: string[] = [];
+    walkFiles(root, (_name, abs) => {
+      const rel = relative(workdir, abs);
+      if (rx.test(rel) && out.length < MAX_SEARCH_HITS * 4) out.push(rel);
+    });
+    out.sort();
+    return { ok: true, output: out.length > 0 ? clamp(out.join("\n")) : "(no files match)" };
   });
 }
 
@@ -572,6 +682,45 @@ export const AGENT_TOOLS: AgentTool[] = [
       },
     },
     run: (ctx, args) => toolWebFetch(ctx, args as { url: string; max_chars?: number }),
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "grep",
+        description:
+          "Search file contents with a regex (ripgrep-backed, gitignore-aware). Returns path:line:text hits, max 50. " +
+          "Use for finding code by symbol, error string, or pattern. Combine with read_file for context.",
+        parameters: obj(
+          {
+            pattern: str("Regular expression to search for"),
+            path: str("Directory or file to search (default: workdir root)"),
+            include: str("Glob filter for filenames, e.g. '*.ts'"),
+          },
+          ["pattern"],
+        ),
+      },
+    },
+    run: (ctx, args) => toolGrep(ctx.workdir, args as { pattern: string; path?: string; include?: string }),
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "glob",
+        description:
+          "Find files by glob pattern (supports **, *, ?, {a,b}). Returns matching paths sorted, max 200. " +
+          "Use when you know the filename shape but not the location.",
+        parameters: obj(
+          {
+            pattern: str("Glob pattern relative to workdir, e.g. 'src/**/*.ts'"),
+            path: str("Directory to search (default: workdir root)"),
+          },
+          ["pattern"],
+        ),
+      },
+    },
+    run: (ctx, args) => toolGlob(ctx.workdir, args as { pattern: string; path?: string }),
   },
 ];
 
