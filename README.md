@@ -247,7 +247,20 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | `/permission <auto\|readonly>` | switch permission mode at runtime |
 | `/exit` | quit |
 
-In the TUI, **Tab** completes commands (and `/skill` names), **↑/↓** recall sent-message history.
+In the TUI, **Tab** completes commands (and `/skill` names, `/mcp <server> <tool>` arguments), **↑/↓** recall sent-message history.
+
+### @file mentions
+
+Prefix any path with `@` in your task to inline its content into the agent's context:
+
+```bash
+scoder "fix the bug in @src/agent.ts"
+scoder "refactor the handlers in @src/handlers/ and update @README.md"
+```
+
+- `@src/file.ts` — file content is injected into the task; `@"path with spaces.ts"` for paths containing spaces
+- `@src/dir/` — directory listing injected instead
+- Emails (`bob@example.com`) are never treated as mentions; missing paths produce a visible note the LLM can react to; paths are contained to the working directory
 
 ## Planning tool
 
@@ -356,9 +369,9 @@ scoder tui "fix the bug"       # auto-submit an initial task
 Features:
 
 - **Alternate screen buffer** (vim/htop style) — the app owns the full screen: the header stays pinned at the top, input + status bar at the bottom, the chat pane scrolls internally, and your terminal content is restored on exit. Terminals without alt-screen support (`TERM=dumb`, non-TTY) automatically render inline instead.
-- **Build Rail** (pinned top bar) — brand, build lamp (`● build ok` / `● build fail` / `no build yet`), permission mode, and a step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`) that fills as the agent burns through its step budget
-- **Phase breadcrumb + live metrics** (second header row, while running) — `plan › explore › edit › build › verify` (current phase highlighted) on the left; tokens in/out, elapsed time, guardrail interventions, and the last guardrail rule on the right
+- **Build Rail** (pinned top bar) — brand, build lamp (`● build ok` / `● build fail` / `no build yet`), permission mode, and a step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`) that fills as the agent burns through its step budget- **Phase breadcrumb + live metrics** (second header row, while running) — `plan › explore › edit › build › verify` (current phase highlighted) on the left; tokens in→out, **tok/s**, elapsed time, and guardrail count on the right
 - **Chat pane** — your messages, streaming assistant text with a live block cursor (`▋`), and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running, wall-clock duration per tool), prefixed with a flight-recorder step number (`03▸`)
+- **Header row 2** — phase breadcrumb (`plan › explore › edit › build › verify`), live metrics (tokens in→out, **tok/s**, elapsed, guardrail count), and a human-readable one-line notice of the latest guardrail intervention (e.g. `⚠ agent reminder: agent trả lời text mà không dùng tool — nhắc tiếp tục làm việc`)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
 - **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
 - **Slash commands** — `/help`, `/clear`, `/cost`, `/model`, `/skills`, `/skill`, `/mcp`, `/review`, `/permission`, `/exit` (identical to the REPL)
@@ -542,7 +555,7 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + slash commands (`/help`, `/cost`) + clean exit
 - `test/tui-state.test.mjs` — event reducer unit tests: diff items, build lamp, abort marking, slash-command parsing & help formatting
 - `test/review-flow.test.mjs` — `/review` prompt-gate wiring: both pending stages, approved/cancelled outcomes, verbatim `rewritten_prompt` echo (security)
-- `test/core.test.mjs` — unified diff, retry backoff, context trimming
+- `test/core.test.mjs` — unified diff, retry backoff, context trimming, @file mention expansion
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve
 - `test/cost.test.mjs` — token usage & cost aggregation, session metrics (latency/success/guardrails)

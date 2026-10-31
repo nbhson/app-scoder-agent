@@ -5,7 +5,7 @@ import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
 import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
-import { trimHistory, summariseOutput } from "./context.js";
+import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
 import { PermissionChecker } from "./permissions.js";
@@ -66,6 +66,8 @@ export type AgentEvent =
     }
   | { type: "build"; success: boolean; command: string; output: string }
   | { type: "todo"; items: TodoItem[] }
+  /** MCP connect/status line (routed through the event stream, not stderr). */
+  | { type: "mcp_status"; line: string }
   /** Guardrail Engine kích hoạt một rule (dùng cho metrics/debug frontend). */
   | { type: "guardrail"; rule: string; action: string; reason: string }
   | { type: "finish"; success: boolean; steps: number; summary: string }
@@ -101,8 +103,8 @@ export class Agent {
   private pendingContext: string[] = [];
   /** Session plan (write_todos tool). */
   private plan: TodoItem[] = [];
-  /** Guardrail Engine — các rule an toàn/tiến trình của runLoop. */
-  private guardrails = createGuardrailEngine({}, (d) => this.logGuardrailDecision(d));
+  /** Guardrail Engine — khởi tạo trong constructor (cần this.config). */
+  private guardrails: ReturnType<typeof createGuardrailEngine>;
 
   /** Log một quyết định guardrail ra JSONL + event (quan sát được, không ồn ào UI). */
   private logGuardrailDecision(d: GuardrailDecision): void {
@@ -112,6 +114,7 @@ export class Agent {
   }
 
   constructor(private config: AgentConfig) {
+    this.guardrails = createGuardrailEngine(config.guardrails ?? {}, (d) => this.logGuardrailDecision(d));
     const commonOpts = {
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
@@ -325,6 +328,11 @@ export class Agent {
       ui.warn("readonly mode: MCP tools are disabled (they bypass the permission system)");
     }
     this.mcp = new McpManager(servers);
+    this.mcp.onStatus = (line) => {
+      this.logger.log({ type: "mcp_status", line });
+      this.emit({ type: "mcp_status", line });
+      ui.info(line); // setQuiet suppresses this in the TUI — alt-screen stays clean
+    };
     await this.mcp.connectAll();
     const mcpSpecs = this.mcp.toToolSpecs();
     if (mcpSpecs.length > 0) {
@@ -350,6 +358,8 @@ export class Agent {
     }
 
     const buildCmd = this.buildCmd;
+    // @file mention expansion — task trước khi build messages.
+    task = expandMentions(task, this.config.workdir);
     ui.banner("scoder", [
       ["task", task],
       ["model", `${this.client.model} (${this.config.provider}${this.config.stream ? ", stream" : ""})`],
@@ -412,6 +422,7 @@ export class Agent {
       return this.run(task);
     }
     const buildCmd = this.buildCmd;
+    task = expandMentions(task, this.config.workdir);
     this.currentTask = `${this.currentTask}\n${task}`.trim();
     this.resetRunSignal();
     this.resetUsageTotals();
@@ -448,7 +459,7 @@ export class Agent {
     if (followUp) {
       for (const content of this.pendingContext) this.messages.push({ role: "user", content });
       this.pendingContext = [];
-      this.messages.push({ role: "user", content: followUp });
+      this.messages.push({ role: "user", content: expandMentions(followUp, this.config.workdir) });
     } else {
       this.messages.push({
         role: "user",
@@ -528,8 +539,8 @@ export class Agent {
         });
         textOnlyStreak = 0;
         // Doom-loop tracking: chữ ký chuỗi tool call so với bước trước.
-        const callSig = message
-          .tool_calls!.map((tc) => `${tc.name}:${tc.arguments}`)
+        const callSig = (message.tool_calls ?? [])
+          .map((tc) => `${tc.name}:${tc.arguments}`)
           .sort()
           .join("|");
         sigRepeat = callSig === lastCallSig ? sigRepeat + 1 : 0;
@@ -639,8 +650,21 @@ export class Agent {
 
       // ── Guardrail Engine — đánh giá toàn bộ rule sau khi tools chạy xong ──
       // Thông tin build stop condition: có tool call nào chạy ĐÚNG buildCmd?
+      // Match theo arguments đã parse (đúng hơn substring: "npm run build && rm -rf /"
+      // vẫn tính là build call, nhưng lệnh echo chứa chuỗi buildCmd thì không).
       const buildCall = hasToolCalls
-        ? message.tool_calls!.find((tc) => tc.name === "run_command" && tc.arguments.includes(buildCmd))
+        ? (message.tool_calls ?? []).find(
+            (tc) =>
+              tc.name === "run_command" &&
+              (() => {
+                try {
+                  const a = JSON.parse(tc.arguments || "{}") as { command?: unknown };
+                  return typeof a.command === "string" && a.command.includes(buildCmd);
+                } catch {
+                  return false;
+                }
+              })(),
+          )
         : undefined;
       let buildPassedThisStep = false;
       if (buildCall) {

@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyEvent, initialState, markAborted } from "../dist/tui/state.js";
-import { parseSlashCommand, formatSlashHelp, SLASH_COMMANDS } from "../dist/tui/commands.js";
+import { parseSlashCommand, formatSlashHelp, SLASH_COMMANDS, completeMcpArg } from "../dist/tui/commands.js";
 
 const baseEvent = {
   type: "run_start",
@@ -150,14 +150,44 @@ describe("tui state — phase breadcrumb + guardrail tracking", () => {
     assert.deepEqual(s.phases, ["explore", "edit", "build", "verify"]);
   });
 
-  it("guardrail event: đếm + giữ decision gần nhất (rút gọn 60 ký tự)", async () => {
+  it("guardrail event: đếm + giữ message thân thiện gần nhất (rút gọn 72 ký tự)", async () => {
     let s = initialState();
     s = applyEvent(s, { type: "guardrail", rule: "doom-loop", action: "inject", reason: "x".repeat(80) });
     assert.equal(s.guardrailCount, 1);
-    assert.ok(s.lastGuardrail.startsWith("doom-loop · "));
-    assert.ok(s.lastGuardrail.length <= 60);
-    s = applyEvent(s, { type: "guardrail", rule: "build-stop", action: "finish", reason: "ok" });
+    // Rule có trong bảng HUMAN → thông điệp tiếng Việt tự giải thích, không dump raw reason.
+    assert.equal(s.lastGuardrail, "lặp lẫn lộn cùng tool call — yêu cầu đổi hướng");
+    s = applyEvent(s, { type: "guardrail", rule: "unknown-rule", action: "inject", reason: "y".repeat(80) });
     assert.equal(s.guardrailCount, 2);
-    assert.ok(s.lastGuardrail.startsWith("build-stop"));
+    // Rule lạ → fallback "rule: reason" rút gọn 72.
+    assert.ok(s.lastGuardrail.startsWith("unknown-rule: "));
+    assert.ok(s.lastGuardrail.length <= 72);
+  });
+});
+
+// ── completeMcpArg (/mcp Tab completion) ────────────────────────────────────
+
+describe("completeMcpArg", () => {
+  const servers = [
+    { name: "github", tools: [{ name: "get_me" }, { name: "get_tag" }] },
+    { name: "filesystem", tools: [{ name: "read_file" }] },
+  ];
+
+  it("đang gõ tên server -> hoàn thành", () => {
+    assert.equal(completeMcpArg("/mcp git", servers), "/mcp github ");
+    assert.equal(completeMcpArg("/mcp f", servers), "/mcp filesystem ");
+  });
+  it("nhiều server khớp -> common prefix", () => {
+    const two = [{ name: "alpha", tools: [] }, { name: "alphabet", tools: [] }];
+    assert.equal(completeMcpArg("/mcp al", two), "/mcp alpha");
+  });
+  it("server + tool -> hoàn thành tool", () => {
+    assert.equal(completeMcpArg("/mcp github get_m", servers), "/mcp github get_me ");
+  });
+  it("tool đang gõ kèm prefix mcp__ -> vẫn khớp", () => {
+    assert.equal(completeMcpArg("/mcp github mcp__github__get_t", servers), "/mcp github get_tag ");
+  });
+  it("không khớp -> null", () => {
+    assert.equal(completeMcpArg("/mcp zzz", servers), null);
+    assert.equal(completeMcpArg("/mcp nerver tool", servers), null);
   });
 });

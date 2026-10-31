@@ -1,6 +1,6 @@
 # Plan — app-coding-agent
 
-> Kế hoạch nâng cấp chuẩn enterprise — cập nhật: 28/10/2026 (Enterprise hardening session #2)
+> Kế hoạch nâng cấp chuẩn enterprise — cập nhật: 31/10/2026 (UX session #3)
 
 ## Tổng quan
 
@@ -180,6 +180,45 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
   price template) → nội dung sai NGẦM, không có dấu hiệu lỗi.
 - **Fix:** function replacement `content.replace(old, () => new)`.
   Regression test chèn literal `'$&' $` $' $1` xác minh.
+
+## UX session #3 (31/10/2026)
+
+### UX-1: StatusBar hiển thị token trùng lặp với header — ĐÃ FIX
+- `tok X/Y` hiện cả ở LiveMetrics (header row 2) lẫn StatusBar (dưới cùng)
+  → duplicated display.
+- **Fix:** bỏ tokens khỏi StatusBar; StatusBar chỉ còn status · elapsed · model.
+  Token chỉ hiển thị ở header metrics.
+
+### UX-2: Header guardrail hiển thị raw "⛨ 2 · continue-nudge · plain text answer without tool calls" — ĐÃ FIX
+- Không thể hiểu được ý nghĩa từ raw dump `rule · reason`.
+- **Fix:** guardrail tách khỏi hàng metrics, thành hàng riêng `⚠ agent reminder: …`
+  với thông điệp human-readable theo rule (state.ts HUMAN map, tiếng Việt):
+  ví dụ continue-nudge → "agent trả lời text mà không dùng tool — nhắc tiếp tục làm việc".
+  Metrics chỉ còn: tok in→out · tok/s · elapsed · guardrails N.
+
+### UX-3: Thêm tok/s vào live metrics — ĐÃ FIX
+- `tok 12.3k→5.4k · 89 tok/s · 2:14` — output tokens / elapsed seconds.
+
+### UX-4: @file mention (trụ 4 — MCP & Skills UX) — ĐÃ FIX
+- `expandMentions()` trong `context.ts`: `@src/a.ts` hoặc `@"path space"`.
+- Được expand trong `run()`, `runTurn()`, `resume(followUp)` — nội dung file
+  được inject thành block sau task; token mention bị remove khỏi text.
+- Directory mention → list entries; path escape workdir → bị chặn;
+  không match email (`bob@example.com` an toàn).
+- 6 unit tests mới trong `test/core.test.mjs`.
+
+### UX-5: Tab completion cho `/mcp <server> <tool>` (trụ 4) — ĐÃ FIX
+- `completeMcpArg()` trong `tui/commands.ts`: hoàn thành tên server rồi tool;
+  chấp nhận cả prefix `mcp__srv__tool` khi đang gõ.
+- TUI Input đọc `agent.mcpStatus()` (async) khi Tab trên `/mcp …`.
+
+## Kiểm chứng (UX session #3)
+
+```
+npm run typecheck  →  0 errors
+npm run lint       →  0 problems
+npm test           →  256/256 tests pass
+```
 
 ## Kiểm chứng
 

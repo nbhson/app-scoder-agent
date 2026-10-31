@@ -17,6 +17,8 @@ export interface AgentConfig {
   buildCmd: string | null;
   /** Max autonomous loop iterations before giving up */
   maxSteps: number;
+  /** Guardrail thresholds (doom-loop, text-only streak, wrap-up timing) */
+  guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number };
   /** Max tokens for chat completions */
   maxTokens: number;
   temperature: number;
@@ -55,6 +57,10 @@ interface RcFile {
   provider?: string;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost`. */
   modelPricing?: Record<string, { input: number; output: number }>;
+  /** Max steps before wrap-up reminder injection. */
+  wrapUpStepsBeforeEnd?: number;
+  /** Guardrail thresholds override (rc: "guardrails": {...}). */
+  guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number };
   mcpServers?: Record<string, McpServerConfig>;
   permissions?: {
     mode?: string;
@@ -201,6 +207,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
         ? true
         : process.env.SCODER_LOG_FILE || undefined),
     mcpServers: rc.mcpServers,
+    guardrails: rc.guardrails,
     stream: overrides.stream ?? (process.env.SCODER_STREAM !== "0" ? true : false),
     permissionMode: overrides.permissionMode ??
       parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),

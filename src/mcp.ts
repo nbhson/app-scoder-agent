@@ -43,6 +43,8 @@ export class McpConnection {
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }>();
   private buf = "";
+  /** Tail of the server's stderr (last 4KB) — surfaced on connect failures. */
+  stderrTail = "";
 
   constructor(
     readonly name: string,
@@ -59,7 +61,11 @@ export class McpConnection {
       env: { ...process.env, ...expandEnv(this.cfg.env) },
     });
     this.proc = p;
-    p.stderr?.on("data", () => { /* server diagnostics — ignore */ });
+    p.stderr?.on("data", (c: Buffer) => {
+      // Keep the tail for diagnostics (server logs/help output on crash);
+      // otherwise stderr is intentionally ignored.
+      this.stderrTail = (this.stderrTail + c.toString("utf8")).slice(-4096);
+    });
 
     p.on("error", (e) => this.drain(new Error(`spawn: ${e.message}`)));
     p.on("exit", () => this.drain(new Error("process exited")));
@@ -158,6 +164,8 @@ export interface RegisteredMcpTool {
 export class McpManager {
   private conns = new Map<string, McpConnection>();
   private tools = new Map<string, RegisteredMcpTool>();
+  /** Status sink (default console.error; the TUI routes it to a notice). */
+  onStatus: ((line: string) => void) | null = null;
 
   constructor(private configs: Record<string, McpServerConfig>) {}
 
@@ -176,13 +184,14 @@ export class McpManager {
         this.conns.set(name, conn);
       }),
     ).then((results) => {
+      const report = this.onStatus ?? ((line: string) => console.error(line));
       results.forEach((r, i) => {
         const name = Object.keys(this.configs)[i];
         if (r.status === "rejected") {
-          console.error(`⚠  MCP server "${name}" unavailable: ${String((r.reason as Error)?.message).slice(0, 160)}`);
+          report(`⚠  MCP server "${name}" unavailable: ${String((r.reason as Error)?.message).slice(0, 160)}`);
         } else {
           const n = [...this.tools.values()].filter((t) => t.serverName === name).length;
-          console.error(`✓ MCP "${name}" connected — ${n} tool${n === 1 ? "" : "s"}`);
+          report(`✓ MCP "${name}" connected — ${n} tool${n === 1 ? "" : "s"}`);
         }
       });
     });

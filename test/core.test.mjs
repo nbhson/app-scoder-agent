@@ -3,9 +3,12 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { unifiedDiff, diffCounts } from "../dist/diff.js";
 import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/retry.js";
-import { trimHistory, summariseOutput, claimsCompletion } from "../dist/context.js";
+import { trimHistory, summariseOutput, claimsCompletion, expandMentions } from "../dist/context.js";
 
 // ── diff ────────────────────────────────────────────────────────────────────
 
@@ -239,5 +242,38 @@ describe("claimsCompletion", () => {
     ]) {
       assert.equal(claimsCompletion(t), false, `không được khớp: "${t}"`);
     }
+  });
+});
+
+// ── expandMentions (@file mention) ──────────────────────────────────────────
+
+describe("expandMentions", () => {
+  const workdir = mkdtempSync(join(tmpdir(), "scoder-mention-"));
+  it("không có @ -> giữ nguyên task", () => {
+    assert.equal(expandMentions("fix the bug", workdir), "fix the bug");
+  });
+  it("email không bị hiểu là mention", () => {
+    assert.equal(expandMentions("mail me at bob@example.com about the bug", workdir), "mail me at bob@example.com about the bug");
+  });
+  it("@file tồn tại -> nội dung được inject, token bị remove", () => {
+    writeFileSync(join(workdir, "a.ts"), "export const x = 1;\n");
+    const r = expandMentions("fix @a.ts please", workdir);
+    assert.ok(r.includes("fix please"), `token phải bị remove: ${r}`);
+    assert.ok(r.includes("@a.ts:\nexport const x = 1;"), `nội dung phải được inject: ${r}`);
+  });
+  it("@path không tồn tại -> note rõ ràng, không crash", () => {
+    const r = expandMentions("check @nope.ts", workdir);
+    assert.match(r, /@nope\.ts: not found/);
+  });
+  it("@dir -> liệt kê entries", () => {
+    mkdirSync(join(workdir, "sub"));
+    writeFileSync(join(workdir, "sub", "f.js"), "x");
+    const r = expandMentions("look at @sub", workdir);
+    assert.match(r, /@sub\/ \(directory\)/);
+    assert.ok(r.includes("f.js"));
+  });
+  it("path escape workdir -> bị chặn", () => {
+    const r = expandMentions('see @"../outside.ts"', workdir);
+    assert.match(r, /escapes working directory/);
   });
 });

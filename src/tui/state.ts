@@ -119,14 +119,24 @@ export function toolPhase(name: string): string | null {
   return null;
 }
 
-/** Guardrail event: đếm + giữ decision gần nhất (rút gọn cho header). */
+/** Guardrail event: đếm + giữ decision gần nhất (ngắn, tự giải thích cho header). */
 function applyGuardrail(state: TuiState, ev: { rule: string; action: string; reason: string }): void {
   // history-trim là routine context management — đếm làm gì, hiện làm gì:
   // header chỉ hiển thị những can thiệp THẬT sự đáng chú ý (inject/finish/verify).
   if (ev.action === "trim") return;
   state.guardrailCount += 1;
-  state.lastGuardrail = `${ev.rule} · ${ev.reason}`;
-  if (state.lastGuardrail.length > 60) state.lastGuardrail = state.lastGuardrail.slice(0, 57) + "…";
+  // Thông điệp thân thiện theo rule — không dump raw "rule · reason" lên UI.
+  const HUMAN: Record<string, string> = {
+    "wrap-up": "sắp hết bước — yêu cầu agent chốt việc và chạy build",
+    "chat-done": "lượt chat thuần — kết thúc không cần build",
+    "completion-claim": "agent báo hoàn thành — buộc chạy build xác minh",
+    "text-only-streak": "agent chỉ nói không làm — dừng run",
+    "continue-nudge": "agent trả lời text mà không dùng tool — nhắc tiếp tục làm việc",
+    "doom-loop": "lặp lẫn lộn cùng tool call — yêu cầu đổi hướng",
+    "build-stop": "build pass — kết thúc run",
+  };
+  state.lastGuardrail = HUMAN[ev.rule] ?? `${ev.rule}: ${ev.reason}`;
+  if (state.lastGuardrail.length > 72) state.lastGuardrail = state.lastGuardrail.slice(0, 69) + "…";
 }
 
 /**
@@ -260,13 +270,21 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       applyGuardrail(state, ev);
       break;
     }
+    case "mcp_status": {
+      // MCP connect lines render as notices so they scroll with the chat.
+      appendItem(state, { kind: "notice", text: ev.line, level: ev.line.includes("unavailable") ? "warn" : "info" });
+      break;
+    }
     case "finish": {
       state.status = ev.success ? "success" : /interrupted|aborted/i.test(ev.summary) ? "aborted" : "failed";
       state.summary = ev.summary;
       state.endedAt = Date.now();
-      // Close any dangling streaming assistant message.
-      const last = lastItem(state);
-      if (last && last.kind === "assistant") last.streaming = false;
+      // Close ALL dangling streaming assistant messages — not just the last
+      // item: a notice/tool item appended after the assistant text would
+      // otherwise leave it stuck in raw streaming mode (invisible text).
+      for (const it of state.items) {
+        if (it.kind === "assistant" && it.streaming) it.streaming = false;
+      }
       break;
     }
     case "error": {

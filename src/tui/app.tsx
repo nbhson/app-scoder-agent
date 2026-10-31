@@ -17,7 +17,7 @@ import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
-import { completeSlashCommand, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
+import { completeSlashCommand, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
 import { Markdown } from "./markdown.js";
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
 
@@ -243,29 +243,26 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
   const perm = state.permission || config.permissionMode;
   const model = state.model || config.model || "—";
 
-  const right = gauge
-    ? `${gauge} ${state.step}/${state.maxSteps}`
-    : "— idle";
-  const middle = `⛨ ${perm}  ● ${lampLabel}`;
-  // MCP badge — server names from config (global + project), visible at a glance.
+  const right = gauge ? `${gauge} ${state.step}/${state.maxSteps}` : "— idle";
+  const lamp = `● ${lampLabel}`;
+  // Hàng 1: brand · model | ⛨ perm · ● lamp | gauge. MCP chỉ đếm số (tên xem qua /mcp).
   const mcpNames = Object.keys(config.mcpServers ?? {});
-  const mcpLabel = mcpNames.length > 0 ? ` · 🔌 ${mcpNames.join(",")}` : "";
-  // Guarantee no overlap: shrink the model name first.
-  const leftBudget = Math.max(8, width - right.length - middle.length - 4);
+  const mcpLabel = mcpNames.length > 0 ? ` · mcp×${mcpNames.length}` : "";
+  const leftBudget = Math.max(8, width - right.length - lamp.length - 12);
   // Hàng phụ chỉ hiện khi run đang hoạt động — idle giữ nguyên một hàng (minimalism).
   const showSecondRow = state.status === "running" || state.phases.length > 0;
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={theme.border} paddingX={1}>
+    <Box flexDirection="column" borderStyle="single" borderColor={theme.border} paddingX={1} flexShrink={0}>
       <Box justifyContent="space-between">
         <Text>
           <Text bold color={theme.brand}>scoder</Text>
-          <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length - mcpLabel.length - 2))}</Text>
+          <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length))}</Text>
           {mcpLabel && <Text color={theme.accent}>{mcpLabel}</Text>}
         </Text>
         <Text>
           <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
           <Text> </Text>
-          <Text color={lampColor}>● {lampLabel}</Text>
+          <Text color={lampColor}>{lamp}</Text>
         </Text>
         <Text>
           {gauge && (
@@ -280,9 +277,10 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
       {showSecondRow && (
         <Box justifyContent="space-between">
           <PhaseBreadcrumb phases={state.phases} />
-          <LiveMetrics state={state} maxWidth={Math.max(20, width - 40)} />
+          <LiveMetrics state={state} />
         </Box>
       )}
+      {showSecondRow && state.lastGuardrail && <GuardrailNotice text={state.lastGuardrail} />}
     </Box>
   );
 }
@@ -310,30 +308,33 @@ function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
   );
 }
 
-/** Metrics sống bên phải breadcrumb: tokens · elapsed · guardrail gần nhất. */
-function LiveMetrics({ state, maxWidth }: { state: TuiState; maxWidth: number }): React.JSX.Element {
+/** Metrics sống bên phải breadcrumb: tokens (in/out · tok/s) · elapsed · guardrails. */
+function LiveMetrics({ state }: { state: TuiState }): React.JSX.Element {
   const parts: string[] = [];
   if (state.usage.calls > 0) {
     const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-    parts.push(`tok ${fmt(state.usage.inputTokens)}/${fmt(state.usage.outputTokens)}`);
+    let tok = `tok ${fmt(state.usage.inputTokens)}→${fmt(state.usage.outputTokens)}`;
+    // tok/s: output tokens / elapsed seconds của run.
+    if (state.startedAt) {
+      const s = ((state.endedAt ?? Date.now()) - state.startedAt) / 1000;
+      if (s > 0.5) tok += ` · ${fmt(Math.round(state.usage.outputTokens / s))} tok/s`;
+    }
+    parts.push(tok);
   }
   if (state.startedAt) {
     const s = Math.floor(((state.endedAt ?? Date.now()) - state.startedAt) / 1000);
     parts.push(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
   }
   if (state.guardrailCount > 0) {
-    parts.push(`⛨ ${state.guardrailCount}`);
+    parts.push(`guardrails ${state.guardrailCount}`);
   }
-  // Ngân sách còn lại cho phần guardrail — không bao giờ wrap hàng header.
-  const base = parts.join(" · ");
-  const guardBudget = Math.max(0, maxWidth - base.length - 3);
   if (parts.length === 0) return <Text dimColor>starting…</Text>;
-  return (
-    <Text>
-      <Text dimColor>{base}</Text>
-      {state.lastGuardrail && guardBudget > 8 && <Text color={theme.warn}> · {fit(state.lastGuardrail, guardBudget)}</Text>}
-    </Text>
-  );
+  return <Text dimColor>{parts.join(" · ")}</Text>;
+}
+
+/** Guardrail can thiệp gần nhất — hàng riêng, văn bản tự giải thích, không nhồi vào hàng metrics. */
+function GuardrailNotice({ text }: { text: string }): React.JSX.Element | null {
+  return <Text color={theme.warn}>⚠ agent reminder: {text}</Text>;
 }
 
 function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null }): React.JSX.Element {
@@ -343,18 +344,17 @@ function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null 
   const statusLabel =
     state.status === "running" ? `running ${state.step}/${state.maxSteps}` : state.status === "idle" ? "idle" : state.status;
   const model = state.model || "—";
-  // Left: status · elapsed · model · tokens. Right: scroll position or keybinds.
+  // Left: status · elapsed · model. Right: scroll position or keybinds.
+  // (Tokens live in the header metrics row only — no duplicated display here.)
   const keybinds = scroll ? `↑ scrollback ${scroll} · ⏎ send · ctrl+c quit` : "⏎ send · pgup history · esc abort · ctrl+c quit";
   const leftBudget = Math.max(20, width - keybinds.length - 2);
   const elapsed = state.startedAt ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}` : null;
   let left = statusLabel + (state.status === "running" && elapsed ? ` · ${elapsed}` : "");
-  const tokens = state.usage.calls > 0 ? ` · tok ${state.usage.inputTokens}/${state.usage.outputTokens}` : "";
   const modelPart = ` · ${model}`;
-  if (left.length + modelPart.length + tokens.length <= leftBudget) left += modelPart + tokens;
-  else if (left.length + modelPart.length <= leftBudget) left += modelPart;
+  if (left.length + modelPart.length <= leftBudget) left += modelPart;
   else left = fit(left, leftBudget);
   return (
-    <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between">
+    <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between" flexShrink={0}>
       <Text>
         {state.status === "running" && <Spinner active />}
         {state.status === "running" ? " " : ""}
@@ -741,7 +741,11 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         pushNotice(`unknown command ${slash.cmd} — try /help`, "warn");
         return;
       }
-      if (runningRef.current) return; // keep the typed text for when the agent is idle
+      if (runningRef.current) {
+        // Never swallow input silently — tell the user why nothing happened.
+        pushNotice("agent is still running — press Esc to abort, or wait for it to finish", "warn");
+        return;
+      }
       writeInput("");
       historyRef.current = [...historyRef.current, task].slice(-100);
       runningRef.current = true;
@@ -760,7 +764,15 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         runningRef.current = false;
       } catch (err) {
         runningRef.current = false;
-        update((s) => applyEvent({ ...s, items: [...s.items] }, { type: "error", message: (err as Error).message }));
+        // Surface the failure through the reducer (not just a notice) so the
+        // status leaves "running" and the error is visible as the final line.
+        update((s) =>
+          applyEvent(
+            { ...s, items: [...s.items] },
+            { type: "finish", success: false, steps: s.step, summary: `Run failed: ${(err as Error).message}` },
+          ),
+        );
+        update((s) => ({ ...s, items: [...s.items, { kind: "notice", text: (err as Error).message, level: "error" }] }));
       }
     },
     [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep],
@@ -833,6 +845,14 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     return state.summary;
   }, [state.status, state.summary]);
 
+  // When the run ends, jump back to the bottom so the final summary is always
+  // visible — a user scrolled up would otherwise never see the conclusion.
+  const prevStatusRef = useRef(state.status);
+  useEffect(() => {
+    if (prevStatusRef.current === "running" && state.status !== "running") setScrollOffset(0);
+    prevStatusRef.current = state.status;
+  }, [state.status]);
+
   // The viewport renders ALL items (state.ts caps at 400) and scrolls with
   // contentOffsetY — real pixel-accurate scrollback with a sticky frame.
   // Perf cap: render at most the last RENDER_CAP items — older items stay in
@@ -843,7 +863,10 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   const visible = total > RENDER_CAP ? state.items.slice(-RENDER_CAP) : state.items;
 
   return (
-    <Box flexDirection="column" height={rows || 24}>
+    // flexShrink={0}: pinned chrome must never be squeezed when the chat
+    // content overflows — Ink defaults every box to flexShrink:1, which
+    // shrank the input bar to zero rows once the log outgrew the terminal.
+    <Box flexDirection="column" height={rows || 24} flexShrink={0}>
       <BuildRail state={state} config={config} />
       {/* Scrollable chat pane — clips overflow so the BuildRail above and the
           input + StatusBar below stay pinned no matter how long the history. */}
@@ -901,7 +924,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           )}
         </Box>
       </Box>
-      <Box paddingX={1}>
+      <Box paddingX={1} flexShrink={0}>
         <Input
           valueRef={inputRef}
           value={input}
@@ -909,6 +932,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           onSubmit={(v) => void submit(v)}
           historyRef={historyRef}
           skillNames={skillNames}
+          agentRef={agentRef}
         />
       </Box>
       <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
@@ -956,9 +980,11 @@ interface InputProps {
   historyRef: React.MutableRefObject<string[]>;
   /** Skill names for "/skill <Tab>" argument completion. */
   skillNames: string[];
+  /** Agent ref — /mcp Tab completion reads mcpStatus() lazily (servers + tools). */
+  agentRef: React.MutableRefObject<Agent | null>;
 }
 
-function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames }: InputProps): React.JSX.Element {
+function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
 
@@ -994,7 +1020,7 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames }: 
         onChange(v);
         return;
       }
-      // Tab — complete slash command (and /skill argument)
+      // Tab — complete slash command (and /skill, /mcp arguments)
       if (key.tab) {
         const argMatch = /^\/skill\s+(\S*)$/.exec(current);
         if (argMatch) {
@@ -1004,6 +1030,20 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames }: 
             const v = "/skill " + hits[0] + (hits.length === 1 ? " " : "");
             valueRef.current = v;
             onChange(v);
+          }
+          return;
+        }
+        if (/^\/mcp\s/.test(current)) {
+          // /mcp completion cần danh sách server/tools — async qua mcpStatus().
+          const agent = agentRef.current;
+          if (agent) {
+            void agent.mcpStatus().then((servers) => {
+              const v = completeMcpArg(current, servers);
+              if (v) {
+                valueRef.current = v;
+                onChange(v);
+              }
+            });
           }
           return;
         }

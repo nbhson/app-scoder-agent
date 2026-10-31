@@ -63,6 +63,53 @@ export function formatSlashHelp(commandName: string): string {
 }
 
 /**
+ * Tab completion for `/mcp` arguments: server name, then tool name.
+ * Input forms: "/mcp " → servers; "/mcp srv " → srv's tools; "/mcp srv par" → tools starting "par".
+ * Returns the completed text or null.
+ */
+export function completeMcpArg(
+  input: string,
+  servers: Array<{ name: string; tools: Array<{ name: string }> }>,
+): string | null {
+  const m = /^\/mcp\s+(\S*)$/.exec(input);
+  if (m) {
+    // Đang gõ tên server.
+    const partial = m[1].toLowerCase();
+    const hits = servers.filter((s) => s.name.toLowerCase().startsWith(partial));
+    if (hits.length === 1) return `/mcp ${hits[0].name} `;
+    if (hits.length > 1) {
+      let prefix = hits[0].name;
+      for (const h of hits.slice(1)) {
+        let i = 0;
+        while (i < prefix.length && i < h.name.length && prefix[i] === h.name[i]) i++;
+        prefix = prefix.slice(0, i);
+      }
+      return `/mcp ${prefix}`;
+    }
+    return null;
+  }
+  const tm = /^\/mcp\s+(\S+)\s+(\S*)$/.exec(input);
+  if (tm) {
+    // Đang gõ tên tool (bỏ prefix mcp__srv__ khi gõ).
+    const srv = servers.find((s) => s.name.toLowerCase() === tm[1].toLowerCase());
+    if (!srv) return null;
+    const partial = tm[2].toLowerCase().replace(/^mcp__\S+?__/, "");
+    const hits = srv.tools.filter((t) => t.name.toLowerCase().startsWith(partial));
+    if (hits.length === 1) return `/mcp ${srv.name} ${hits[0].name} `;
+    if (hits.length > 1) {
+      let prefix = hits[0].name;
+      for (const h of hits.slice(1)) {
+        let i = 0;
+        while (i < prefix.length && i < h.name.length && prefix[i] === h.name[i]) i++;
+        prefix = prefix.slice(0, i);
+      }
+      return `/mcp ${srv.name} ${prefix}`;
+    }
+  }
+  return null;
+}
+
+/**
  * Parse a `/mcp` exec invocation into (fullName, args).
  *
  * Forms:
