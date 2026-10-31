@@ -123,7 +123,7 @@ export const LLM_REQUEST_TIMEOUT_MS = 120_000;
 export function combinedSignal(
   external: AbortSignal | undefined,
   timeoutMs: number,
-): { signal: AbortSignal; cleanup: () => void } {
+): { signal: AbortSignal; cleanup: () => void; stopTimer: () => void } {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new DOMException("LLM request timed out", "TimeoutError")), timeoutMs);
   const onExternal = () => ac.abort(new DOMException("aborted", "AbortError"));
@@ -133,6 +133,8 @@ export function combinedSignal(
   }
   return {
     signal: ac.signal,
+    /** Clear only the request timer — keep the SIGINT listener alive. */
+    stopTimer: () => clearTimeout(timer),
     cleanup: () => {
       clearTimeout(timer);
       external?.removeEventListener("abort", onExternal);
@@ -293,10 +295,10 @@ export class LlmClient {
   async *streamChat(
     messages: ChatMessage[],
     tools: ToolSpec[],
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; idleTimeoutMs?: number } = {},
   ): AsyncGenerator<StreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const bodyStr = JSON.stringify({
       model: this.opts.model,
       messages: toWireMessages(messages),
@@ -335,6 +337,31 @@ export class LlmClient {
       throw new LlmError("Response body is not readable (not a streaming response)");
     }
 
+    // Headers received — the WHOLE-request timeout has served its purpose.
+    // A long stream is normal (big models can stream for minutes), so from
+    // here on we enforce an IDLE timeout instead: reset on every received
+    // chunk; only a truly silent connection for idleTimeoutMs kills the read.
+    // (The old whole-request timer fired mid-stream on long generations —
+    // "LLM stream timed out while reading the response".) SIGINT still aborts
+    // through the same signal — stopTimer keeps the external listener alive.
+    stopTimer();
+    const idleTimeoutMs = opts.idleTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+    const readWithIdleTimeout = async (): Promise<{ done: boolean; value?: Uint8Array }> => {
+      const ac = new AbortController();
+      const t = setTimeout(
+        () => ac.abort(new DOMException(`stream idle for ${idleTimeoutMs / 1000}s`, "TimeoutError")),
+        idleTimeoutMs,
+      );
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise<never>((_, rej) => ac.signal.addEventListener("abort", () => rej(ac.signal.reason), { once: true })),
+        ]) as { done: boolean; value?: Uint8Array };
+      } finally {
+        clearTimeout(t);
+      }
+    };
+
     // Accumulators for tool_calls across chunks
     const accumulatedToolCalls: Array<{
       id?: string;
@@ -351,10 +378,10 @@ export class LlmClient {
 
     try {
       while (true) {
-        // Guard the pending read against a late abort (e.g. the 120s timeout
+        // Guard the pending read against a late abort (e.g. the idle timeout
         // firing while the consumer paused at a yield): attaching a no-op
         // catch prevents an unhandled rejection from crashing the process.
-        const pending = reader.read();
+        const pending = readWithIdleTimeout();
         pending.catch(() => {});
         const { done, value } = await pending;
         if (done) break;
@@ -459,7 +486,7 @@ export class LlmClient {
       // normal provider failure instead of a stray DOMException.
       const e = err as Error;
       if (e?.name === "TimeoutError" || /TimeoutError/.test(e?.message ?? "")) {
-        throw new LlmError("LLM stream timed out while reading the response");
+        throw new LlmError(`LLM stream timed out (${(e?.message ?? "").includes("idle") ? `no data for ${e.message.replace(/^.*idle for /, "")}` : "while reading the response"})`);
       }
       throw err;
     } finally {

@@ -212,12 +212,26 @@ LLM lập kế hoạch → tools thực thi → build → loop đến khi build 
   chấp nhận cả prefix `mcp__srv__tool` khi đang gõ.
 - TUI Input đọc `agent.mcpStatus()` (async) khi Tab trên `/mcp …`.
 
+### UX-6: LLM stream bị giết giữa chừng trên generation dài — ĐÃ FIX
+- **Nguyên nhân:** `combinedSignal` đặt **whole-request timeout 120s** — không
+  reset khi stream vẫn chảy data. Model stream dài > 120s tổng → timer fire
+  giữa chừng → "LLM stream timed out while reading the response" → text treo
+  `▋`, run failed. Xảy ra thường xuyên với GLM Flash.
+- **Fix (cả `LlmClient` + `AnthropicClient`):** sau khi nhận response headers →
+  `stopTimer()` (giữ SIGINT listener); body-read dùng **idle timeout per
+  chunk** — reset mỗi lần nhận data, chỉ chết khi connection im lặng thật sự
+  120s (`readWithIdleTimeout` + `Promise.race`).
+- **Bài học TS:** helper phải là `async` — non-async return trong try/finally
+  chạy `clearTimeout` ngay khi return promise (trước khi settle) → timeout
+  không bao giờ fire.
+- 2 tests mới: stream 1.2s với idle 400ms vẫn sống; stream im lặng 250ms → LlmError.
+
 ## Kiểm chứng (UX session #3)
 
 ```
 npm run typecheck  →  0 errors
 npm run lint       →  0 problems
-npm test           →  256/256 tests pass
+npm test           →  258/258 tests pass
 ```
 
 ## Kiểm chứng

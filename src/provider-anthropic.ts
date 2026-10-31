@@ -218,11 +218,11 @@ export class AnthropicClient {
   async *streamChat(
     messages: ChatMessage[],
     tools: ToolSpec[],
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; idleTimeoutMs?: number } = {},
   ): AsyncGenerator<StreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
-    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const body = JSON.stringify({
       model: this.opts.model,
       max_tokens: this.opts.maxTokens,
@@ -280,6 +280,26 @@ export class AnthropicClient {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+
+    // Headers received — switch whole-request timeout to idle timeout per read
+    // (same rationale as LlmClient.streamChat: long streams are normal).
+    stopTimer();
+    const idleTimeoutMs = opts.idleTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+    const readWithIdleTimeout = async (): Promise<{ done: boolean; value?: Uint8Array }> => {
+      const ac = new AbortController();
+      const t = setTimeout(
+        () => ac.abort(new DOMException(`stream idle for ${idleTimeoutMs / 1000}s`, "TimeoutError")),
+        idleTimeoutMs,
+      );
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise<never>((_, rej) => ac.signal.addEventListener("abort", () => rej(ac.signal.reason), { once: true })),
+        ]) as { done: boolean; value?: Uint8Array };
+      } finally {
+        clearTimeout(t);
+      }
+    };
 
     const handleEvent = (raw: string): StreamChunk | null => {
       let ev: {
@@ -363,7 +383,7 @@ export class AnthropicClient {
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithIdleTimeout();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
@@ -396,8 +416,11 @@ export class AnthropicClient {
         };
       }
     } finally {
-      try { reader.cancel(); } catch { /* already released */ }
-      reader.releaseLock();
+      try {
+        const c = reader.cancel();
+        if (c && typeof (c as Promise<void>).catch === "function") c.catch(() => {});
+      } catch { /* already released */ }
+      try { reader.releaseLock(); } catch { /* lock already released */ }
       cleanup();
     }
 

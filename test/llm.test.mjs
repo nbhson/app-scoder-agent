@@ -135,6 +135,62 @@ describe("LlmClient.streamChat — SSE parsing", () => {
       await new Promise((res) => s2.close(res));
     }
   });
+
+  it("stream dài vẫn sống — idle timeout chỉ reset khi không nhận data (không whole-request)", async () => {
+    // Server gửi 1 chunk mỗi 150ms trong 1.2s — tổng 1.2s > idleTimeout 400ms.
+    // Whole-request timeout sẽ giết giữa chừng; idle timeout phải cho stream chạy hết.
+    const s3 = createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "close" });
+      let i = 0;
+      const timer = setInterval(() => {
+        i++;
+        if (i > 8) {
+          clearInterval(timer);
+          res.end('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+          return;
+        }
+        res.write(`data: {"choices":[{"delta":{"content":"t${i} "}}]}\n\n`);
+      }, 150);
+    });
+    await new Promise((res) => s3.listen(0, "127.0.0.1", res));
+    try {
+      const client = makeClient(s3.address().port);
+      let text = "";
+      let final;
+      for await (const chunk of client.streamChat([{ role: "user", content: "x" }], [], { idleTimeoutMs: 400 })) {
+        if (chunk.contentDelta) text += chunk.contentDelta;
+        if (chunk.done) final = chunk.final;
+      }
+      assert.ok(text.includes("t8"), `stream phải sống qua 1.2s (text: ${text})`);
+      assert.equal(final?.message.stop_reason, "stop");
+    } finally {
+      s3.closeAllConnections?.();
+      await new Promise((res) => s3.close(res));
+    }
+  });
+
+  it("stream im lặng quá idleTimeout -> LlmError 'timed out' (không treo vĩnh viễn)", async () => {
+    const s4 = createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream", Connection: "close" });
+      res.write('data: {"choices":[{"delta":{"content":"first"}}]}\n\n');
+      // Sau đó im lặng hoàn toàn — không end response.
+    });
+    await new Promise((res) => s4.listen(0, "127.0.0.1", res));
+    try {
+      const client = makeClient(s4.address().port);
+      await assert.rejects(
+        async () => {
+          for await (const chunk of client.streamChat([{ role: "user", content: "x" }], [], { idleTimeoutMs: 250 })) {
+            void chunk;
+          }
+        },
+        (err) => /timed out/i.test(err.message),
+      );
+    } finally {
+      s4.closeAllConnections?.();
+      await new Promise((res) => s4.close(res));
+    }
+  }, 10_000);
 });
 
 describe("LlmClient wire format (provider compatibility)", () => {
