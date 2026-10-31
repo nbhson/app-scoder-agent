@@ -12,6 +12,7 @@ import { PermissionChecker } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { SnapshotManager } from "./snapshot.js";
+import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
@@ -579,9 +580,16 @@ export class Agent {
     let toolErrorRepeat = 0;
     let lowTokenStreak = 0;
     // H-10 compaction config (false = disabled → mechanical trim only).
+    // I-02: contextWindow từ model catalog (lookup sync, cache/fallback) thay
+    // vì default 128k cứng — compaction trigger chính xác theo model.
+    const catalogWindow = contextWindowFor(this.config.provider, this.config.model);
     const compactionCfg: CompactionConfig | null = this.config.compaction === false
       ? null
-      : { ...DEFAULT_COMPACTION, ...(this.config.compaction ?? {}) };
+      : {
+          ...DEFAULT_COMPACTION,
+          contextWindow: this.config.contextWindow ?? catalogWindow,
+          ...(this.config.compaction ?? {}),
+        };
 
     while (steps < this.config.maxSteps && !this.aborted) {
       // ── Safe step boundary: deliver steered user input (H-08) ────────────

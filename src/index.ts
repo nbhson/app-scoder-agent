@@ -34,11 +34,13 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init";
+  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init" | "models";
   resumeId?: string;
   logsId?: string;
   logsFilter?: string;
   costSession?: string;
+  modelsProvider?: string;
+  modelsRefresh?: boolean;
   costLast?: number;
   serveHost?: string;
   servePort?: number;
@@ -54,6 +56,9 @@ USAGE
   scoder tui [task]                Full-screen terminal UI (chat pane, live tool feed)
   scoder init                      First-run wizard: writes .scoderrc.json + tests the connection
   scoder list                      List saved sessions for this directory
+  scoder models [provider] [--refresh]
+                                    Model catalog (context window, pricing) —
+                                    synced from models.dev, cached 24h
   scoder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
   scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
   scoder cost [--session <id>] [--last <n>]
@@ -213,6 +218,12 @@ function parseArgs(argv: string[]): CliArgs {
     // scoder tui [initial-task] — full-screen Ink interface
     args.subcommand = "tui";
     args.task = rest.length > 1 ? rest.slice(1).join(" ") : null;
+  } else if (rest[0] === "models") {
+    // scoder models [provider] [--refresh] — models.dev catalog (I-02)
+    args.subcommand = "models";
+    args.modelsProvider = rest[1] && !rest[1].startsWith("--") ? rest[1] : undefined;
+    args.modelsRefresh = rest.includes("--refresh");
+    args.task = null;
   } else if (rest[0] === "init") {
     args.subcommand = "init";
     args.task = null;
@@ -538,6 +549,25 @@ async function main(): Promise<void> {
       pricingOverrides: cfg.modelPricing,
     });
     console.log(formatCostReport(sessionCosts));
+    return;
+  }
+
+  if (args.subcommand === "models") {
+    const { loadCatalog, cacheAgeHours } = await import("./model-catalog.js");
+    const filter = args.modelsProvider ?? null;
+    const { models, source } = await loadCatalog(args.modelsRefresh === true);
+    const age = cacheAgeHours();
+    const ageStr = source === "fallback" ? "offline fallback snapshot" : age < 0 ? "?" : `${age.toFixed(1)}h ago`;
+    console.log(`models catalog — source: ${source} (updated ${ageStr}), ${Object.keys(models).length} entries\n`);
+    const rows = Object.values(models)
+      .filter((m) => !filter || m.provider === filter || m.id.includes(filter))
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id))
+      .slice(0, 60);
+    for (const m of rows) {
+      const flags = [m.supportCache ? "cache" : null, m.supportReasoning ? "reasoning" : null].filter(Boolean).join(",");
+      console.log(`  ${m.provider}/${m.id}  ctx=${(m.contextWindow / 1000).toFixed(0)}k${m.pricing ? `  $${m.pricing.input}/$${m.pricing.output} per 1M` : ""}${flags ? `  [${flags}]` : ""}`);
+    }
+    if (rows.length === 0) console.log(`  (no models match "${filter}")`);
     return;
   }
 
