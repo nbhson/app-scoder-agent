@@ -196,3 +196,54 @@ describe("formatCostReport", () => {
     assert.ok(report.includes("--log-file"));
   });
 });
+
+describe("session metrics (latency / success / guardrails)", () => {
+  it("extractSessionMetrics: đếm steps, latency, tools, guardrails, success", async () => {
+    // import ở đây để không ảnh hưởng phần import trên (file đã có import group riêng)
+    const { extractSessionMetrics } = await import("../dist/cost.js");
+    const events = [
+      { type: "step", step: 1, durationMs: 4000, toolCalls: 2 },
+      { type: "tool", step: 1, tool: "read_file", ok: true, elapsedMs: 5 },
+      { type: "guardrail", rule: "history-trim", action: "trim", reason: "x" },
+      { type: "step", step: 2, durationMs: 6000, toolCalls: 1 },
+      { type: "tool", step: 2, tool: "edit_file", ok: true, elapsedMs: 8 },
+      { type: "guardrail", rule: "build-stop", action: "finish", reason: "y" },
+      { type: "guardrail", rule: "doom-loop", action: "inject", reason: "z" },
+      { type: "finish", success: true, steps: 2 },
+    ];
+    const m = extractSessionMetrics(events);
+    assert.equal(m.stepCount, 2);
+    assert.equal(m.stepLatencyTotalMs, 10_000);
+    assert.equal(m.stepLatencyMaxMs, 6000);
+    assert.equal(m.toolCallCount, 2);
+    assert.equal(m.guardrailCount, 3);
+    assert.equal(m.success, true);
+  });
+
+  it("extractSessionMetrics: session trống / chưa finish -> success null", async () => {
+    const { extractSessionMetrics } = await import("../dist/cost.js");
+    const m = extractSessionMetrics([{ type: "step", step: 1, durationMs: 100 }]);
+    assert.equal(m.stepCount, 1);
+    assert.equal(m.success, null);
+  });
+
+  it("formatCostReport: hiển thị steps, llm-avg, success-rate", async () => {
+    const { extractSessionMetrics } = await import("../dist/cost.js");
+    writeLog("20260101-010101-mmm", [
+      { type: "llm_usage", model: "gpt-4o-mini", usage: { input_tokens: 100, output_tokens: 50 } },
+      { type: "step", step: 1, durationMs: 2000, toolCalls: 1 },
+      { type: "step", step: 2, durationMs: 4000, toolCalls: 0 },
+      { type: "tool", step: 1, tool: "read_file", ok: true, elapsedMs: 3 },
+      { type: "guardrail", rule: "history-trim", action: "trim", reason: "x" },
+      { type: "finish", success: true, steps: 2 },
+    ]);
+    const costs = collectUsage(TMP, { sessionId: "20260101-010101-mmm" });
+    assert.equal(costs[0].metrics.stepCount, 2);
+    const report = formatCostReport(costs);
+    assert.ok(report.includes("steps=2"), `phải có steps=2:\n${report}`);
+    assert.ok(report.includes("llm-avg=3.0s"), `phải có llm-avg=3.0s:\n${report}`);
+    assert.ok(report.includes("guardrails=1"));
+    assert.ok(report.includes("✓success"));
+    assert.ok(report.includes("success-rate=1/1"), `phải có success-rate:\n${report}`);
+  });
+});

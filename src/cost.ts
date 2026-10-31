@@ -113,9 +113,62 @@ export function loadSessionUsage(workdir: string, sessionId: string): UsageEvent
   return events ? extractUsageEvents(sessionId, events) : [];
 }
 
+// ── Session metrics (latency / success / guardrails) ────────────────────────
+
+export interface SessionMetrics {
+  /** Số bước agent đã chạy (event type=step). */
+  stepCount: number;
+  /** Tổng thời gian phần LLM của các bước (ms) — từ durationMs của event step. */
+  stepLatencyTotalMs: number;
+  /** Bước LLM chậm nhất (ms). */
+  stepLatencyMaxMs: number;
+  /** Số tool call đã thực thi. */
+  toolCallCount: number;
+  /** Số lần Guardrail Engine kích hoạt (mọi rule cộng lại). */
+  guardrailCount: number;
+  /** Kết quả cuối (event finish) — null nếu session chưa kết thúc. */
+  success: boolean | null;
+}
+
+const EMPTY_METRICS: SessionMetrics = {
+  stepCount: 0,
+  stepLatencyTotalMs: 0,
+  stepLatencyMaxMs: 0,
+  toolCallCount: 0,
+  guardrailCount: 0,
+  success: null,
+};
+
+/** Trích metrics hiệu năng từ raw JSONL events của một session. */
+export function extractSessionMetrics(events: Array<Record<string, unknown>>): SessionMetrics {
+  const m: SessionMetrics = { ...EMPTY_METRICS };
+  for (const ev of events) {
+    const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    switch (ev.type) {
+      case "step":
+        m.stepCount += 1;
+        m.stepLatencyTotalMs += num(ev.durationMs);
+        m.stepLatencyMaxMs = Math.max(m.stepLatencyMaxMs, num(ev.durationMs));
+        break;
+      case "tool":
+        m.toolCallCount += 1;
+        break;
+      case "guardrail":
+        m.guardrailCount += 1;
+        break;
+      case "finish":
+        m.success = ev.success === true;
+        break;
+    }
+  }
+  return m;
+}
+
 export interface SessionCost {
   sessionId: string;
   aggregate: UsageAggregate;
+  /** Metrics hiệu năng (latency/success/guardrails) từ cùng log JSONL. */
+  metrics: SessionMetrics;
 }
 
 /**
@@ -137,10 +190,14 @@ export function collectUsage(
   } else {
     ids = listLogSessions(workdir);
   }
-  return ids.map((id) => ({
-    sessionId: id,
-    aggregate: aggregateUsage(loadSessionUsage(workdir, id), opts.pricingOverrides),
-  }));
+  return ids.map((id) => {
+    const events = readJsonlLog(resolve(workdir, ".scoder/logs", `${id}.jsonl`)) ?? [];
+    return {
+      sessionId: id,
+      aggregate: aggregateUsage(extractUsageEvents(id, events), opts.pricingOverrides),
+      metrics: extractSessionMetrics(events),
+    };
+  });
 }
 
 /** Render a human-readable cost report (also used by tests to assert output). */
@@ -151,20 +208,33 @@ export function formatCostReport(sessionCosts: SessionCost[]): string {
 
   const grand: UsageAggregate = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, costUsd: 0 };
   const lines: string[] = ["COST REPORT"];
+  let successes = 0;
+  let finished = 0;
   for (const sc of sessionCosts) {
     const a = sc.aggregate;
+    const mx = sc.metrics;
     grand.calls += a.calls;
     grand.inputTokens += a.inputTokens;
     grand.outputTokens += a.outputTokens;
     grand.cachedTokens += a.cachedTokens;
     grand.costUsd += a.costUsd;
+    if (mx.success !== null) {
+      finished += 1;
+      if (mx.success) successes += 1;
+    }
+    const avgS = mx.stepCount > 0 ? (mx.stepLatencyTotalMs / mx.stepCount / 1000).toFixed(1) : null;
     lines.push(
-      `  ${sc.sessionId}  calls=${a.calls}  in=${a.inputTokens.toLocaleString("en-US")}  out=${a.outputTokens.toLocaleString("en-US")}  cached=${a.cachedTokens.toLocaleString("en-US")}  cost≈$${a.costUsd.toFixed(4)}`,
+      `  ${sc.sessionId}  calls=${a.calls}  in=${a.inputTokens.toLocaleString("en-US")}  out=${a.outputTokens.toLocaleString("en-US")}  cached=${a.cachedTokens.toLocaleString("en-US")}  cost≈$${a.costUsd.toFixed(4)}` +
+        (mx.stepCount > 0
+          ? `  |  steps=${mx.stepCount}${avgS ? ` llm-avg=${avgS}s` : ""} tools=${mx.toolCallCount} guardrails=${mx.guardrailCount}` +
+            (mx.success !== null ? ` ${mx.success ? "✓success" : "✗failed"}` : "")
+          : ""),
     );
   }
   grand.costUsd = Math.round(grand.costUsd * 10_000) / 10_000;
   lines.push(
-    `TOTAL (${sessionCosts.length} session(s))  calls=${grand.calls}  in=${grand.inputTokens.toLocaleString("en-US")}  out=${grand.outputTokens.toLocaleString("en-US")}  cached=${grand.cachedTokens.toLocaleString("en-US")}  cost≈$${grand.costUsd.toFixed(4)}`,
+    `TOTAL (${sessionCosts.length} session(s))  calls=${grand.calls}  in=${grand.inputTokens.toLocaleString("en-US")}  out=${grand.outputTokens.toLocaleString("en-US")}  cached=${grand.cachedTokens.toLocaleString("en-US")}  cost≈$${grand.costUsd.toFixed(4)}` +
+      (finished > 0 ? `  |  success-rate=${successes}/${finished}` : ""),
   );
   return lines.join("\n");
 }
@@ -173,3 +243,4 @@ export function formatCostReport(sessionCosts: SessionCost[]): string {
 export function logFilePath(workdir: string, sessionId: string): string {
   return join(workdir, ".scoder/logs", `${sessionId}.jsonl`);
 }
+

@@ -7,6 +7,7 @@ import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff, type TodoItem } 
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
+import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, type SessionFile } from "./session.js";
 import { JsonlLogger } from "./logger.js";
@@ -28,41 +29,6 @@ function buildEnvInfo(workdir: string): string {
   return `Environment: ${process.platform} · node ${process.version}${git} · today ${new Date().toISOString().slice(0, 10)}`;
 }
 
-const SYSTEM_PROMPT = `You are Scoder, an autonomous coding agent running in a terminal.
-You complete coding tasks by using tools: reading/writing/editing files, listing
-files, and running shell commands.
-
-RULES:
-1. Work autonomously. Do NOT ask the user questions mid-task; make reasonable
-   decisions and proceed.
-2. When you believe the task is done, call run_command with the project's build
-   command (or the one the user specified). The loop ends only when the build
-   succeeds.
-3. If the build fails, read the error output carefully, fix the code, and build
-   again. Iterate until it passes.
-4. Prefer small, focused edits. Read a file before editing it.
-5. If an external/environmental problem (missing dependency, wrong environment)
-   makes the task impossible, stop editing and report it clearly in your final
-   message.
-6. Never invent requirements beyond the given task.
-7. IMPORTANT: if a run_command is denied by permission policy, you will receive
-   an error message. Use this as a signal to find a safer alternative or to
-   communicate the limitation to the user.
-8. You have web access ONLY through web_fetch (it fetches exact URLs, it cannot
-   search). Use it when the task depends on external or fast-changing knowledge:
-   library/API documentation, a URL found in an error message or code comment,
-   current package versions, changelogs, release notes, standards. Skip it when
-   the answer is in the working directory or is stable general knowledge. After
-   fetching, ground your edits in what the page actually says.
-9. CONVERSATIONAL INPUT: if the user's message is purely conversational — a
-   greeting, thanks, a short question, or anything that needs no code changes
-   and no shell commands — do NOT use any tools and do NOT run a build. Reply
-   briefly in the user's language and end your reply with the exact marker
-   <<CHAT_DONE>> on its own last line.
-10. PLANNING: for any multi-step task, FIRST call write_todos with the full
-   plan, then work through it — mark each item completed IMMEDIATELY after it
-   is done (keep exactly one in_progress), and add newly discovered steps.
-   Keep the list current; the user watches it live.`;
 
 export interface AgentRunResult {
   success: boolean;
@@ -399,20 +365,25 @@ export class Agent {
     this.plan = [];
     const skillsBlock =
       this.skills.length > 0
-        ? `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(this.skills)}\nWhen a task matches a skill, call the load_skill tool with its name and follow the returned instructions.`
+        ? `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(this.skills)}\nDynamic selection: BEFORE planning, scan this index against the task. If any skill's description matches the task's domain or workflow, call load_skill with its name FIRST and follow the returned instructions — the skill may change how you approach the whole task. Do not load a skill merely because it is listed; only when it genuinely matches. If two skills match, prefer the more specific one.`
         : "";
     this.messages = [
       {
         role: "system",
-        content:
-          SYSTEM_PROMPT +
-          `\n\nWorking directory: ${this.config.workdir}\nBuild command (stop condition): ${buildCmd}\n${buildEnvInfo(this.config.workdir)}` +
+        content: buildSystemPrompt({
+          workdir: this.config.workdir,
+          buildCmd,
+          envInfo: buildEnvInfo(this.config.workdir),
           skillsBlock,
+        }),
       },
       ...this.pendingContext.map((content) => ({ role: "user" as const, content })),
       { role: "user", content: task },
     ];
     this.pendingContext = [];
+    // Phiên bản system prompt được ghi vào log — giúp so sánh chất lượng
+    // giữa các phiên bản prompt khi phân tích JSONL.
+    this.logger.log({ type: "prompt_version", version: PROMPT_VERSION });
     this.emit({
       type: "run_start",
       task,
@@ -518,6 +489,9 @@ export class Agent {
       ui.step(steps, this.config.maxSteps, "thinking...");
       this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
 
+      // Metrics: thời gian phần LLM của bước này (điều chỉnh chất lượng +
+      // so sánh provider; hiển thị trong `scoder cost`).
+      const stepStart = Date.now();
       const { message, usage } = await this.chatWithStream().catch((err: unknown) => {
         // SIGINT during the LLM call — stop gracefully instead of crashing
         if (this.aborted) {
@@ -530,7 +504,7 @@ export class Agent {
       });
       if (this.aborted) break;
       this.recordLlmUsage(usage);
-      this.logger.log({ type: "step", step: steps });
+      this.logger.log({ type: "step", step: steps, durationMs: Date.now() - stepStart, toolCalls: message.tool_calls?.length ?? 0 });
 
       // ── Chuẩn bị context cho Guardrail Engine ─────────────────────────────
       // Chat marker được làm sạch ở đây để rule nhận text đã chuẩn hoá.
