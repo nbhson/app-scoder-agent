@@ -17,9 +17,9 @@ import { withRetry } from "./retry.js";
 // ---------------------------------------------------------------------------
 
 type AnthropicContentBlock =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control?: { type: "ephemeral" } }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean; cache_control?: { type: "ephemeral" } };
 
 interface AnthropicMessage {
   role: "user" | "assistant";
@@ -146,8 +146,51 @@ export class AnthropicClient {
       model: string;
       maxTokens: number;
       temperature: number;
+      /** I-04: cache_control ephemeral on system + tools + last user turn. */
+      enableCache?: boolean;
     },
   ) {}
+
+  /**
+   * I-04 prompt caching — Anthropic 4-block formula (≤4 cache breakpoints):
+   * tools (last block), system, and the last user message get
+   * `cache_control: {type: "ephemeral"}`. Applied only when enableCache.
+   */
+  private applyCacheControl(
+    system: string | undefined,
+    translated: AnthropicMessage[],
+    tools: ToolSpec[] | undefined,
+  ): { system: unknown; messages: AnthropicMessage[]; tools: unknown } {
+    if (!this.opts.enableCache) return { system, messages: translated, tools };
+    const CC = { cache_control: { type: "ephemeral" } } as const;
+    // System: string → single block array with marker.
+    const sysOut = system
+      ? [{ type: "text", text: system, ...CC }]
+      : undefined;
+    // Tools: last definition carries the marker.
+    const toolsOut = tools && tools.length > 0
+      ? tools.map((t, i) => ({
+          name: t.function.name,
+          description: t.function.description,
+          input_schema: t.function.parameters,
+          ...(i === tools.length - 1 ? CC : {}),
+        }))
+      : undefined;
+    // Last user message: annotate final content block (string → block array).
+    const messages = [...translated];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        const c = messages[i].content;
+        if (typeof c === "string") {
+          messages[i] = { ...messages[i], content: [{ type: "text", text: c, ...CC }] };
+        } else if (c.length > 0) {
+          messages[i] = { ...messages[i], content: [...c.slice(0, -1), { ...c[c.length - 1], ...CC }] };
+        }
+        break;
+      }
+    }
+    return { system: sysOut, messages, tools: toolsOut };
+  }
 
   get model(): string {
     return this.opts.model;
@@ -161,20 +204,14 @@ export class AnthropicClient {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
     const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const cached = this.applyCacheControl(system, translated, tools);
     const body = JSON.stringify({
       model: this.opts.model,
       max_tokens: this.opts.maxTokens,
       temperature: this.opts.temperature,
-      system,
-      messages: translated,
-      tools:
-        tools.length > 0
-          ? tools.map((t) => ({
-              name: t.function.name,
-              description: t.function.description,
-              input_schema: t.function.parameters,
-            }))
-          : undefined,
+      system: cached.system,
+      messages: cached.messages,
+      tools: cached.tools,
     });
 
     let res: Response;
@@ -226,21 +263,15 @@ export class AnthropicClient {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
     const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const cached = this.applyCacheControl(system, translated, tools);
     const body = JSON.stringify({
       model: this.opts.model,
       max_tokens: this.opts.maxTokens,
       temperature: this.opts.temperature,
-      system,
-      messages: translated,
+      system: cached.system,
+      messages: cached.messages,
       stream: true,
-      tools:
-        tools.length > 0
-          ? tools.map((t) => ({
-              name: t.function.name,
-              description: t.function.description,
-              input_schema: t.function.parameters,
-            }))
-          : undefined,
+      tools: cached.tools,
     });
 
     let res: Response;

@@ -60,6 +60,8 @@ export interface ProviderRuntimeOptions {
   maxTokens: number;
   temperature: number;
   stream?: boolean;
+  /** I-04: enable Anthropic prompt caching (providerDef.supportCache). */
+  enableCache?: boolean;
 }
 
 /** Create the concrete runtime for a provider def. */
@@ -70,6 +72,7 @@ export function createRuntime(def: ProviderDef, opts: ProviderRuntimeOptions): P
     model: opts.model,
     maxTokens: opts.maxTokens,
     temperature: opts.temperature,
+    enableCache: opts.enableCache ?? def.supportCache,
   };
   if (def.kind === "anthropic") return new AnthropicClient(common);
   return new LlmClient({ ...common, stream: opts.stream });

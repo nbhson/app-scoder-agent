@@ -138,7 +138,7 @@ export class Agent {
     // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
     this.client =
       config.providerDef?.kind === "anthropic" || (!config.providerDef && config.provider === "anthropic")
-        ? new AnthropicClient(commonOpts)
+        ? new AnthropicClient({ ...commonOpts, enableCache: config.providerDef?.supportCache ?? true })
         : new LlmClient({ ...commonOpts, stream: config.stream });
     const permLists = loadPermissionLists(config.workdir);
     this.permissions = new PermissionChecker({
