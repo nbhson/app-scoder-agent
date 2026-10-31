@@ -117,3 +117,47 @@ describe("formatSlashHelp", () => {
     assert.ok(text.includes("scoder tui"));
   });
 });
+
+describe("tui state — phase breadcrumb + guardrail tracking", () => {
+  it("toolPhase: map đúng tool → phase", async () => {
+    const { toolPhase } = await import("../dist/tui/state.js");
+    assert.equal(toolPhase("write_todos"), "plan");
+    assert.equal(toolPhase("read_file"), "explore");
+    assert.equal(toolPhase("list_files"), "explore");
+    assert.equal(toolPhase("web_fetch"), "explore");
+    assert.equal(toolPhase("load_skill"), "explore");
+    assert.equal(toolPhase("write_file"), "edit");
+    assert.equal(toolPhase("edit_file"), "edit");
+    assert.equal(toolPhase("run_command"), "build");
+    assert.equal(toolPhase("mcp__x__y"), null);
+  });
+
+  it("run_start reset phases + guardrail; tool_call/build đẩy phase không trùng liền trước", async () => {
+    const { toolPhase } = await import("../dist/tui/state.js");
+    let s = initialState();
+    s = applyEvent(s, { type: "run_start", task: "t", model: "m", provider: "p", workdir: "/w", buildCmd: "b", permission: "auto" });
+    assert.deepEqual(s.phases, []);
+    assert.equal(s.guardrailCount, 0);
+    assert.equal(s.lastGuardrail, null);
+    s = applyEvent(s, { type: "tool_call", step: 1, id: "1", name: "read_file", args: {} });
+    s = applyEvent(s, { type: "tool_call", step: 1, id: "2", name: "read_file", args: {} });
+    assert.deepEqual(s.phases, ["explore"], "trùng phase liền trước không đẩy lại");
+    s = applyEvent(s, { type: "tool_call", step: 2, id: "3", name: "edit_file", args: {} });
+    assert.deepEqual(s.phases, ["explore", "edit"]);
+    s = applyEvent(s, { type: "tool_call", step: 3, id: "4", name: "run_command", args: {} });
+    assert.deepEqual(s.phases, ["explore", "edit", "build"]);
+    s = applyEvent(s, { type: "build", success: true, command: "b", output: "" });
+    assert.deepEqual(s.phases, ["explore", "edit", "build", "verify"]);
+  });
+
+  it("guardrail event: đếm + giữ decision gần nhất (rút gọn 60 ký tự)", async () => {
+    let s = initialState();
+    s = applyEvent(s, { type: "guardrail", rule: "doom-loop", action: "inject", reason: "x".repeat(80) });
+    assert.equal(s.guardrailCount, 1);
+    assert.ok(s.lastGuardrail.startsWith("doom-loop · "));
+    assert.ok(s.lastGuardrail.length <= 60);
+    s = applyEvent(s, { type: "guardrail", rule: "build-stop", action: "finish", reason: "ok" });
+    assert.equal(s.guardrailCount, 2);
+    assert.ok(s.lastGuardrail.startsWith("build-stop"));
+  });
+});

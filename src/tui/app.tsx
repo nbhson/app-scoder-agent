@@ -252,28 +252,87 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
   const mcpLabel = mcpNames.length > 0 ? ` · 🔌 ${mcpNames.join(",")}` : "";
   // Guarantee no overlap: shrink the model name first.
   const leftBudget = Math.max(8, width - right.length - middle.length - 4);
+  // Hàng phụ chỉ hiện khi run đang hoạt động — idle giữ nguyên một hàng (minimalism).
+  const showSecondRow = state.status === "running" || state.phases.length > 0;
   return (
-    <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between">
-      <Text>
-        <Text bold color={theme.brand}>scoder</Text>
-        <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length - mcpLabel.length - 2))}</Text>
-        {mcpLabel && <Text color={theme.accent}>{mcpLabel}</Text>}
-      </Text>
-      <Text>
-        <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
-        <Text> </Text>
-        <Text color={lampColor}>● {lampLabel}</Text>
-      </Text>
-      <Text>
-        {gauge && (
-          <>
-            <Text color={theme.brand}>{gauge}</Text>
-            <Text dimColor> {state.step}/{state.maxSteps}</Text>
-          </>
-        )}
-        {!gauge && <Text dimColor>— idle</Text>}
-      </Text>
+    <Box flexDirection="column" borderStyle="single" borderColor={theme.border} paddingX={1}>
+      <Box justifyContent="space-between">
+        <Text>
+          <Text bold color={theme.brand}>scoder</Text>
+          <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length - mcpLabel.length - 2))}</Text>
+          {mcpLabel && <Text color={theme.accent}>{mcpLabel}</Text>}
+        </Text>
+        <Text>
+          <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
+          <Text> </Text>
+          <Text color={lampColor}>● {lampLabel}</Text>
+        </Text>
+        <Text>
+          {gauge && (
+            <>
+              <Text color={theme.brand}>{gauge}</Text>
+              <Text dimColor> {state.step}/{state.maxSteps}</Text>
+            </>
+          )}
+          {!gauge && <Text dimColor>— idle</Text>}
+        </Text>
+      </Box>
+      {showSecondRow && (
+        <Box justifyContent="space-between">
+          <PhaseBreadcrumb phases={state.phases} />
+          <LiveMetrics state={state} maxWidth={Math.max(20, width - 40)} />
+        </Box>
+      )}
     </Box>
+  );
+}
+
+/** Breadcrumb tiến trình: plan › explore › edit › build › verify. */
+const PHASE_SEQUENCE = ["plan", "explore", "edit", "build", "verify"] as const;
+
+function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
+  const current = phases[phases.length - 1] ?? null;
+  return (
+    <Text>
+      {PHASE_SEQUENCE.map((p, i) => {
+        const visited = phases.includes(p);
+        const isCurrent = p === current;
+        return (
+          <Text key={p}>
+            {i > 0 && <Text dimColor> › </Text>}
+            <Text color={isCurrent ? theme.accent : visited ? theme.success : theme.dim} bold={isCurrent}>
+              {p}
+            </Text>
+          </Text>
+        );
+      })}
+    </Text>
+  );
+}
+
+/** Metrics sống bên phải breadcrumb: tokens · elapsed · guardrail gần nhất. */
+function LiveMetrics({ state, maxWidth }: { state: TuiState; maxWidth: number }): React.JSX.Element {
+  const parts: string[] = [];
+  if (state.usage.calls > 0) {
+    const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+    parts.push(`tok ${fmt(state.usage.inputTokens)}/${fmt(state.usage.outputTokens)}`);
+  }
+  if (state.startedAt) {
+    const s = Math.floor(((state.endedAt ?? Date.now()) - state.startedAt) / 1000);
+    parts.push(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
+  }
+  if (state.guardrailCount > 0) {
+    parts.push(`⛨ ${state.guardrailCount}`);
+  }
+  // Ngân sách còn lại cho phần guardrail — không bao giờ wrap hàng header.
+  const base = parts.join(" · ");
+  const guardBudget = Math.max(0, maxWidth - base.length - 3);
+  if (parts.length === 0) return <Text dimColor>starting…</Text>;
+  return (
+    <Text>
+      <Text dimColor>{base}</Text>
+      {state.lastGuardrail && guardBudget > 8 && <Text color={theme.warn}> · {fit(state.lastGuardrail, guardBudget)}</Text>}
+    </Text>
   );
 }
 
@@ -644,9 +703,12 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
 
   // The viewport renders ALL items (state.ts caps at 400) and scrolls with
   // contentOffsetY — real pixel-accurate scrollback with a sticky frame.
+  // Perf cap: render at most the last RENDER_CAP items — older items stay in
+  // state (scrolling only covers this window) so long runs keep Ink fast.
   const { rows } = useWindowSize();
+  const RENDER_CAP = 200;
   const total = state.items.length;
-  const visible = state.items;
+  const visible = total > RENDER_CAP ? state.items.slice(-RENDER_CAP) : state.items;
 
   return (
     <Box flexDirection="column" height={rows || 24}>
@@ -734,8 +796,11 @@ export async function runTui(config: AgentConfig, initialTask: string | null): P
   // Alternate screen buffer (vim/htop style): the app owns the whole screen,
   // the BuildRail stays pinned at the top and the input at the bottom while
   // the chat pane scrolls internally. Terminal content is restored on exit.
+  // Fallback: terminals without alt-screen support (TERM=dumb, non-TTY pipes,
+  // some CI runners) render inline instead — the layout still works.
+  const altScreen = process.stdout.isTTY === true && process.env.TERM !== "dumb";
   const { waitUntilExit } = render(<TuiApp config={config} initialTask={initialTask} bootNotice={bootNotice} />, {
-    alternateScreen: true,
+    alternateScreen: altScreen,
   });
   await waitUntilExit();
   // Ink restores the terminal on unmount; exit explicitly so provider

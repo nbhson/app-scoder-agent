@@ -54,8 +54,16 @@ export interface TuiState {
   permission: string;
   /** Unix ms when the current/last run started — drives the elapsed timer. */
   startedAt: number | null;
+  /** Unix ms when the run finished — freezes the elapsed timer. */
+  endedAt: number | null;
   usage: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number };
   summary: string | null;
+  /** Tổng số lần Guardrail Engine kích hoạt trong run. */
+  guardrailCount: number;
+  /** Guardrail gần nhất — "rule: reason" (ngắn) hiển thị trên header. */
+  lastGuardrail: string | null;
+  /** Các giai đoạn đã đi qua trong run (breadcrumb): plan/explore/edit/build/verify. */
+  phases: string[];
 }
 
 export function initialState(): TuiState {
@@ -71,8 +79,12 @@ export function initialState(): TuiState {
     buildLamp: "none",
     permission: "",
     startedAt: null,
+    endedAt: null,
     usage: { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
     summary: null,
+    guardrailCount: 0,
+    lastGuardrail: null,
+    phases: [],
   };
 }
 
@@ -96,6 +108,28 @@ function capTail(text: string, max = MAX_OUTPUT_CHARS): string {
 }
 
 /**
+ * Map tên tool → phase của breadcrumb (plan→explore→edit→build→verify).
+ * Trả về null với tool không thuộc phase nào (mcp__*...).
+ */
+export function toolPhase(name: string): string | null {
+  if (name === "write_todos") return "plan";
+  if (name === "list_files" || name === "read_file" || name === "web_fetch" || name === "load_skill") return "explore";
+  if (name === "write_file" || name === "edit_file") return "edit";
+  if (name === "run_command") return "build";
+  return null;
+}
+
+/** Guardrail event: đếm + giữ decision gần nhất (rút gọn cho header). */
+function applyGuardrail(state: TuiState, ev: { rule: string; action: string; reason: string }): void {
+  // history-trim là routine context management — đếm làm gì, hiện làm gì:
+  // header chỉ hiển thị những can thiệp THẬT sự đáng chú ý (inject/finish/verify).
+  if (ev.action === "trim") return;
+  state.guardrailCount += 1;
+  state.lastGuardrail = `${ev.rule} · ${ev.reason}`;
+  if (state.lastGuardrail.length > 60) state.lastGuardrail = state.lastGuardrail.slice(0, 57) + "…";
+}
+
+/**
  * Fold one AgentEvent into the state (mutates `state`, returns it for
  * reducer-style chaining). Unknown events are ignored.
  */
@@ -109,10 +143,15 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.buildLamp = "none";
       state.permission = ev.permission;
       state.startedAt = Date.now();
+      state.endedAt = null;
       state.status = "running";
       state.step = 0;
       state.summary = null;
       state.usage = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+      // Reset tracking của run mới.
+      state.guardrailCount = 0;
+      state.lastGuardrail = null;
+      state.phases = [];
       // The TUI pushes the user's message itself when submitting; avoid a
       // duplicate when run_start carries the same task.
       const last = lastItem(state);
@@ -161,6 +200,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         step: ev.step,
         startedAt: Date.now(),
       });
+      // Phase tracking cho breadcrumb (không trùng phase liền trước).
+      const phase = toolPhase(ev.name);
+      if (phase && state.phases[state.phases.length - 1] !== phase) state.phases.push(phase);
       break;
     }
     case "tool_output": {
@@ -205,6 +247,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     }
     case "build": {
       state.buildLamp = ev.success ? "ok" : "fail";
+      if (state.phases[state.phases.length - 1] !== "verify") state.phases.push("verify");
       appendItem(state, { kind: "build", success: ev.success, command: ev.command });
       break;
     }
@@ -213,9 +256,14 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       appendItem(state, { kind: "todo", items: ev.items.map((t) => ({ ...t })) });
       break;
     }
+    case "guardrail": {
+      applyGuardrail(state, ev);
+      break;
+    }
     case "finish": {
       state.status = ev.success ? "success" : /interrupted|aborted/i.test(ev.summary) ? "aborted" : "failed";
       state.summary = ev.summary;
+      state.endedAt = Date.now();
       // Close any dangling streaming assistant message.
       const last = lastItem(state);
       if (last && last.kind === "assistant") last.streaming = false;
@@ -233,6 +281,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
 export function markAborted(state: TuiState): TuiState {
   state.status = "aborted";
   state.summary = "abort requested…";
+  state.endedAt = Date.now();
   const last = lastItem(state);
   if (last && last.kind === "assistant") last.streaming = false;
   return state;
