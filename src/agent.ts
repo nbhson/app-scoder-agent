@@ -1,6 +1,7 @@
 import type { AgentConfig } from "./config.js";
 import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval } from "./config.js";
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
+import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
 import { getTool, setTaskRunner, allToolSpecs, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
@@ -315,6 +316,151 @@ export class Agent {
     this.emit({ type: "tool_result", step, name: tc.name, ok: false, output });
     this.logger.log({ type: "tool", step, tool: tc.name, ok: false, ...logExtra });
     this.pushToolResult(tc, output);
+  }
+
+  /** I-09: tools safe to run concurrently (pure reads, no permission ask). */
+  private static READONLY_TOOLS = new Set(["read_file", "list_files", "grep", "glob", "load_skill"]);
+
+  /**
+   * I-09: bounded-concurrency map preserving input order.
+   */
+  private async parallelMap<T, R>(
+    items: T[],
+    fn: (item: T, index: number) => Promise<R>,
+    limit: number,
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let next = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i], i);
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
+  /**
+   * Execute one tool call end-to-end: validate args, render, permission gate,
+   * run (builtin or MCP), log, and emit result. Returns `post` side-effects to
+   * run by the caller AFTER the whole batch completes — in parallel mode these
+   * must not interleave with other calls' work (messages order, abort checks).
+   */
+  private async executeToolCall(
+    tc: ToolCall,
+    steps: number,
+    stepToolResults: Map<string, { ok: boolean; output: string }>,
+  ): Promise<{ post?: () => void }> {
+    const tool = getTool(tc.name);
+    let args: Record<string, unknown>;
+    try {
+      args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
+    } catch {
+      this.pushToolResult(tc, `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`);
+      return {};
+    }
+
+    ui.toolCall(tc.name, args);
+    this.currentToolCall = { step: steps, id: tc.id, name: tc.name };
+    this.emit({ type: "tool_call", step: steps, id: tc.id, name: tc.name, args });
+
+    if (!tool && !this.mcp?.hasTool(tc.name)) {
+      this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${allToolSpecs().map((t) => t.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
+      return {};
+    }
+
+    let result: ToolResult;
+    try {
+      // Permission gate for shell commands
+      if (tc.name === "run_command" && typeof args.command === "string") {
+        const decision = this.permissions.classifyShell(args.command as string);
+        if (decision.decision === "deny") {
+          const output = `ERROR: command denied by permission policy (${decision.reason}): ${String(args.command).slice(0, 200)}`;
+          this.rejectToolCall(steps, tc, output, { args, denied: decision.reason });
+          return {};
+        }
+        if (decision.decision === "ask") {
+          const allowed = await this.permissions.confirm(args.command as string);
+          if (!allowed) {
+            const output = `ERROR: user denied permission to run: ${String(args.command).slice(0, 200)}`;
+            this.rejectToolCall(steps, tc, output, { args, denied: "user" });
+            return {};
+          }
+        }
+      }
+
+      const t0 = Date.now();
+      // Route MCP tools first (they carry the mcp__ prefix, not in AGENT_TOOLS)
+      if (tool) {
+        result = await tool.run(this.ctx, args);
+      } else {
+        // MCP tools — per-tool permission action (pattern from opencode:
+        // action mcp__<server>__<tool>; wildcard rules supported).
+        const mcpDecision = this.permissions.classifyAction(tc.name, "*");
+        if (mcpDecision?.decision === "deny") {
+          const output = `ERROR: MCP tool "${tc.name}" denied by permission policy (${mcpDecision.reason}).`;
+          this.rejectToolCall(steps, tc, output, { args, denied: mcpDecision.reason });
+          return {};
+        }
+        if (this.config.permissionMode === "readonly" && mcpDecision?.decision !== "allow") {
+          result = {
+            ok: false,
+            output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. Allow it explicitly with a permission rule (mcp__${tc.name.replace(/^mcp__/, "").replace(/__/, "__")} or a wildcard).`,
+          };
+        } else if (mcpDecision?.decision === "ask" && !this.config.yes) {
+          const allowed = await this.permissions.confirmMcpTool(tc.name);
+          if (!allowed) {
+            const output = `ERROR: user denied permission to call MCP tool: ${tc.name}`;
+            this.rejectToolCall(steps, tc, output, { args, denied: "user" });
+            return {};
+          }
+          result = await this.invokeMcpTool(tc.name, args);
+        } else {
+          result = await this.invokeMcpTool(tc.name, args);
+        }
+      }
+      this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: result.ok, elapsedMs: Date.now() - t0 });
+    } catch (err) {
+      result = { ok: false, output: `ERROR: ${(err as Error).message}` };
+      this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: false, error: (err as Error).message });
+    }
+
+    // User pressed [q]uit in an edit-confirmation prompt — stop the whole run.
+    if (this.permissions.abortRequested) {
+      this.aborted = true;
+      ui.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
+    }
+
+    const filesModified = result.ok && (tc.name === "write_file" || tc.name === "edit_file");
+    return {
+      post: () => {
+        // Track file modifications — a completion claim with no edits needs no
+        // build verification, and conversational turns never touch files.
+        if (filesModified) this.filesModified = true;
+        this.endToolStream();
+        this.currentToolCall = null;
+        ui.toolResult(tc.name, result.ok, result.output);
+        this.emit({
+          type: "tool_result",
+          step: steps,
+          name: tc.name,
+          ok: result.ok,
+          output: result.output,
+          ...(result.diff ? { diff: result.diff } : {}),
+        });
+        stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
+        this.pushToolResult(tc, summariseOutput(result.output));
+      },
+    };
+  }
+
+  /** MCP tool call with output clamp (extracted for I-09 readability). */
+  private async invokeMcpTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+    const reg = this.mcp?.getTool(name);
+    if (!reg) return { ok: false, output: `ERROR: unknown tool "${name}"` };
+    const r = await reg.conn.callTool(reg.toolName, args);
+    return { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
   }
 
   /**
@@ -724,133 +870,41 @@ export class Agent {
       // H-11: checkpoint before any batch that may write files.
       const batchMayWrite = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file");
       if (batchMayWrite) this.snapshots.capture(`step ${steps}: ${(message.tool_calls ?? []).map((t) => t.name).join(",")}`);
-      for (const tc of message.tool_calls ?? []) {
-        if (this.aborted) break;
-        const tool = getTool(tc.name);
-        let args: Record<string, unknown>;
+      // I-09: parallelize read-only tool calls (concurrency cap 4); mutating
+      // calls (and any batch containing an ask-gated call) run sequentially.
+      const calls = message.tool_calls ?? [];
+      const needsAsk = calls.some((tc) => {
+        if (tc.name !== "run_command") return false;
         try {
-          args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
+          const a = JSON.parse(tc.arguments || "{}") as { command?: unknown };
+          if (typeof a.command !== "string") return false;
+          const d = this.permissions.classifyShell(a.command);
+          return d.decision === "ask" || d.decision === "deny";
         } catch {
-          this.pushToolResult(tc, `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`);
-          continue;
+          return true;
         }
-
-        ui.toolCall(tc.name, args);
-        this.currentToolCall = { step: steps, id: tc.id, name: tc.name };
-        this.emit({ type: "tool_call", step: steps, id: tc.id, name: tc.name, args });
-
-        if (!tool && !(this.mcp?.hasTool(tc.name))) {
-          this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${allToolSpecs().map((t) => t.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
-          continue;
-        }
-
-        let result;
-        try {
-          // Permission gate for shell commands
-          if (tc.name === "run_command" && typeof args.command === "string") {
-            const decision = this.permissions.classifyShell(args.command as string);
-            if (decision.decision === "deny") {
-              result = {
-                ok: false,
-                output: `ERROR: command denied by permission policy (${decision.reason}): ${String(args.command).slice(0, 200)}`,
-              };
-              this.rejectToolCall(steps, tc, result.output, { args, denied: decision.reason });
-              continue;
-            }
-            if (decision.decision === "ask") {
-              const allowed = await this.permissions.confirm(args.command as string);
-              if (!allowed) {
-                result = {
-                  ok: false,
-                  output: `ERROR: user denied permission to run: ${String(args.command).slice(0, 200)}`,
-                };
-                this.rejectToolCall(steps, tc, result.output, { args, denied: "user" });
-                continue;
-              }
-            }
+      });
+      if (calls.length > 1 && !needsAsk) {
+        const readOnly = calls.every((tc) => Agent.READONLY_TOOLS.has(tc.name));
+        if (readOnly) {
+          const results = await this.parallelMap(calls, (tc) => this.executeToolCall(tc, steps, stepToolResults), 4);
+          for (const r of results) {
+            if (r.post) r.post();
           }
-
-          const t0 = Date.now();
-          // Route MCP tools first (they carry the mcp__ prefix, not in AGENT_TOOLS)
-          if (tool) {
-            result = await tool.run(this.ctx, args);
-          } else {
-            // MCP tools — per-tool permission action (pattern from opencode:
-            // action mcp__<server>__<tool>; wildcard rules supported).
-            const mcpDecision = this.permissions.classifyAction(tc.name, "*");
-            if (mcpDecision?.decision === "deny") {
-              result = {
-                ok: false,
-                output: `ERROR: MCP tool "${tc.name}" denied by permission policy (${mcpDecision.reason}).`,
-              };
-              this.rejectToolCall(steps, tc, result.output, { args, denied: mcpDecision.reason });
-              continue;
-            }
-            if (this.config.permissionMode === "readonly" && mcpDecision?.decision !== "allow") {
-              result = {
-                ok: false,
-                output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. Allow it explicitly with a permission rule (mcp__${tc.name.replace(/^mcp__/, "").replace(/__/, "__")} or a wildcard).`,
-              };
-            } else if (mcpDecision?.decision === "ask" && !this.config.yes) {
-              const allowed = await this.permissions.confirmMcpTool(tc.name);
-              if (!allowed) {
-                result = {
-                  ok: false,
-                  output: `ERROR: user denied permission to call MCP tool: ${tc.name}`,
-                };
-                this.rejectToolCall(steps, tc, result.output, { args, denied: "user" });
-                continue;
-              }
-              const reg = this.mcp?.getTool(tc.name);
-              if (!reg) {
-                result = { ok: false, output: `ERROR: unknown tool "${tc.name}"` };
-              } else {
-                const r = await reg.conn.callTool(reg.toolName, args);
-                result = { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
-              }
-            } else {
-            const reg = this.mcp?.getTool(tc.name);
-            if (!reg) {
-              result = { ok: false, output: `ERROR: unknown tool "${tc.name}"` };
-            } else {
-              const r = await reg.conn.callTool(reg.toolName, args);
-              result = { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
-            }
-            }
+        } else {
+          for (const tc of calls) {
+            if (this.aborted) break;
+            const r = await this.executeToolCall(tc, steps, stepToolResults);
+            if (r.post) r.post();
           }
-          this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: result.ok, elapsedMs: Date.now() - t0 });
-        } catch (err) {
-          result = { ok: false, output: `ERROR: ${(err as Error).message}` };
-          this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: false, error: (err as Error).message });
         }
-
-        // User pressed [q]uit in an edit-confirmation prompt — stop the whole run.
-        if (this.permissions.abortRequested) {
-          this.aborted = true;
-          ui.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
+      } else {
+        for (const tc of calls) {
+          if (this.aborted) break;
+          const r = await this.executeToolCall(tc, steps, stepToolResults);
+          if (r.post) r.post();
         }
-
-        // Track file modifications — a completion claim with no edits needs no
-        // build verification, and conversational turns never touch files.
-        if (result.ok && (tc.name === "write_file" || tc.name === "edit_file")) {
-          this.filesModified = true;
-        }
-
-        this.endToolStream();
-        this.currentToolCall = null;
-        ui.toolResult(tc.name, result.ok, result.output);
-        this.emit({
-          type: "tool_result",
-          step: steps,
-          name: tc.name,
-          ok: result.ok,
-          output: result.output,
-          ...(result.diff ? { diff: result.diff } : {}),
-        });
-        stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
-        this.pushToolResult(tc, summariseOutput(result.output));
       }
-
       // ── Guardrail Engine — đánh giá toàn bộ rule sau khi tools chạy xong ──
       // Thông tin build stop condition: có tool call nào chạy ĐÚNG buildCmd?
       // Match theo arguments đã parse (đúng hơn substring: "npm run build && rm -rf /"
