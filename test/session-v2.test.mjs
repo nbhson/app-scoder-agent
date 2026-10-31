@@ -100,10 +100,12 @@ describe("sessionFromEventLog / loadSession / listSessions — v2 read path", ()
     assert.equal(sf.messages.length, 1);
   });
 
-  it("listSessions includes v2 + orders newest first", () => {
+  it("listSessions includes v2 + orders newest first", async () => {
     const s1 = new EventSessionStore(workdir, true);
     s1.append({ type: "run.started", task: "older" });
     s1.writeManifest({ task: "older", model: "m", provider: "p", buildCmd: null, steps: 1, maxSteps: 5 });
+    // Ensure distinct updatedAt timestamps (same-ms writes race the sort).
+    await new Promise((r) => setTimeout(r, 10));
     const s2 = new EventSessionStore(workdir, true);
     s2.append({ type: "run.started", task: "newer" });
     s2.writeManifest({ task: "newer", model: "m", provider: "p", buildCmd: null, steps: 2, maxSteps: 5 });

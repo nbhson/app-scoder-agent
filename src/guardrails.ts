@@ -71,6 +71,14 @@ export interface GuardrailContext {
   wrapUpInjected: boolean;
   /** Assistant vừa phát marker kết thúc lượt chat. */
   chatDone: boolean;
+  /** Chuỗi signature "tool+error" gần nhất — error-loop tracking (H-12). */
+  toolErrorSig: string;
+  /** Số lần lặp liên tiếp cùng tool + cùng error. */
+  toolErrorRepeat: number;
+  /** Output tokens của bước này (token-no-progress, H-12). */
+  outputTokensThisStep?: number;
+  /** Số bước liên tiếp outputTokens < 20 (H-12). */
+  textOnlyLowTokenStreak: number;
 }
 
 // ── Options: ngưỡng cấu hình được cho các rule ──────────────────────────────
@@ -195,9 +203,55 @@ export function textOnlyStreakRule(opts: GuardrailOptions): GuardrailRule {
   };
 }
 
+/**
+ * Error-loop breaker (H-12): cùng tool + cùng error lặp lại 3 lần ⇒ inject
+ * "change approach" — doom-loop mở rộng bằng signature bao gồm error hash.
+ */
+export function errorLoopRule(_opts: GuardrailOptions): GuardrailRule {
+  return {
+    name: "error-loop",
+    description: "same tool + same error 3x in a row — force a strategy change",
+    evaluate(ctx) {
+      if (ctx.toolErrorRepeat < 2) return null; // 3rd occurrence = repeat 2
+      return {
+        action: {
+          kind: "inject",
+          reminder:
+            "<system-reminder>The same tool call has failed with the same error 3 times. Stop retrying: the approach itself is wrong. Diagnose the root cause, try a fundamentally different method, or report the blocker in your final message.</system-reminder>",
+        },
+        reason: `same tool+error repeated ${ctx.toolErrorRepeat + 1}x`,
+      };
+    },
+  };
+}
+
+/**
+ * Token-no-progress (H-12): outputTokens < 20 trong 3 step liên tiếp ⇒ finish
+ * (model degenerate — tránh treo run không tiến triển).
+ */
+export function tokenNoProgressRule(opts: GuardrailOptions): GuardrailRule {
+  return {
+    name: "token-no-progress",
+    description: "output tokens < 20 for 3 consecutive steps — end a degenerate run",
+    evaluate(ctx) {
+      void opts;
+      if (ctx.outputTokensThisStep === undefined) return null;
+      if (ctx.outputTokensThisStep >= 20) return null;
+      if (ctx.textOnlyLowTokenStreak < 3) return null;
+      return {
+        action: {
+          kind: "finish",
+          success: false,
+          summary: "Run stopped: 3 consecutive near-empty LLM responses (no progress).",
+        },
+        reason: `output tokens ${ctx.outputTokensThisStep} < 20 for ${ctx.textOnlyLowTokenStreak} steps`,
+      };
+    },
+  };
+}
+
 /** Nudge: trả lời text thường (không claim, không hết streak) → nhắc tiếp tục làm việc. */
-const continueNudgeRule: GuardrailRule = {
-  name: "continue-nudge",
+const continueNudgeRule: GuardrailRule = {  name: "continue-nudge",
   description: "tool-less step that neither claims completion nor ends the run — nudge the agent to act",
   evaluate(ctx) {
     if (ctx.hasToolCalls) return null;
@@ -284,6 +338,8 @@ export function defaultGuardrailRules(opts: GuardrailOptions = DEFAULT_GUARDRAIL
     textOnlyStreakRule(opts),
     continueNudgeRule,
     doomLoopRule(opts),
+    errorLoopRule(opts),
+    tokenNoProgressRule(opts),
     buildStopRule,
     historyTrimRule,
   ];

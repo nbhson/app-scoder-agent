@@ -574,6 +574,9 @@ export class Agent {
     let lastCallSig = "";
     let sigRepeat = 0;
     let wrapUpInjected = false;
+    let toolErrorSig = "";
+    let toolErrorRepeat = 0;
+    let lowTokenStreak = 0;
     // H-10 compaction config (false = disabled → mechanical trim only).
     const compactionCfg: CompactionConfig | null = this.config.compaction === false
       ? null
@@ -827,7 +830,24 @@ export class Agent {
         sigRepeat,
         wrapUpInjected,
         chatDone,
+        toolErrorSig,
+        toolErrorRepeat,
+        outputTokensThisStep: usage?.completion_tokens,
+        textOnlyLowTokenStreak: lowTokenStreak,
       });
+      // Update trackers AFTER evaluate (rules see this step's values).
+      const outTok = usage?.completion_tokens ?? undefined;
+      lowTokenStreak = outTok !== undefined && outTok < 20 ? lowTokenStreak + 1 : 0;
+      const errSig = (message.tool_calls ?? [])
+        .map((tc) => {
+          const r = stepToolResults.get(tc.id);
+          return r && !r.ok ? `${tc.name}:${r.output.slice(0, 80)}` : null;
+        })
+        .filter(Boolean)
+        .sort()
+        .join("|");
+      toolErrorRepeat = errSig && errSig === toolErrorSig ? toolErrorRepeat + 1 : 0;
+      if (errSig) toolErrorSig = errSig;
 
       // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
       const reminders: string[] = [];
