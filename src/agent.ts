@@ -171,6 +171,7 @@ export class Agent {
           this.logger.log({ type: "todo", items });
         },
       },
+      formatter: config.formatter,
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);

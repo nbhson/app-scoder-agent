@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, realpathSync, existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
@@ -174,9 +174,10 @@ async function toolWriteFile(ctx: ToolContext, args: { path: string; content: st
 
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, args.content, "utf8");
+  const fmtNote = formatFile(ctx, abs);
   return {
     ok: true,
-    output: `Wrote ${args.content.split("\n").length} lines to ${args.path}`,
+    output: `Wrote ${args.content.split("\n").length} lines to ${args.path}${fmtNote ? `\n${fmtNote}` : ""}`,
     diff: toToolDiff(args.path, diff),
   };
 }
@@ -208,9 +209,10 @@ async function toolEditFile(
   if (gate) return gate;
 
   writeFileSync(abs, newContent, "utf8");
+  const fmtNote = formatFile(ctx, abs);
   return {
     ok: true,
-    output: `Edited ${args.path}`,
+    output: `Edited ${args.path}${fmtNote ? `\n${fmtNote}` : ""}`,
     diff: toToolDiff(args.path, diff),
   };
 }
@@ -367,6 +369,47 @@ export function toolGlob(workdir: string, args: { pattern: string; path?: string
   });
 }
 
+// ---------------------------------------------------------------------------
+// Formatter post-edit (I-11)
+// ---------------------------------------------------------------------------
+
+const FORMATTER_TIMEOUT_MS = 30_000;
+
+/**
+ * Run the project formatter on a just-written file. Detection: `formatter`
+ * config in ToolContext (true → auto-detect prettier/biome/denofmt from
+ * node_modules; string → explicit binary/script). Fire-and-observe: errors
+ * are appended to the tool output (LLM self-corrects), never thrown.
+ */
+function formatFile(ctx: ToolContext, abs: string): string | null {
+  const fmt = ctx.formatter;
+  if (!fmt) return null;
+  let cmd: string[];
+  if (typeof fmt === "string" && fmt !== "auto") {
+    cmd = fmt.startsWith("npm:")
+      ? ["npm", "run", fmt.slice(4), "--", abs]
+      : [fmt, "--write", abs];
+  } else {
+    // auto-detect (formatter: true)
+    const has = (p: string) => existsSync(join(ctx.workdir, "node_modules", ".bin", p));
+    if (has("prettier")) cmd = [join(ctx.workdir, "node_modules", ".bin", "prettier"), "--write", abs];
+    else if (has("biome")) cmd = [join(ctx.workdir, "node_modules", ".bin", "biome"), "format", "--write", abs];
+    else if (has("eslint")) cmd = [join(ctx.workdir, "node_modules", ".bin", "eslint"), "--fix", abs];
+    else return null;
+  }
+  const r = spawnSync(cmd[0], cmd.slice(1), {
+    cwd: ctx.workdir,
+    encoding: "utf8",
+    timeout: FORMATTER_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (r.error) return `formatter notice: ${(r.error as Error).message.split("\n")[0]}`;
+  if (r.status !== 0) {
+    return `formatter notice: ${cmd[0]} exited ${r.status}\n${(r.stderr ?? r.stdout ?? "").slice(0, 500)}`;
+  }
+  return null;
+}
+
 /** Live output callback for run_command: called per chunk with its stream source. */
 export type CommandOutputListener = (stream: "stdout" | "stderr", delta: string) => void;
 
@@ -486,6 +529,11 @@ export interface ToolContext {
     get(): TodoItem[];
     set(items: TodoItem[]): void;
   };
+  /**
+   * I-11: post-edit formatter. true = auto-detect (prettier/biome/eslint in
+   * node_modules); string = binary path or "npm:<script>". Omit = off.
+   */
+  formatter?: boolean | string;
 }
 
 /** One row of the agent's session plan (write_todos). */
