@@ -9,7 +9,7 @@ import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
 import { PermissionChecker } from "./permissions.js";
-import { SessionStore, type SessionFile } from "./session.js";
+import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
@@ -80,6 +80,8 @@ export class Agent {
   private ctx: ToolContext;
   private permissions: PermissionChecker;
   private session: SessionStore;
+  /** v2 durable event log (session/ + events.jsonl) — crash recovery + steering. */
+  private events: EventSessionStore;
   private logger: JsonlLogger;
   private aborted = false;
   private streamFallbackWarned = false;
@@ -153,6 +155,7 @@ export class Agent {
       },
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);
+    this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.skills = discoverSkills(config.workdir);
   }
@@ -200,12 +203,14 @@ export class Agent {
 
   /** Push one tool-result message back into the conversation. */
   private pushToolResult(tc: ToolCall, content: string): void {
-    this.messages.push({
+    const msg: ChatMessage = {
       role: "tool",
       tool_call_id: tc.id,
       name: tc.name,
       content,
-    });
+    };
+    this.messages.push(msg);
+    this.events.append({ type: "message.added", message: msg });
   }
 
   /**
@@ -372,6 +377,7 @@ export class Agent {
     ]);
 
     this.currentTask = task;
+    this.events.append({ type: "run.started", task });
     this.resetRunSignal();
     this.resetUsageTotals();
     this.filesModified = false;
@@ -473,6 +479,8 @@ export class Agent {
     const lastBuild: BuildResult | null = session.lastBuild
       ? { success: session.lastBuild.success, command: session.lastBuild.command, output: session.lastBuild.output }
       : null;
+    // v2: opening a resumed run stamps a fresh run.started (event log continuity).
+    this.events.append({ type: "run.started", task: this.currentTask });
 
     try {
       await this.connectMcp();
@@ -501,6 +509,7 @@ export class Agent {
     while (steps < this.config.maxSteps && !this.aborted) {
       steps++;
       ui.step(steps, this.config.maxSteps, "thinking...");
+      this.events.claimExecution(steps);
       this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
 
       // Metrics: thời gian phần LLM của bước này (điều chỉnh chất lượng +
@@ -532,6 +541,7 @@ export class Agent {
 
       if (!hasToolCalls) {
         this.messages.push({ role: "assistant", content: text });
+        this.events.append({ type: "message.added", message: { role: "assistant", content: text } });
         textOnlyStreak++;
         ui.llm("agent", text);
       } else {
@@ -540,6 +550,7 @@ export class Agent {
           content: message.content ?? null,
           tool_calls: message.tool_calls,
         });
+        this.events.append({ type: "message.added", message: this.messages[this.messages.length - 1] });
         textOnlyStreak = 0;
         // Doom-loop tracking: chữ ký chuỗi tool call so với bước trước.
         const callSig = (message.tool_calls ?? [])
@@ -755,6 +766,7 @@ export class Agent {
 
       // Persist session state after every step (enables resume after crash/SIGINT)
       this.saveSession(steps, buildCmd, lastBuild);
+      this.events.releaseExecution(steps);
     }
 
     // Max steps reached or aborted
@@ -763,9 +775,25 @@ export class Agent {
     return this.finish(false, steps, buildCmd, `Agent stopped: ${reason}`);
   }
 
-  /** Persist current agent state to .scoder/sessions/<id>.json. */
+  /** Persist current agent state (v2 event log + manifest; crash-resumable). */
   private saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null): void {
     this.lastBuildResult = lastBuild;
+    // v2: durable event log is authoritative; JSON manifest is a cheap summary.
+    this.events.writeManifest({
+      task: this.currentTask,
+      model: this.client.model,
+      provider: this.config.provider,
+      buildCmd,
+      steps,
+      maxSteps: this.config.maxSteps,
+      usage: {
+        llmCalls: this.usageTotals.calls,
+        inputTokens: this.usageTotals.inputTokens,
+        outputTokens: this.usageTotals.outputTokens,
+        cachedTokens: this.usageTotals.cachedTokens,
+      },
+    });
+    // v1 snapshot kept in sync (back-compat for /sessions readers, cost, resume).
     this.session.save(
       {
         task: this.currentTask,
@@ -902,6 +930,7 @@ export class Agent {
     summary: string,
     chatOnly = false,
   ): AgentRunResult {
+    this.events.append({ type: "finish", success, summary: summary.slice(0, 2000) });
     if (success) {
       if (chatOnly) {
         ui.success(`Done in ${steps} step(s).`);
