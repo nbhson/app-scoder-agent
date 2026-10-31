@@ -36,6 +36,7 @@ const CATASTROPHIC_PATTERNS: RegExp[] = [
   /chmod\s+-R\s+0[77][07][07]\s+[/~]/i,
   // chmod -R 777 on / or ~ (any flag spelling: -R, -r, -Rf, --recursive)
   /\bchmod\s+(?:-{1,2}[\w-]+\s+)+[0-7]{3,4}\s+["']?[/~](?:\s|$|\/)/,
+  /\bchmod\s+--recursive\s+[0-7]{3,4}\s+\/(?!home\/)[^\n]*/,
   // Redirect raw writes to block devices: > /dev/sda, > /dev/nvme0n1, dd > disk...
   />\s*\/dev\/(?:sd[a-z]+|hd[a-z]+|nvme\d+n\d+(?:p\d+)?|disk\d|rdisk\d)/i,
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i,
@@ -53,6 +54,15 @@ const CATASTROPHIC_PATTERNS: RegExp[] = [
   /\|\s*bash\s+-i/i,
   /sysctl\s+-w\s+kernel\.panic=/i,
   /echo\s+[^|]*>\s*\/etc\/sudoers/i,
+  // H-13 additions: remote-code-exec variants + macOS host tampering
+  /curl\s+.*[/.].*\s*\|\s*python(?:\d)?\b/i,
+  /wget\s+.*[/.].*\s*\|\s*python(?:\d)?\b/i,
+  /\bpowershell(?:\.exe)?\s+(-enc|-e\b|-encodedcommand\b)/i,
+  /\bdscl\s+\.\s+-create\s+\/Users\//i,
+  /\bdefaults\s+write\s+com\.apple/i,
+  /\bmv\s+(-\w+\s+)*["']?~(?:\s|$|\/(?!Projects|work))/,
+  /\bcurl\s+.*[/.].*\s*\|\s*python3?\s+-c\b/i,
+  /\bperl\s+-e\b.*\bsystem\s*\(/i,
 ];
 
 function isCatastrophic(command: string): boolean {
@@ -433,6 +443,10 @@ export class PermissionChecker {
    * unavailable (e.g. native module failed to load).
    */
   classifyShell(command: string): PermissionResult {
+    // Catastrophic deny is the absolute floor — before scanner/splitting.
+    if (isCatastrophic(command)) {
+      return { decision: "deny", reason: "matches catastrophic command pattern" };
+    }
     let scan: import("./shell-scanner.js").ShellScan | null;
     try {
       // Lazy require so a broken native build degrades instead of crashing.

@@ -7,6 +7,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { CLIENT_NAME, getVersion } from "./version.js";
+import { redactSecrets } from "./llm.js";
 
 export interface McpServerConfig {
   command: string;
@@ -94,7 +95,9 @@ export class McpConnection {
     };
     const isErr = res.isError === true;
     const parts = (res.content ?? []).map((c) => c.text ?? "").filter(Boolean);
-    return { ok: !isErr, output: parts.join("\n") || "(empty result)", structured: res.structuredContent };
+    // H-13: MCP servers are third-party — redact secret shapes from output
+    // before it enters the conversation or logs.
+    return { ok: !isErr, output: redactSecrets(parts.join("\n")) || "(empty result)", structured: res.structuredContent };
   }
 
   kill(): void {

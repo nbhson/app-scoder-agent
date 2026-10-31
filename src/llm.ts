@@ -4,6 +4,32 @@
  */
 import { withRetry } from "./retry.js";
 
+// ---------------------------------------------------------------------------
+// Secrets redaction (H-13) — shared by LLM error bodies, MCP tool output,
+// compaction summaries and snapshot logs. Never log raw credentials.
+// ---------------------------------------------------------------------------
+
+const REDACTION_PATTERNS: Array<[RegExp, string]> = [
+  [/Bearer\s+[^\s,&\]]+/gi, "Bearer ***REDACTED***"],
+  [/sk-[A-Za-z0-9_-]{8,}/g, "sk-***REDACTED***"],
+  [/sk-ant-[^\s,&\]]+/gi, "sk-ant-***REDACTED***"],
+  [/ghp_[A-Za-z0-9]{20,}/g, "ghp_***REDACTED***"],
+  [/github_pat_[A-Za-z0-9_]{20,}/g, "github_pat_***REDACTED***"],
+  [/xox[bap]-[A-Za-z0-9-]{10,}/g, "xox***REDACTED***"],
+  [/AKIA[0-9A-Z]{16}/g, "AKIA***REDACTED***"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, "***PRIVATE-KEY***"],
+  [/\b(?:api[_-]?key|token|secret|password)["'\s:=]+[^\s"'&]{8,}/gi, "$1=***REDACTED***"],
+];
+
+/** Redact known secret shapes from arbitrary tool/LLM/log output. */
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const [rx, replacement] of REDACTION_PATTERNS) {
+    out = out.replace(rx, replacement);
+  }
+  return out;
+}
+
 export interface ToolSpec {
   type: "function";
   function: {
@@ -93,8 +119,7 @@ export class LlmError extends Error {
 async function toLlmError(res: Response, url: string): Promise<LlmError> {
   let body = await res.text().catch(() => "");
   // Redact Bearer token and raw key patterns to avoid leaking secrets in logs/errors
-  body = body.replace(/Bearer\s+[^\s,&\]]+/gi, "Bearer ***REDACTED***");
-  body = body.replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***REDACTED***");
+  body = redactSecrets(body);
   const err = new LlmError(
     `LLM API error ${res.status} at ${url}: ${body.slice(0, 500)}`,
     res.status,

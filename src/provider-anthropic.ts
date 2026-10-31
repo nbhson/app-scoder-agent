@@ -9,7 +9,7 @@
  *  - response blocks -> assistant message + tool_calls
  */
 import type { ChatMessage, ChatResult, TokenUsage, ToolCall, StreamChunk, ToolSpec } from "./llm.js";
-import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal } from "./llm.js";
+import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal, redactSecrets } from "./llm.js";
 import { withRetry } from "./retry.js";
 
 // ---------------------------------------------------------------------------
@@ -440,7 +440,7 @@ export class AnthropicClient {
 
 async function toAnthropicError(res: globalThis.Response, url: string): Promise<LlmError> {
   let body = await res.text().catch(() => "");
-  body = body.replace(/sk-ant-[^\s,&\]]+/gi, "sk-ant-***REDACTED***");
+  body = redactSecrets(body);
   const err = new LlmError(
     `Anthropic API error ${res.status} at ${url}: ${body.slice(0, 500)}`,
     res.status,

@@ -1,6 +1,6 @@
 import type { AgentConfig } from "./config.js";
 import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval } from "./config.js";
-import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
+import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
 import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
@@ -897,7 +897,7 @@ export class Agent {
             [], // no tools for the summarizer call
             { signal: this.runSignal.signal },
           );
-          this.messages = applyCompaction(this.messages, summaryRes.message.content ?? "History summarized.", compactionCfg);
+          this.messages = applyCompaction(this.messages, redactSecrets(summaryRes.message.content ?? "History summarized."), compactionCfg);
           this.events.append({ type: "compaction.ran", tokensBefore: 0, summary: (summaryRes.message.content ?? "").slice(0, 2000) });
           ui.info(`compaction: done (history now ${this.messages.length} messages)`);
         } catch (err) {
