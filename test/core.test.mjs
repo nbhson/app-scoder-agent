@@ -141,6 +141,30 @@ describe("withRetry", () => {
     );
     assert.equal(delays[0], 5, "delay = Retry-After (5ms), không phải exponential 9999ms");
   });
+
+  it("H-09: mặc định ≤4 attempts (5 calls total)", async () => {
+    let calls = 0;
+    await assert.rejects(
+      withRetry(async () => { calls++; const e = new Error("down"); e.status = 503; throw e; }, { baseDelayMs: 1 }),
+    );
+    assert.equal(calls, 5, "1 lần đầu + 4 retries");
+  });
+
+  it("H-09: delay cap ở maxDelayMs (30s mặc định)", async () => {
+    let calls = 0;
+    const delays = [];
+    await assert.rejects(
+      withRetry(
+        async () => { calls++; const e = new Error("down"); e.status = 503; throw e; },
+        { maxRetries: 3, baseDelayMs: 10_000, maxDelayMs: 12_000 },
+        (_a, delayMs) => { delays.push(delayMs); },
+      ),
+    );
+    assert.ok(
+      delays[0] >= 10_000 && delays[0] <= 10_500 && delays[1] === 12_000 && delays[2] === 12_000,
+      `delays capped at maxDelayMs (got ${delays.join(",")})`,
+    );
+  });
 });
 
 // ── context ─────────────────────────────────────────────────────────────────

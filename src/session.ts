@@ -388,7 +388,7 @@ export function listSessions(workdir: string): SessionSummary[] {
       // skip malformed
     }
   }
-  v2.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  v2.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
   out.push(...v2);
 
   // v1 JSON snapshots (legacy, read-only)

@@ -307,17 +307,22 @@ export class Agent {
   /**
    * One LLM turn: streaming if enabled (renders deltas live), with automatic
    * fallback to non-streaming when the provider/stream fails.
+   *
+   * H-09 incomplete-stream continuation: when a stream dies mid-flight but a
+   * COMPLETE tool-call delta was already accumulated, surface the partial
+   * result (flagged `incomplete`) instead of discarding it — the run loop
+   * executes the tool calls and continues with a synthetic instruction.
    */
-  private async chatWithStream(): Promise<ChatResult> {
+  private async chatWithStream(): Promise<ChatResult & { incomplete?: boolean }> {
     const signal = this.runSignal.signal;
     if (!this.config.stream) {
       return this.client.chat(this.messages, this.tools, { signal });
     }
+    let streamedText = "";
+    let final: ChatResult | undefined;
+    let started = false;
+    let sawToolCallDelta = false;
     try {
-      let streamedText = "";
-      let final: ChatResult | undefined;
-      let started = false;
-
       for await (const chunk of this.client.streamChat(this.messages, this.tools, { signal })) {
         if (chunk.contentDelta) {
           if (!started) {
@@ -328,6 +333,7 @@ export class Agent {
           this.emit({ type: "llm_delta", delta: chunk.contentDelta });
           streamedText += chunk.contentDelta;
         }
+        if (chunk.toolCallDelta) sawToolCallDelta = true;
         if (chunk.final) final = chunk.final;
       }
 
@@ -341,16 +347,39 @@ export class Agent {
       }
       // No finish_reason seen — fall through to non-streaming
       return this.client.chat(this.messages, this.tools);
-    } catch (err) {
+    } catch (caught) {
+      if (started) ui.llmStreamEnd();
       // A timeout is a real failure, not a streaming quirk — falling back to
       // non-streaming would just wait the full timeout a second time.
-      const e = err as Error;
-      if (e?.name === "TimeoutError" || /timed out|TimeoutError/i.test(e?.message ?? "")) {
-        throw err instanceof LlmError ? err : new LlmError(`LLM request timed out: ${e?.message ?? err}`);
+      const e = caught as Error;
+      const isTimeout = e?.name === "TimeoutError" || /timed out|TimeoutError/i.test(e?.message ?? "");
+      const err = isTimeout
+        ? (caught instanceof LlmError ? caught : new LlmError(`LLM request timed out: ${e?.message ?? caught}`))
+        : caught;
+      // Incomplete-stream continuation: the stream died (timeout/disconnect)
+      // after a complete tool-call delta → execute what we have rather than
+      // failing the whole step (pattern from opencode runner).
+      if (
+        sawToolCallDelta &&
+        (isTimeout || /ECONNRESET|socket hang up|network|terminated/i.test(e?.message ?? ""))
+      ) {
+        const partial = (this.client as { lastPartialToolCalls?: ToolCall[] }).lastPartialToolCalls ?? [];
+        if (partial.length > 0) {
+          ui.warn("stream interrupted after complete tool-call(s) — continuing with what was received");
+          return {
+            message: {
+              role: "assistant",
+              content: streamedText || null,
+              tool_calls: partial,
+            },
+            usage: undefined,
+            incomplete: true,
+          };
+        }
       }
       if (err instanceof LlmError && !this.streamFallbackWarned) {
         this.streamFallbackWarned = true;
-        ui.warn(`streaming unavailable (${err.message.slice(0, 120)}) — falling back to non-streaming`);
+        ui.warn(`streaming unavailable (${(err as Error).message.slice(0, 120)}) — falling back to non-streaming`);
       }
       return this.client.chat(this.messages, this.tools);
     }
@@ -563,12 +592,13 @@ export class Agent {
       // Metrics: thời gian phần LLM của bước này (điều chỉnh chất lượng +
       // so sánh provider; hiển thị trong `scoder cost`).
       const stepStart = Date.now();
-      const { message, usage } = await this.chatWithStream().catch((err: unknown) => {
+      const { message, usage, incomplete } = await this.chatWithStream().catch((err: unknown) => {
         // SIGINT during the LLM call — stop gracefully instead of crashing
         if (this.aborted) {
           return {
             message: { role: "assistant" as const, content: null, tool_calls: undefined },
             usage: undefined,
+            incomplete: undefined,
           };
         }
         throw err;
@@ -576,6 +606,16 @@ export class Agent {
       if (this.aborted) break;
       this.recordLlmUsage(usage);
       this.logger.log({ type: "step", step: steps, durationMs: Date.now() - stepStart, toolCalls: message.tool_calls?.length ?? 0 });
+
+      // H-09: after an interrupted stream, nudge the model to continue rather
+      // than restart (synthetic continuation instruction, opencode pattern).
+      if (incomplete) {
+        this.messages.push({
+          role: "user",
+          content: "[system] The previous response was cut off mid-stream. The tool call(s) above were received in full — continue exactly where you left off; do not repeat completed work.",
+        });
+        this.events.append({ type: "retry.scheduled", reason: "incomplete-stream continuation" });
+      }
 
       // ── Chuẩn bị context cho Guardrail Engine ─────────────────────────────
       // Chat marker được làm sạch ở đây để rule nhận text đã chuẩn hoá.

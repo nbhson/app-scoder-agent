@@ -136,6 +136,9 @@ export function fromAnthropicResponse(data: AnthropicResponse): ChatResult {
 const ANTHROPIC_VERSION = "2023-06-01";
 
 export class AnthropicClient {
+  /** Last interrupted stream's accumulated tool calls (H-09 continuation). */
+  lastPartialToolCalls: ToolCall[] = [];
+
   constructor(
     private opts: {
       baseUrl: string;
@@ -381,6 +384,9 @@ export class AnthropicClient {
 
     let finalResult: ChatResult | undefined;
 
+    // Reset the partial-call record for this stream (H-09 continuation).
+    this.lastPartialToolCalls = [];
+
     try {
       while (true) {
         const { done, value } = await readWithIdleTimeout();
@@ -416,6 +422,10 @@ export class AnthropicClient {
         };
       }
     } finally {
+      // H-09: record complete tool calls accumulated so far, for continuation.
+      this.lastPartialToolCalls = [...toolBlocks.values()]
+        .filter((b) => b.name)
+        .map((b) => ({ id: b.id, name: b.name, arguments: b.json || "{}" }));
       try {
         const c = reader.cancel();
         if (c && typeof (c as Promise<void>).catch === "function") c.catch(() => {});

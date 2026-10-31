@@ -3,7 +3,7 @@
  */
 
 export interface RetryOptions {
-  maxRetries?: number; // default 3
+  maxRetries?: number; // default 4 (H-09: ≤4 attempts)
   baseDelayMs?: number; // default 1000
   maxDelayMs?: number; // default 30000
 }
@@ -37,7 +37,7 @@ export async function withRetry<T>(
   opts: RetryOptions = {},
   onRetry?: (attempt: number, delayMs: number, reason: string) => void,
 ): Promise<T> {
-  const maxRetries = opts.maxRetries ?? 3;
+  const maxRetries = opts.maxRetries ?? 4;
   const baseDelayMs = opts.baseDelayMs ?? 1000;
   const maxDelayMs = opts.maxDelayMs ?? 30_000;
 
@@ -64,10 +64,8 @@ export async function withRetry<T>(
       // Respect Retry-After header if present (seconds)
       const retryAfter = (err as { retryAfterMs?: number }).retryAfterMs;
       const jitter = Math.floor(Math.random() * 500);
-      const delay = Math.min(
-        retryAfter ?? baseDelayMs * 2 ** attempt + jitter,
-        maxDelayMs,
-      );
+      const rawDelay = retryAfter ?? baseDelayMs * 2 ** attempt + jitter;
+      const delay = Math.min(rawDelay, maxDelayMs);
 
       onRetry?.(attempt + 1, delay, status ? `HTTP ${status}` : String((err as Error).message).slice(0, 80));
       await sleep(delay);

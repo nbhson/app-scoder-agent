@@ -187,6 +187,8 @@ function toWireMessages(messages: ChatMessage[]): unknown[] {
 
 export class LlmClient {
   private streamEnabled: boolean;
+  /** Last interrupted stream's accumulated tool calls (H-09 continuation). */
+  lastPartialToolCalls: ToolCall[] = [];
 
   constructor(private opts: LlmClientOptions) {
     this.streamEnabled = opts.stream !== false; // default true
@@ -376,6 +378,9 @@ export class LlmClient {
     const decoder = new TextDecoder();
     let buffer = "";
 
+    // Reset the partial-call record for this stream (H-09 continuation).
+    this.lastPartialToolCalls = [];
+
     try {
       while (true) {
         // Guard the pending read against a late abort (e.g. the idle timeout
@@ -490,6 +495,10 @@ export class LlmClient {
       }
       throw err;
     } finally {
+      // H-09: record complete tool calls accumulated so far, for continuation.
+      this.lastPartialToolCalls = accumulatedToolCalls
+        .filter((tc) => tc.name)
+        .map((tc) => ({ id: tc.id ?? "", name: tc.name as string, arguments: tc.arguments }));
       // Cancel the body (frees the socket) and clear the request timeout.
       // cancel() returns a promise — a rejection after abort must be swallowed
       // or it becomes an unhandled rejection that kills the process.
