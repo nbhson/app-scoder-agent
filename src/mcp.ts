@@ -80,14 +80,15 @@ export class McpConnection {
     return (res.tools ?? []).filter((t): t is McpTool => typeof t.name === "string");
   }
 
-  async callTool(name: string, args: Record<string, unknown>, timeoutMs = 120_000): Promise<{ ok: boolean; output: string }> {
+  async callTool(name: string, args: Record<string, unknown>, timeoutMs = 120_000): Promise<{ ok: boolean; output: string; structured?: Record<string, unknown> }> {
     const res = await this.rpc("tools/call", { name, arguments: args }, timeoutMs) as {
       content?: Array<{ type?: string; text?: string }>;
+      structuredContent?: Record<string, unknown>;
       isError?: boolean;
     };
     const isErr = res.isError === true;
     const parts = (res.content ?? []).map((c) => c.text ?? "").filter(Boolean);
-    return { ok: !isErr, output: parts.join("\n") || "(empty result)" };
+    return { ok: !isErr, output: parts.join("\n") || "(empty result)", structured: res.structuredContent };
   }
 
   kill(): void {

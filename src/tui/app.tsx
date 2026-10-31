@@ -391,6 +391,21 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   const runningRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
 
+  // ── Prompt-gate review flow (/review) ──────────────────────────────────────
+  // State machine relaying the universal-prompt-gate-mcp text-fallback flow:
+  // call → pending_level_selection → user picks level → pending_user_selection
+  // → user picks original/rewritten/update/cancel → approved/cancelled.
+  // `argsBase` holds the immutable prompt/context/language; `rewrittenPrompt`
+  // is echoed back verbatim from the server's pending result (never from the
+  // user or LLM) so only exactly what the user saw can be approved.
+  const reviewRef = useRef<{
+    stage: "level" | "selection";
+    tool: string;
+    argsBase: Record<string, unknown>;
+    rewrittenPrompt?: string;
+  } | null>(null);
+  const reviewBusyRef = useRef(false);
+
   // ── Scrollable chat viewport (Ink 8 alt-screen) ──
   // The viewport clips overflow; the inner content wrapper keeps its natural
   // height so it can be measured and offset upward for scrolling.
@@ -474,10 +489,108 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     [update],
   );
 
+  /** One round of the /review state machine: call the gate, render the result. */
+  const reviewStep = useCallback(
+    async (tool: string, args: Record<string, unknown>) => {
+      const agent = agentRef.current ?? createAgent();
+      reviewBusyRef.current = true;
+      try {
+        const r = await agent.callMcpTool(tool, args);
+        const sc = (r.structured ?? {}) as Record<string, unknown>;
+        const status = typeof sc.status === "string" ? sc.status : null;
+        if (!r.ok) {
+          reviewRef.current = null;
+          pushNotice(`prompt gate error: ${r.output.slice(0, 500)}`, "error");
+          return;
+        }
+        if (status === "pending_level_selection") {
+          reviewRef.current = { stage: "level", tool, argsBase: args };
+          pushNotice(
+            "Which rewrite level?\n  [1] light — minimal, close to original\n  [2] balanced — structure + context + criteria\n  [3] detailed — full spec with acceptance criteria\nReply 1, 2 or 3.",
+          );
+        } else if (status === "pending_user_selection") {
+          const rewritten = typeof sc.rewritten_prompt === "string" ? sc.rewritten_prompt : "";
+          reviewRef.current = { stage: "selection", tool, argsBase: args, rewrittenPrompt: rewritten };
+          pushNotice(
+            `--- ORIGINAL ---\n${String(sc.original_prompt ?? "(missing)")}\n\n--- REWRITTEN ---\n${rewritten}\n\nWhich should be used?\n  [1] original\n  [2] rewritten\n  [3] update — describe changes, rewrite again\n  [4] cancel\nReply 1-4 (or 3 + your changes).`,
+          );
+        } else if (status === "approved") {
+          reviewRef.current = null;
+          pushNotice(`✔ prompt approved:\n${String(sc.selected_prompt ?? "")}`);
+        } else if (status === "cancelled") {
+          reviewRef.current = null;
+          pushNotice("⏹ prompt gate cancelled — nothing approved.");
+        } else {
+          reviewRef.current = null;
+          pushNotice(`prompt gate: unexpected status ${status ?? "(none)"}\n${r.output.slice(0, 500)}`, "warn");
+        }
+      } catch (err) {
+        reviewRef.current = null;
+        pushNotice(`prompt gate failed: ${(err as Error).message}`, "error");
+      } finally {
+        reviewBusyRef.current = false;
+      }
+    },
+    [createAgent, pushNotice],
+  );
+
+  /** Handle a user reply while /review is waiting (numbers 1-4 / feedback text). */
+  const reviewAnswer = useCallback(
+    (text: string) => {
+      const rv = reviewRef.current;
+      if (!rv || reviewBusyRef.current) return false;
+      const m = /^([1-4])(?:\s+([\s\S]+))?$/.exec(text.trim());
+      if (rv.stage === "level") {
+        if (!m) {
+          pushNotice("reply 1, 2 or 3 to pick the rewrite level", "warn");
+          return true;
+        }
+        const levels = ["light", "balanced", "detailed"];
+        void reviewStep(rv.tool, { ...rv.argsBase, rewrite_level: levels[Number(m[1]) - 1] });
+        return true;
+      }
+      // stage === "selection"
+      if (!m) {
+        pushNotice("reply 1-4 (or 3 + your requested changes)", "warn");
+        return true;
+      }
+      const n = m[1];
+      if (n === "3") {
+        const feedback = m[2]?.trim();
+        if (!feedback) {
+          pushNotice("update needs your requested changes: 3 <what to change>", "warn");
+          return true;
+        }
+        void reviewStep(rv.tool, {
+          ...rv.argsBase,
+          selection: "update",
+          feedback,
+          rewritten_prompt: rv.rewrittenPrompt,
+        });
+        return true;
+      }
+      const selection = n === "1" ? "original" : n === "2" ? "rewritten" : "cancel";
+      void reviewStep(rv.tool, {
+        ...rv.argsBase,
+        selection,
+        ...(selection === "rewritten" ? { rewritten_prompt: rv.rewrittenPrompt } : {}),
+      });
+      return true;
+    },
+    [reviewStep, pushNotice],
+  );
+
   const submit = useCallback(
     async (text: string) => {
       const task = text.trim();
       if (!task) return;
+      // Prompt-gate review in progress — numeric replies drive the flow.
+      if (reviewRef.current) {
+        writeInput("");
+        historyRef.current = [...historyRef.current, task].slice(-100);
+        reviewAnswer(task);
+        return;
+      }
       // "exit"/"quit" always works — aborts a running agent first.
       if (task === "exit" || task === "quit") {
         agentRef.current?.abort();
@@ -488,6 +601,25 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
       const slash = parseSlashCommand(task);
       if (slash) {
         writeInput("");
+        if (slash.cmd === "/review") {
+          if (!slash.arg) {
+            pushNotice("usage: /review <prompt> — rewrites it, you pick original/rewritten/update/cancel", "warn");
+            return;
+          }
+          if (!Object.keys(config.mcpServers ?? {}).some((s) => s === "prompt-gate")) {
+            pushNotice("no \"prompt-gate\" MCP server configured — add it to ~/.scoder/config.json", "error");
+            return;
+          }
+          // Context grounded in this session: last user item + current workdir.
+          const lastUser = [...stateRef.current.items].reverse().find((i) => i.kind === "user");
+          const context = `User is in scoder TUI at ${config.workdir}${lastUser ? `; earlier they asked: "${(lastUser as { text: string }).text.slice(0, 120)}"` : ""}.`;
+          void reviewStep("mcp__prompt-gate__review_and_select_prompt", {
+            prompt: slash.arg,
+            context,
+            language: "vietnamese",
+          });
+          return;
+        }
         if (slash.cmd === "/exit" || slash.cmd === "/quit") {
           agentRef.current?.abort();
           exit();
@@ -631,7 +763,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         update((s) => applyEvent({ ...s, items: [...s.items] }, { type: "error", message: (err as Error).message }));
       }
     },
-    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode],
+    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep],
   );
 
   /** Create (or return) the session agent — permission mode always current. */
@@ -719,6 +851,8 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
         ref={viewportRef}
         flexDirection="column"
         flexGrow={1}
+        flexShrink={1}
+        minHeight={0}
         overflow="hidden"
         contentOffsetY={scrollTop}
       >

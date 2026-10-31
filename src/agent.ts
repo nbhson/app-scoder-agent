@@ -784,7 +784,7 @@ export class Agent {
   }
 
   /** Call one MCP tool directly by its full name (mcp__server__tool) (/mcp exec). */
-  async callMcpTool(fullName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string }> {
+  async callMcpTool(fullName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string; structured?: Record<string, unknown> }> {
     if (this.config.permissionMode === "readonly") {
       return { ok: false, output: "ERROR: readonly mode — MCP tools are disabled (they bypass the permission policy)." };
     }
@@ -792,6 +792,20 @@ export class Agent {
     const reg = this.mcp?.getTool(fullName);
     if (!reg) {
       return { ok: false, output: `ERROR: unknown MCP tool "${fullName}" — run /mcp to list servers and tools.` };
+    }
+    // Text shorthand (`/mcp exec <tool> free text`): bind to the tool's first
+    // required string property from its inputSchema, so users don't have to
+    // hand-write JSON for the common one-argument case.
+    if ("__text" in args && typeof args.__text === "string") {
+      const props = (reg.def.inputSchema?.properties ?? {}) as Record<string, { type?: string }>;
+      const required = (reg.def.inputSchema?.required ?? []) as string[];
+      const target =
+        required.find((k) => props[k]?.type === "string") ??
+        Object.keys(props).find((k) => props[k]?.type === "string");
+      if (!target) {
+        return { ok: false, output: `ERROR: "${fullName}" has no string parameter — pass JSON args instead.` };
+      }
+      args = { [target]: args.__text };
     }
     try {
       return await reg.conn.callTool(reg.toolName, args);

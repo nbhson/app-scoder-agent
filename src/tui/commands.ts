@@ -18,7 +18,8 @@ export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/model", desc: "show the active model & provider" },
   { cmd: "/skills", desc: "list discovered skills (SKILL.md)" },
   { cmd: "/skill", desc: "load a skill into context: /skill <name>" },
-  { cmd: "/mcp", desc: "MCP servers & tools: /mcp [server] [tool] [json]" },
+  { cmd: "/mcp", desc: "MCP servers & tools: /mcp [server] [tool] [json|text]" },
+  { cmd: "/review", desc: "prompt gate: rewrite + user approval — /review <prompt>" },
   { cmd: "/permission", desc: "view or switch permission mode: /permission <auto|ask|readonly>" },
   { cmd: "/exit", desc: "quit (aliases: /quit, exit, quit)" },
 ];
@@ -68,7 +69,10 @@ export function formatSlashHelp(commandName: string): string {
  *   /mcp                                  → list (no exec)
  *   /mcp server tool {"k":"v"}            → mcp__server__tool
  *   /mcp mcp__server__tool {"k":"v"}      → as-is (full name)
- * The JSON part is optional (tools with no args); bad JSON → error message.
+ *   /mcp server tool free text            → args resolved from the tool's
+ *                                           first string parameter (see
+ *                                           Agent.callMcpTool `__text`)
+ * The JSON part is optional; non-JSON text is passed as the `__text` shorthand.
  */
 export function parseMcpExec(arg: string): { fullName: string; args: Record<string, unknown> } | { error: string } | null {
   const trimmed = arg.trim();
@@ -94,6 +98,9 @@ export function parseMcpExec(arg: string): { fullName: string; args: Record<stri
     }
     return { fullName, args: parsed as Record<string, unknown> };
   } catch {
-    return { error: `invalid JSON args: ${rest.slice(0, 80)}` };
+    // Not JSON — treat the rest as the value of the tool's first required
+    // string parameter (discoverable from its inputSchema via /mcp listing),
+    // e.g. `/mcp exec mcp__srv__tool phân tích project`.
+    return { fullName, args: { __text: rest } };
   }
 }
