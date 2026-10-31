@@ -28,6 +28,8 @@ export interface AgentConfig {
   snapshots?: boolean;
   /** I-05: reasoning/thinking — "off" (default) | "on". */
   reasoning?: "off" | "on";
+  /** I-06: false = this agent cannot spawn subagents (depth guard for children). */
+  allowSubagents?: boolean;
   /** Disable session auto-save */
   noSave?: boolean;
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */

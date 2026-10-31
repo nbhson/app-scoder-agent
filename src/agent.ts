@@ -3,7 +3,7 @@ import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval 
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
-import { AGENT_TOOLS, getTool, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
+import { getTool, setTaskRunner, allToolSpecs, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
@@ -16,6 +16,7 @@ import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
+import { discoverAgents, findAgent } from "./agents.js";
 import * as ui from "./ui.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
@@ -85,7 +86,7 @@ export type AgentEvent =
 export class Agent {
   private client: LlmClient | AnthropicClient;
   private messages: ChatMessage[] = [];
-  private tools: ToolSpec[] = AGENT_TOOLS.map((t) => t.spec);
+  private tools: ToolSpec[] = allToolSpecs();
   private ctx: ToolContext;
   private permissions: PermissionChecker;
   private session: SessionStore;
@@ -173,6 +174,46 @@ export class Agent {
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
     this.snapshots = new SnapshotManager(config.workdir, config.snapshots !== false);
+    // I-06: task tool → child Agent run (same process, own session, event
+    // relay, abort cascade via parent's runSignal). Depth-1 only: children
+    // are constructed with allowSubagents:false so they never re-register
+    // the global runner (and their task tool reports "not wired").
+    if (config.allowSubagents !== false) {
+      setTaskRunner(async (_ctx, args) => {
+        const def = args.agent ? findAgent(config.workdir, args.agent) : findAgent(config.workdir, "explore");
+        if (args.agent && !def) {
+          return { ok: false, output: `ERROR: agent "${args.agent}" not found — available: ${discoverAgents(config.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name).join(", ")}` };
+        }
+        const child = new Agent({
+          ...config,
+          allowSubagents: false,
+          model: def?.model ?? config.model,
+          maxSteps: def?.steps ?? Math.min(config.maxSteps, 20),
+          noSave: true, // subagent runs are ephemeral — no session pollution
+          // plan/explore agents stay read-only regardless of parent mode.
+          permissionMode: def?.name === "plan" || def?.name === "explore" ? "readonly" : config.permissionMode,
+        });
+        // Abort cascade: parent abort kills child's in-flight LLM calls.
+        this.runSignal.signal.addEventListener("abort", () => child.abort(), { once: true });
+        // Event relay: child activity appears as subagent-tagged tool output.
+        const tag = `subagent:${def?.name ?? "task"}`;
+        child.onEvent = (ev) => {
+          if (ev.type === "tool_call") this.emit({ type: "tool_output", name: tag, stream: "stdout", delta: `→ ${ev.name}\n` });
+          else if (ev.type === "llm_delta") this.emit({ type: "tool_output", name: tag, stream: "stdout", delta: ev.delta });
+        };
+        try {
+          const res = await child.run(args.prompt);
+          return {
+            ok: res.success,
+            output: res.success
+              ? `[subagent ${def?.name ?? "task"} done — ${res.steps} steps]\n${res.summary}`
+              : `[subagent ${def?.name ?? "task"} FAILED — ${res.steps} steps]\n${res.summary}`,
+          };
+        } catch (err) {
+          return { ok: false, output: `ERROR: subagent failed: ${(err as Error).message}` };
+        }
+      });
+    }
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.skills = discoverSkills(config.workdir);
   }
@@ -423,7 +464,7 @@ export class Agent {
     await this.mcp.connectAll();
     const mcpSpecs = this.mcp.toToolSpecs();
     if (mcpSpecs.length > 0) {
-      this.tools = [...AGENT_TOOLS.map((t) => t.spec), ...mcpSpecs];
+      this.tools = [...allToolSpecs(), ...mcpSpecs];
     }
   }
 
@@ -699,7 +740,7 @@ export class Agent {
         this.emit({ type: "tool_call", step: steps, id: tc.id, name: tc.name, args });
 
         if (!tool && !(this.mcp?.hasTool(tc.name))) {
-          this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${AGENT_TOOLS.map((t) => t.spec.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
+          this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${allToolSpecs().map((t) => t.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
           continue;
         }
 

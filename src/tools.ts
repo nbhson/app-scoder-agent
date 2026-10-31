@@ -575,6 +575,54 @@ export const AGENT_TOOLS: AgentTool[] = [
   },
 ];
 
+/** I-06: subagent spawner — injected by agent.ts (avoids circular import). */
+export type TaskRunner = (
+  ctx: ToolContext,
+  args: { description: string; prompt: string; agent?: string },
+) => Promise<ToolResult>;
+
+/** task tool definition — run callback set via setTaskRunner(). */
+const taskTool: AgentTool = {
+  spec: {
+    type: "function",
+    function: {
+      name: "task",
+      description:
+        "Delegate a self-contained subtask to a subagent that runs its own agent loop with its own context. " +
+        "WHEN TO USE: broad codebase exploration (find where X lives, summarize module Y) so the main " +
+        "conversation stays lean, or an independent subtask that needs many steps. " +
+        "The prompt must be self-contained (the subagent sees nothing else); it returns a summary. " +
+        "Prefer this over reading dozens of files yourself.",
+      parameters: obj(
+        {
+          description: str("One-line summary of the subtask (shown in the UI)"),
+          prompt: str("Self-contained instructions for the subagent, including any file paths and the expected output"),
+          agent: str("Optional agent name from the available agents (default: explore for research, build for changes)"),
+        },
+        ["description", "prompt"],
+      ),
+    },
+  },
+  run: () => ({ ok: false, output: "ERROR: task tool not wired (setTaskRunner missing)." }),
+};
+
+let taskRunner: TaskRunner | null = null;
+void taskRunner;
+
+/** Wire the actual subagent runner (called from agent.ts constructor). */
+export function setTaskRunner(runner: TaskRunner | null): void {
+  taskRunner = runner;
+  taskTool.run = runner
+    ? (ctx, args) => runner(ctx, args as { description: string; prompt: string; agent?: string })
+    : () => ({ ok: false, output: "ERROR: task tool not wired (setTaskRunner missing)." });
+}
+void taskRunner;
+
 export function getTool(name: string): AgentTool | undefined {
-  return AGENT_TOOLS.find((t) => t.spec.function.name === name);
+  return AGENT_TOOLS.find((t) => t.spec.function.name === name) ?? (name === "task" ? taskTool : undefined);
+}
+
+/** All tool specs incl. task (agent adds MCP specs on top). */
+export function allToolSpecs(): ToolSpec[] {
+  return [...AGENT_TOOLS.map((t) => t.spec), taskTool.spec];
 }
