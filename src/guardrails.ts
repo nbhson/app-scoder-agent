@@ -318,7 +318,7 @@ export class GuardrailEngine {
   evaluate(ctx: GuardrailContext): GuardrailDecision[] {
     const out: GuardrailDecision[] = [];
     for (const rule of this.rules) {
-      let r: { action: GuardrailAction; reason: string } | null = null;
+      let r: { action: GuardrailAction; reason: string } | null;
       try {
         r = rule.evaluate(ctx);
       } catch (err) {

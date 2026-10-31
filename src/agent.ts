@@ -664,7 +664,7 @@ export class Agent {
       });
 
       // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
-      let reminders: string[] = [];
+      const reminders: string[] = [];
       let doTrim = false;
       for (const d of decisions) {
         const a = d.action;
