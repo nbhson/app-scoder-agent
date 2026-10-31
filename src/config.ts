@@ -24,6 +24,8 @@ export interface AgentConfig {
   temperature: number;
   /** Non-interactive: fail instead of prompting */
   yes: boolean;
+  /** Git shadow snapshots (H-11): false disables checkpoint capture. */
+  snapshots?: boolean;
   /** Disable session auto-save */
   noSave?: boolean;
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */
@@ -75,6 +77,8 @@ interface RcFile {
   };
   /** Auto-compaction (H-10): false = off, object = overrides. */
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
+  /** Git shadow snapshots (H-11): false disables checkpoint capture. */
+  snapshots?: boolean;
 }
 
 function readRcFile(path: string, label: string): RcFile {
@@ -246,6 +250,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
     permissionRules: parsePermissionRules(rc.permissions?.rules),
     compaction: rc.compaction ?? undefined,
+    snapshots: rc.snapshots,
     modelPricing: parsePricing(rc.modelPricing),
   };
 

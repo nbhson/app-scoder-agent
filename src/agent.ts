@@ -11,6 +11,7 @@ import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
 import { PermissionChecker } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
+import { SnapshotManager } from "./snapshot.js";
 import { JsonlLogger } from "./logger.js";
 import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
@@ -87,6 +88,8 @@ export class Agent {
   private session: SessionStore;
   /** v2 durable event log (session/ + events.jsonl) — crash recovery + steering. */
   private events: EventSessionStore;
+  /** Git shadow-repo checkpoints before write batches (H-11). */
+  readonly snapshots: SnapshotManager;
   private logger: JsonlLogger;
   private aborted = false;
   private streamFallbackWarned = false;
@@ -163,6 +166,7 @@ export class Agent {
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
+    this.snapshots = new SnapshotManager(config.workdir, config.snapshots !== false);
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.skills = discoverSkills(config.workdir);
   }
@@ -656,6 +660,9 @@ export class Agent {
 
       // Execute each tool call (validate args before running)
       const stepToolResults = new Map<string, { ok: boolean; output: string }>();
+      // H-11: checkpoint before any batch that may write files.
+      const batchMayWrite = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file");
+      if (batchMayWrite) this.snapshots.capture(`step ${steps}: ${(message.tool_calls ?? []).map((t) => t.name).join(",")}`);
       for (const tc of message.tool_calls ?? []) {
         if (this.aborted) break;
         const tool = getTool(tc.name);

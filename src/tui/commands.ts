@@ -21,6 +21,7 @@ export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/mcp", desc: "MCP servers & tools: /mcp [server] [tool] [json|text]" },
   { cmd: "/review", desc: "prompt gate: rewrite + user approval — /review <prompt>" },
   { cmd: "/permission", desc: "view or switch permission mode: /permission <auto|ask|readonly>" },
+  { cmd: "/undo", desc: "revert files to the last snapshot checkpoint (before previous tool batch)" },
   { cmd: "/exit", desc: "quit (aliases: /quit, exit, quit)" },
 ];
 

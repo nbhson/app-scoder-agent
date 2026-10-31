@@ -738,6 +738,19 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           pushNotice(`permission mode → ${mode}`);
           return;
         }
+        if (slash.cmd === "/undo") {
+          const agent = agentRef.current;
+          const cps = agent?.snapshots.list() ?? [];
+          if (!agent || cps.length < 2) {
+            pushNotice("undo: no snapshot checkpoint to revert to", "warn");
+            return;
+          }
+          // Revert to the second-newest checkpoint (newest = current state).
+          const target = cps[cps.length - 2];
+          const ok = agent.snapshots.restore(target.tree);
+          pushNotice(ok ? `undo: reverted to ${target.id} (${target.label})` : "undo: restore failed", ok ? "info" : "warn");
+          return;
+        }
         pushNotice(`unknown command ${slash.cmd} — try /help`, "warn");
         return;
       }
