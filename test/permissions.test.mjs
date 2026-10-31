@@ -173,3 +173,147 @@ describe("PermissionChecker — nonInteractive", () => {
     assert.equal(ok, true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Permission Engine v2 — rule-based (pattern from opencode, MIT — see NOTICE)
+// ---------------------------------------------------------------------------
+
+import { wildcardMatch, matchRule, aggregate } from "../dist/permissions.js";
+
+describe("wildcardMatch", () => {
+  it("* matches everything", () => {
+    assert.ok(wildcardMatch("*", "anything"));
+  });
+  it("? matches single char", () => {
+    assert.ok(wildcardMatch("git ??", "git st"));
+    assert.ok(!wildcardMatch("git ??", "git s"));
+  });
+  it("literal + legacy prefix semantics", () => {
+    assert.ok(wildcardMatch("npm ", "npm run build"), "prefix 'npm ' matches 'npm run build'");
+    assert.ok(!wildcardMatch("npm ", "npmx run"));
+    assert.ok(!wildcardMatch("npm ", "npm"), "bare 'npm' does not match prefix 'npm '");
+  });
+  it("glob-ish patterns", () => {
+    assert.ok(wildcardMatch("src/**", "src/a/b/c.ts"));
+    assert.ok(wildcardMatch("*.env", "prod.env"));
+    assert.ok(!wildcardMatch("*.env", "env"));
+  });
+});
+
+describe("matchRule — last match wins", () => {
+  const rules = [
+    { action: "shell", resource: "git *", effect: "allow" },
+    { action: "shell", resource: "git push*", effect: "deny" },
+    { action: "edit", resource: "src/**", effect: "allow" },
+  ];
+  it("later rule overrides earlier", () => {
+    assert.equal(matchRule(rules, "shell", "git push origin main"), "deny");
+    assert.equal(matchRule(rules, "shell", "git status"), "allow");
+  });
+  it("no match → null", () => {
+    assert.equal(matchRule(rules, "shell", "docker ps"), null);
+    assert.equal(matchRule(rules, "webfetch", "https://x.io"), null);
+  });
+  it("action must match exactly", () => {
+    assert.equal(matchRule(rules, "edit", "src/**"), "allow");
+    assert.equal(matchRule(rules, "shell", "src/**"), null);
+  });
+});
+
+describe("aggregate — deny > ask > allow", () => {
+  it("deny wins over everything", () => {
+    assert.equal(aggregate(["allow", "ask", "deny"]), "deny");
+  });
+  it("ask wins over allow", () => {
+    assert.equal(aggregate(["allow", "ask", "allow"]), "ask");
+  });
+  it("allow only", () => {
+    assert.equal(aggregate(["allow", "allow"]), "allow");
+  });
+  it("no effects → null", () => {
+    assert.equal(aggregate([]), null);
+    assert.equal(aggregate([null, null]), null);
+  });
+});
+
+describe("PermissionChecker — rule engine v2", () => {
+  const base = { allowCommands: [], denyCommands: [], nonInteractive: true };
+
+  it("rule allow beats ask-mode fallback", () => {
+    const c = new PermissionChecker({ ...base, mode: "ask", rules: [{ action: "shell", resource: "npm *", effect: "allow" }] });
+    assert.equal(c.classify("npm run build").decision, "allow");
+    assert.equal(c.classify("curl http://x.io").decision, "ask");
+  });
+
+  it("rule deny beats config allowCommands", () => {
+    const c = new PermissionChecker({ ...base, mode: "auto", allowCommands: ["git "], rules: [{ action: "shell", resource: "git push*", effect: "deny" }] });
+    assert.equal(c.classify("git push origin main").decision, "deny");
+    assert.equal(c.classify("git status").decision, "allow");
+  });
+
+  it("catastrophic deny cannot be overridden by any rule", () => {
+    const c = new PermissionChecker({ ...base, mode: "auto", rules: [{ action: "shell", resource: "*", effect: "allow" }] });
+    assert.equal(c.classify("rm -rf /").decision, "deny");
+  });
+
+  it("legacy mode semantics unchanged when no rules", () => {
+    const c = new PermissionChecker({ ...base, mode: "readonly" });
+    assert.equal(c.classify("npm test").decision, "deny");
+  });
+
+  it("savedRules applied (project-scoped always-allow)", () => {
+    const c = new PermissionChecker({ ...base, mode: "ask", savedRules: [{ action: "shell", resource: "docker compose ", effect: "allow" }] });
+    assert.equal(c.classify("docker compose up -d").decision, "allow");
+  });
+
+  it("saved approval never overrides a configured deny rule", () => {
+    const c = new PermissionChecker({
+      ...base, mode: "auto",
+      savedRules: [{ action: "shell", resource: "git push*", effect: "allow" }],
+      rules: [{ action: "shell", resource: "git push*", effect: "deny" }],
+    });
+    assert.equal(c.classify("git push origin").decision, "deny");
+  });
+
+  it("policy deny wins over config allow + saved allow", () => {
+    const c = new PermissionChecker({
+      ...base, mode: "auto",
+      allowCommands: ["git "],
+      savedRules: [{ action: "shell", resource: "git push*", effect: "allow" }],
+      policyRules: [{ action: "shell", resource: "git push*", effect: "deny" }],
+    });
+    assert.equal(c.classify("git push origin main").decision, "deny");
+    assert.equal(c.classify("git status").decision, "allow");
+  });
+
+  it("policy allow bypasses ask requirement", () => {
+    const c = new PermissionChecker({
+      ...base, mode: "ask",
+      policyRules: [{ action: "shell", resource: "scoder *", effect: "allow" }],
+    });
+    assert.equal(c.classify("scoder eval script.js").decision, "allow");
+  });
+
+  it("edit rules: deny/allow/ask via classifyAction", () => {
+    const c = new PermissionChecker({
+      ...base, mode: "auto",
+      rules: [{ action: "edit", resource: "src/**", effect: "ask" }, { action: "edit", resource: "dist/**", effect: "deny" }],
+    });
+    assert.equal(c.classifyAction("edit", "src/app.ts").decision, "ask");
+    assert.equal(c.classifyAction("edit", "dist/bundle.js").decision, "deny");
+    assert.equal(c.classifyAction("edit", "README.md"), null);
+  });
+
+  it("MCP per-tool action with wildcard", () => {
+    const c = new PermissionChecker({
+      ...base, mode: "auto",
+      rules: [
+        { action: "mcp__prompt-gate__*", resource: "*", effect: "allow" },
+        { action: "mcp__danger__*", resource: "*", effect: "deny" },
+      ],
+    });
+    assert.equal(c.classifyAction("mcp__prompt-gate__review_and_select_prompt", "*").decision, "allow");
+    assert.equal(c.classifyAction("mcp__danger__exec", "*").decision, "deny");
+    assert.equal(c.classifyAction("mcp__unknown__tool", "*"), null, "no matching rule → null (caller falls back to mode)");
+  });
+});

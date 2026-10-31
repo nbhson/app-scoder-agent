@@ -1,7 +1,7 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import type { PermissionMode } from "./permissions.js";
+import { join, resolve, dirname } from "node:path";
+import type { PermissionMode, PermissionRule, PermissionEffect } from "./permissions.js";
 import type { McpServerConfig } from "./mcp.js";
 
 export interface AgentConfig {
@@ -32,6 +32,8 @@ export interface AgentConfig {
   mcpServers?: Record<string, import("./mcp.js").McpServerConfig>;
   /** Permission mode: auto | ask | readonly */
   permissionMode: PermissionMode;
+  /** Rule engine v2 (from rc permissions.rules). */
+  permissionRules?: PermissionRule[];
   /** Streaming LLM responses */
   stream: boolean;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost` estimation */
@@ -66,6 +68,8 @@ interface RcFile {
     mode?: string;
     allowCommands?: string[];
     denyCommands?: string[];
+    /** Rule engine v2 (see NOTICE — pattern from opencode): {action, resource, effect}. */
+    rules?: unknown;
   };
 }
 
@@ -155,6 +159,31 @@ function parsePricing(raw: unknown): Record<string, { input: number; output: num
   return out;
 }
 
+const VALID_EFFECTS = new Set(["allow", "deny", "ask"]);
+
+/** Validate permission rules v2; drop malformed entries with a warning. */
+export function parsePermissionRules(raw: unknown, label = "permissions.rules"): import("./permissions.js").PermissionRule[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    console.error(`⚠  ignoring invalid ${label} (expected an array of {action, resource, effect})`);
+    return undefined;
+  }
+  const out: PermissionRule[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i] as { action?: unknown; resource?: unknown; effect?: unknown };
+    if (
+      typeof r.action === "string" && r.action.trim() &&
+      typeof r.resource === "string" && r.resource &&
+      typeof r.effect === "string" && VALID_EFFECTS.has(r.effect)
+    ) {
+      out.push({ action: r.action.trim(), resource: r.resource, effect: r.effect as PermissionEffect });
+    } else {
+      console.error(`⚠  ignoring invalid ${label}[${i}] (expected {action, resource, effect: allow|deny|ask})`);
+    }
+  }
+  return out;
+}
+
 export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const workdir = overrides.workdir ?? process.cwd();
   const rc = loadRcFile(workdir);
@@ -211,6 +240,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     stream: overrides.stream ?? (process.env.SCODER_STREAM !== "0" ? true : false),
     permissionMode: overrides.permissionMode ??
       parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
+    permissionRules: parsePermissionRules(rc.permissions?.rules),
     modelPricing: parsePricing(rc.modelPricing),
   };
 
@@ -233,4 +263,59 @@ export function loadPermissionLists(workdir: string): { allowCommands: string[];
     allowCommands: parseList(rc.permissions?.allowCommands),
     denyCommands: parseList(rc.permissions?.denyCommands),
   };
+}
+
+/**
+ * Policy layer (enterprise hard floor — pattern from opencode /v2/docs/policies):
+ * evaluated AFTER config rules but its deny always wins. Sources, lowest first:
+ * ~/.scoder/policies.json (user-global), /etc/scoder/policies.json (machine),
+ * SCODER_POLICY=<file> env (highest).
+ */
+export function loadPolicyRules(_workdir: string): PermissionRule[] {
+  const candidates = [
+    join(homedir(), ".scoder", "policies.json"),
+    "/etc/scoder/policies.json",
+    process.env.SCODER_POLICY ?? "",
+  ].filter(Boolean);
+  const out: PermissionRule[] = [];
+  for (const p of candidates) {
+    if (!existsSync(p)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
+      const rules = parsePermissionRules(raw, p) ?? [];
+      out.push(...rules);
+    } catch (err) {
+      console.error(`⚠  ignoring malformed policy file ${p}: ${(err as Error).message}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Saved "always allow" approvals (pattern from opencode permission/saved.ts):
+ * persisted in <workdir>/.scoder/permissions.local.json, project-scoped.
+ * Never overrides a configured deny (enforced in PermissionChecker).
+ */
+export function savedApprovalsPath(workdir: string): string {
+  return resolve(workdir, ".scoder", "permissions.local.json");
+}
+
+export function loadSavedApprovals(workdir: string): PermissionRule[] {
+  const p = savedApprovalsPath(workdir);
+  if (!existsSync(p)) return [];
+  try {
+    return parsePermissionRules(JSON.parse(readFileSync(p, "utf8")), p) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveApproval(workdir: string, rule: PermissionRule): void {
+  const p = savedApprovalsPath(workdir);
+  const existing = loadSavedApprovals(workdir);
+  const next = [...existing.filter((r) => !(r.action === rule.action && r.resource === rule.resource)), rule];
+  mkdirSync(dirname(p), { recursive: true });
+  const tmp = `${p}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ rules: next }, null, 2), { mode: 0o600 });
+  renameSync(tmp, p);
 }

@@ -1,5 +1,5 @@
 import type { AgentConfig } from "./config.js";
-import { loadPermissionLists } from "./config.js";
+import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval } from "./config.js";
 import { LlmClient, LlmError, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
@@ -132,6 +132,9 @@ export class Agent {
       allowCommands: permLists.allowCommands,
       denyCommands: permLists.denyCommands,
       nonInteractive: config.yes,
+      rules: config.permissionRules,
+      savedRules: loadSavedApprovals(config.workdir),
+      policyRules: loadPolicyRules(config.workdir),
     });
     this.ctx = {
       workdir: config.workdir,
@@ -599,20 +602,48 @@ export class Agent {
           // Route MCP tools first (they carry the mcp__ prefix, not in AGENT_TOOLS)
           if (tool) {
             result = await tool.run(this.ctx, args);
-          } else if (this.config.permissionMode === "readonly") {
-            // MCP tools are not covered by the permission system (no command
-            // classification, no diff preview) — deny them entirely in readonly.
-            result = {
-              ok: false,
-              output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. MCP tools bypass the built-in permission policy, so they cannot run in readonly mode.`,
-            };
           } else {
+            // MCP tools — per-tool permission action (pattern from opencode:
+            // action mcp__<server>__<tool>; wildcard rules supported).
+            const mcpDecision = this.permissions.classifyAction(tc.name, "*");
+            if (mcpDecision?.decision === "deny") {
+              result = {
+                ok: false,
+                output: `ERROR: MCP tool "${tc.name}" denied by permission policy (${mcpDecision.reason}).`,
+              };
+              this.rejectToolCall(steps, tc, result.output, { args, denied: mcpDecision.reason });
+              continue;
+            }
+            if (this.config.permissionMode === "readonly" && mcpDecision?.decision !== "allow") {
+              result = {
+                ok: false,
+                output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. Allow it explicitly with a permission rule (mcp__${tc.name.replace(/^mcp__/, "").replace(/__/, "__")} or a wildcard).`,
+              };
+            } else if (mcpDecision?.decision === "ask" && !this.config.yes) {
+              const allowed = await this.permissions.confirmMcpTool(tc.name);
+              if (!allowed) {
+                result = {
+                  ok: false,
+                  output: `ERROR: user denied permission to call MCP tool: ${tc.name}`,
+                };
+                this.rejectToolCall(steps, tc, result.output, { args, denied: "user" });
+                continue;
+              }
+              const reg = this.mcp?.getTool(tc.name);
+              if (!reg) {
+                result = { ok: false, output: `ERROR: unknown tool "${tc.name}"` };
+              } else {
+                const r = await reg.conn.callTool(reg.toolName, args);
+                result = { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
+              }
+            } else {
             const reg = this.mcp?.getTool(tc.name);
             if (!reg) {
               result = { ok: false, output: `ERROR: unknown tool "${tc.name}"` };
             } else {
               const r = await reg.conn.callTool(reg.toolName, args);
               result = { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
+            }
             }
           }
           this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: result.ok, elapsedMs: Date.now() - t0 });
@@ -838,8 +869,16 @@ export class Agent {
     }
   }
 
-  /** Switch permission mode at runtime (/permission) — rebuilds the checker. */
-  setPermissionMode(mode: "auto" | "ask" | "readonly"): void {
+  /** Ask user to approve an MCP tool call; "always" persists a project-scoped rule. */
+  async confirmMcpTool(fullName: string): Promise<boolean> {
+    return this.permissions.confirmMcpTool(fullName, () => {
+      try {
+        saveApproval(this.config.workdir, { action: fullName, resource: "*", effect: "allow" });
+      } catch { /* persistence failure must not block the run */ }
+    });
+  }
+
+  /** Switch permission mode at runtime (/permission) — rebuilds the checker. */  setPermissionMode(mode: "auto" | "ask" | "readonly"): void {
     if (mode === this.config.permissionMode) return;
     this.config = { ...this.config, permissionMode: mode };
     const permLists = loadPermissionLists(this.config.workdir);
@@ -848,6 +887,9 @@ export class Agent {
       allowCommands: permLists.allowCommands,
       denyCommands: permLists.denyCommands,
       nonInteractive: this.config.yes,
+      rules: this.config.permissionRules,
+      savedRules: loadSavedApprovals(this.config.workdir),
+      policyRules: loadPolicyRules(this.config.workdir),
     });
     this.ctx.permissionMode = mode;
     ui.info(`permission mode → ${mode}`);

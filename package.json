@@ -19,7 +19,7 @@
     "test": "npm run build && node --test test/*.test.mjs && node test/run-e2e.mjs && node test/run-mcp-test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "keywords": [
     "cli",

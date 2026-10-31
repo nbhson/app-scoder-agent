@@ -59,6 +59,76 @@ function isCatastrophic(command: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Rule-based Permission Engine v2
+//
+// Source: anomalyco/opencode (packages/core/src/permission.ts) — adapted from
+// Effect-TS to plain TypeScript. Ordered rules, last match wins, wildcard
+// resources (* and ?). No match => "ask" (safe default). Catastrophic regex
+// deny always runs FIRST as a hard floor no rule can override.
+// ---------------------------------------------------------------------------
+
+export type PermissionEffect = "allow" | "deny" | "ask";
+
+export interface PermissionRule {
+  /** Action: "shell" | "edit" | "webfetch" | "skill" | "subagent" | "external_directory" | "mcp__<server>__<tool>" */
+  action: string;
+  /** Resource pattern: literal path/prefix or wildcard pattern with * and ? */
+  resource: string;
+  effect: PermissionEffect;
+}
+
+/** Wildcard match: supports * (any run) and ? (single char). */
+export function wildcardMatch(pattern: string, value: string): boolean {
+  if (pattern === "*") return true;
+  if (!pattern.includes("*") && !pattern.includes("?")) {
+    // Literal match — also accept prefix semantics for shell resources
+    // ("npm " allows "npm run build") to stay compatible with legacy lists.
+    return value === pattern || value.startsWith(pattern);
+  }
+  const rx = new RegExp(
+    "^" +
+      pattern
+        .split("")
+        .map((c) =>
+          c === "*" ? "[\\s\\S]*" : c === "?" ? "." : c.replace(/[.+^${}()|[\]\\]/g, "\\$&"),
+        )
+        .join("") +
+      "$",
+  );
+  return rx.test(value);
+}
+
+export function matchRule(rules: PermissionRule[], action: string, resource: string): PermissionEffect | null {
+  let effect: PermissionEffect | null = null;
+  for (const r of rules) {
+    // Action match: exact, or a wildcard action pattern (e.g. "mcp__prompt-gate__*").
+    if (r.action !== action && !wildcardMatch(r.action, action)) continue;
+    if (!wildcardMatch(r.resource, resource)) continue;
+    effect = r.effect; // last match wins
+  }
+  return effect;
+}
+
+/**
+ * Aggregate a multi-resource operation (a shell command produces several
+ * subcommand resources): deny wins over ask wins over allow; null when no
+ * rule matched at all.
+ */
+export function aggregate(effects: Array<PermissionEffect | null>): PermissionEffect | null {
+  if (effects.length === 0) return null;
+  let sawAsk = false;
+  let sawAllow = false;
+  for (const e of effects) {
+    if (e === "deny") return "deny";
+    if (e === "ask") sawAsk = true;
+    if (e === "allow") sawAllow = true;
+  }
+  if (sawAsk) return "ask";
+  if (sawAllow) return "allow";
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Permission mode
 // ---------------------------------------------------------------------------
 
@@ -267,6 +337,12 @@ export interface PermissionConfig {
   denyCommands: string[];
   /** Whether to skip confirmation in non-interactive mode (for CI) */
   nonInteractive: boolean;
+  /** Rule-based engine v2 (optional — legacy lists still work alongside). */
+  rules?: PermissionRule[];
+  /** Saved "always allow" rules persisted across sessions (project-scoped). */
+  savedRules?: PermissionRule[];
+  /** Policy hard floor — its deny always wins, allow bypasses ask. */
+  policyRules?: PermissionRule[];
 }
 
 export class PermissionChecker {
@@ -277,11 +353,69 @@ export class PermissionChecker {
     private config: PermissionConfig,
   ) {}
 
+  /** Rules for one evaluation: config rules + saved rules (config wins on deny). */
+  private activeRules(): PermissionRule[] {
+    return [...(this.config.savedRules ?? []), ...(this.config.rules ?? [])];
+  }
+
   /**
-   * Check if a command should run. Returns null = allowed immediately,
-   * or a PermissionResult if user needs to be consulted.
+   * Policy hard-floor check: policy deny wins over everything except the
+   * catastrophic list; policy allow bypasses ask-requirements.
    */
+  private policyEffect(action: string, resource: string): PermissionEffect | null {
+    if (!this.config.policyRules || this.config.policyRules.length === 0) return null;
+    return matchRule(this.config.policyRules, action, resource);
+  }
+
+  /**
+   * Rule-engine classify for a (action, resource) pair.
+   * Order: config/saved rules (last match wins) → mode fallback.
+   * Returns null when nothing matched (caller decides via mode).
+   */
+  classifyAction(action: string, resource: string): { decision: CommandDecision; reason: string } | null {
+    const effect = matchRule(this.activeRules(), action, resource);
+    if (effect === "deny") return { decision: "deny", reason: `denied by permission rule (${action}: ${resource})` };
+    if (effect === "allow") return { decision: "allow", reason: `allowed by permission rule (${action}: ${resource})` };
+    if (effect === "ask") return { decision: "ask", reason: `requires approval by permission rule (${action}: ${resource})` };
+    return null;
+  }
+
+  /** Shell decision: policy floor → rules → legacy lists/mode. */
   classify(command: string): PermissionResult {
+    // Catastrophic deny is the absolute floor.
+    if (isCatastrophic(command)) {
+      return { decision: "deny", reason: "matches catastrophic command pattern" };
+    }
+    // Policy deny wins over everything (enterprise hard floor).
+    const policy = this.policyEffect("shell", command);
+    if (policy === "deny") return { decision: "deny", reason: "denied by policy (hard floor)" };
+    if (policy === "allow") {
+      const deny = matchRule(this.activeRules(), "shell", command);
+      if (deny === "deny") return { decision: "deny", reason: "denied by permission rule" };
+      return { decision: "allow", reason: "allowed by policy" };
+    }
+    if (policy === "ask") {
+      const deny = matchRule(this.activeRules(), "shell", command);
+      if (deny === "deny") return { decision: "deny", reason: "denied by permission rule" };
+      const allow = matchRule(this.activeRules(), "shell", command);
+      if (allow === "allow") return { decision: "allow", reason: "allowed by permission rule" };
+      return { decision: "ask", reason: "requires approval by policy", alwaysAllowPrefix: extractFirstWord(command) + " " };
+    }
+    // Rule engine next.
+    const ruleEffect = matchRule(this.activeRules(), "shell", command);
+    if (ruleEffect) {
+      const base = classifyCommand(command, this.config.mode, this.config.allowCommands, this.config.denyCommands, this.sessionAllow);
+      if (base.decision === "deny") return base; // catastrophic/config deny never overridden
+      const alwaysAllowPrefix = ruleEffect === "ask" ? extractFirstWord(command) + " " : undefined;
+      switch (ruleEffect) {
+        case "allow":
+          return { decision: "allow", reason: "allowed by permission rule" };
+        case "deny":
+          return { decision: "deny", reason: "denied by permission rule" };
+        case "ask":
+          return { decision: "ask", reason: "requires approval by permission rule", alwaysAllowPrefix };
+      }
+    }
     return classifyCommand(
       command,
       this.config.mode,
@@ -327,6 +461,14 @@ export class PermissionChecker {
    */
   async confirmEdit(path: string, diffText: string, timeoutSecs = 120): Promise<boolean> {
     if (this.allowAllEdits) return true;
+    // Rule engine for edit action (deny wins, ask prompts, allow skips).
+    const ruleDecision = this.classifyAction("edit", path);
+    if (ruleDecision?.decision === "deny") return false;
+    if (ruleDecision?.decision === "allow") return true;
+    // Policy floor for edit.
+    const policy = this.policyEffect("edit", path);
+    if (policy === "deny") return false;
+    if (policy === "allow") return true;
     if (this.config.nonInteractive) {
       return false;
     }
@@ -375,6 +517,25 @@ export class PermissionChecker {
       clearTimeout(timer);
       try { rl.close(); } catch { /* already closed */ }
     }
+  }
+
+  /** Ask user to approve an MCP tool call; "always" persists via onAlways callback. */
+  async confirmMcpTool(fullName: string, onAlwaysAllow?: () => void): Promise<boolean> {
+    return this.confirmAsk(`MCP tool ${fullName}`, onAlwaysAllow);
+  }
+
+  /**
+   * Generic interactive ask (used for MCP tool approval etc.). Reuses the
+   * same readline prompt as shell confirm. onAlways is invoked when the
+   * user answers "a" (persist a saved approval).
+   */
+  async confirmAsk(label: string, onAlways?: () => void): Promise<boolean> {
+    if (this.config.nonInteractive) return false;
+    return promptForPermission(
+      { command: label, alwaysAllowPrefix: undefined },
+      // promptForPermission passes a prefix; we only need the "a" signal.
+      () => onAlways?.(),
+    );
   }
 
   /** Set when the user pressed [q]uit in confirmEdit — the agent should stop. */
