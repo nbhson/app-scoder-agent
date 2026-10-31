@@ -278,9 +278,21 @@ export async function runInit(): Promise<void> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = (q: string, def: string) =>
     new Promise<string>((res) => rl.question(`${q}${def ? ` [${def}]` : ""}: `, (a) => res(a.trim() || def)));
-  const baseUrl = await ask("API base URL (OpenAI-compatible)", "https://api.openai.com/v1");
+
+  // I-03: probe local engines first — suggest when found (no auto-switch when
+  // a cloud key exists; user always decides).
+  ui.info("probing local engines (ollama :11434, lmstudio :1234, vllm :8000)…");
+  const { discoverLocalEngines } = await import("./provider-registry.js");
+  const locals = await discoverLocalEngines();
+  for (const e of locals) {
+    ui.info(`  found ${e.provider.id} at ${e.provider.baseUrl} — ${e.models.length} model(s), e.g. ${e.models[0]}`);
+  }
+
+  const suggestBase = locals[0]?.provider.baseUrl ?? "https://api.openai.com/v1";
+  const suggestModel = locals[0]?.models[0] ?? "gpt-4o-mini";
+  const baseUrl = await ask("API base URL (OpenAI-compatible)", suggestBase);
   const apiKey = await ask("API key (SCODER_API_KEY/OPENAI_API_KEY also work at runtime)", "");
-  const model = await ask("Model", "gpt-4o-mini");
+  const model = await ask("Model", suggestModel);
   const buildCmd = await ask("Build command (empty = auto-detect)", "");
   const permission = (await ask("Permission mode (auto | ask | readonly)", "auto")).toLowerCase();
   rl.close();

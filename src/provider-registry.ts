@@ -117,3 +117,43 @@ export function splitProviderModel(model: string): [string | null, string] {
   // anthropic/claude-x, openai/gpt-4o, groq/llama-3…
   return [model.slice(0, idx), model.slice(idx + 1)];
 }
+
+// ---------------------------------------------------------------------------
+// Local engine auto-discovery (I-03) — probe well-known local endpoints.
+// ---------------------------------------------------------------------------
+
+export interface LocalEngine {
+  provider: ProviderDef;
+  /** Model ids reported by the engine's /v1/models. */
+  models: string[];
+}
+
+const LOCAL_PROBES: Array<{ id: string; baseUrl: string }> = [
+  { id: "ollama", baseUrl: DEFAULT_OLLAMA_BASE_URL },
+  { id: "lmstudio", baseUrl: DEFAULT_LMSTUDIO_BASE_URL },
+  { id: "vllm", baseUrl: "http://localhost:8000/v1" },
+];
+
+/**
+ * Probe local engines (300ms timeout each, concurrent). Returns engines that
+ * answered /v1/models with a valid list. Never throws; offline-safe.
+ */
+export async function discoverLocalEngines(timeoutMs = 300): Promise<LocalEngine[]> {
+  const probes = await Promise.allSettled(
+    LOCAL_PROBES.map(async (p) => {
+      const res = await fetch(`${p.baseUrl}/models`, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { data?: Array<{ id?: string }> };
+      const models = (data.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+      if (models.length === 0) return null;
+      const builtin = BUILTIN_PROVIDERS[p.id];
+      const def: ProviderDef =
+        builtin ?? { id: p.id, baseUrl: p.baseUrl, apiKeyEnv: "SCODER_API_KEY", kind: "openai" };
+      return { provider: def, models } satisfies LocalEngine;
+    }),
+  );
+  return probes
+    .filter((r): r is PromiseFulfilledResult<LocalEngine | null> => r.status === "fulfilled")
+    .map((r) => r.value)
+    .filter((v): v is LocalEngine => v !== null);
+}
