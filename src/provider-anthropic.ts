@@ -18,6 +18,7 @@ import { withRetry } from "./retry.js";
 
 type AnthropicContentBlock =
   | { type: "text"; text: string; cache_control?: { type: "ephemeral" } }
+  | { type: "thinking"; thinking: string; signature?: string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean; cache_control?: { type: "ephemeral" } };
 
@@ -98,11 +99,14 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
 
 export function fromAnthropicResponse(data: AnthropicResponse): ChatResult {
   let text = "";
+  let thinking = "";
   const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 
   for (const block of data.content ?? []) {
     if (block.type === "text") {
       text = text ? `${text}\n${block.text ?? ""}` : (block.text ?? "");
+    } else if (block.type === "thinking") {
+      thinking += (block as { thinking?: string }).thinking ?? "";
     } else if (block.type === "tool_use") {
       toolCalls.push({
         id: block.id ?? "",
@@ -123,6 +127,7 @@ export function fromAnthropicResponse(data: AnthropicResponse): ChatResult {
     message: {
       role: "assistant",
       content: text.length > 0 ? text : null,
+      reasoning: thinking || undefined,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     },
     usage,
@@ -148,6 +153,8 @@ export class AnthropicClient {
       temperature: number;
       /** I-04: cache_control ephemeral on system + tools + last user turn. */
       enableCache?: boolean;
+      /** I-05: thinking budget tokens (Anthropic extended thinking). 0 = off. */
+      thinkingBudgetTokens?: number;
     },
   ) {}
 
@@ -196,6 +203,22 @@ export class AnthropicClient {
     return this.opts.model;
   }
 
+  /** I-05: request body builder — shared by chat/streamChat. */
+  private buildBody(system: unknown, messages: AnthropicMessage[], tools: unknown, stream: boolean): string {
+    // Extended thinking: temperature must be 1 và thinking block format.
+    const thinkingOn = (this.opts.thinkingBudgetTokens ?? 0) > 0;
+    return JSON.stringify({
+      model: this.opts.model,
+      max_tokens: this.opts.maxTokens,
+      temperature: thinkingOn ? 1 : this.opts.temperature,
+      ...(thinkingOn ? { thinking: { type: "enabled", budget_tokens: this.opts.thinkingBudgetTokens } } : {}),
+      system,
+      messages,
+      stream,
+      tools,
+    });
+  }
+
   async chat(
     messages: ChatMessage[],
     tools: ToolSpec[],
@@ -205,14 +228,7 @@ export class AnthropicClient {
     const { system, messages: translated } = toAnthropicMessages(messages);
     const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const cached = this.applyCacheControl(system, translated, tools);
-    const body = JSON.stringify({
-      model: this.opts.model,
-      max_tokens: this.opts.maxTokens,
-      temperature: this.opts.temperature,
-      system: cached.system,
-      messages: cached.messages,
-      tools: cached.tools,
-    });
+    const body = this.buildBody(cached.system, cached.messages, cached.tools, false);
 
     let res: Response;
     try {
@@ -264,15 +280,7 @@ export class AnthropicClient {
     const { system, messages: translated } = toAnthropicMessages(messages);
     const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
     const cached = this.applyCacheControl(system, translated, tools);
-    const body = JSON.stringify({
-      model: this.opts.model,
-      max_tokens: this.opts.maxTokens,
-      temperature: this.opts.temperature,
-      system: cached.system,
-      messages: cached.messages,
-      stream: true,
-      tools: cached.tools,
-    });
+    const body = this.buildBody(cached.system, cached.messages, cached.tools, true);
 
     let res: Response;
     try {
@@ -306,6 +314,7 @@ export class AnthropicClient {
 
     // Accumulators — text content + tool_use blocks (by block index)
     let text = "";
+    let thinkingAccum = "";
     const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
     let stopReason: string | undefined;
     let usage: ChatResult["usage"] | undefined;
@@ -378,6 +387,12 @@ export class AnthropicClient {
           text += ev.delta.text;
           return { contentDelta: ev.delta.text, done: false };
         }
+        // I-05: thinking deltas stream as their own content block type.
+        if (ev.delta?.type === "thinking_delta" && (ev.delta as { thinking?: string }).thinking) {
+          const t = (ev.delta as { thinking?: string }).thinking ?? "";
+          thinkingAccum += t;
+          return { reasoningDelta: t, done: false };
+        }
         if (ev.delta?.type === "input_json_delta" && ev.delta.partial_json) {
           const block = toolBlocks.get(ev.index ?? 0);
           if (block) block.json += ev.delta.partial_json;
@@ -446,6 +461,7 @@ export class AnthropicClient {
           message: {
             role: "assistant",
             content: text.length > 0 ? text : null,
+            reasoning: thinkingAccum || undefined,
             stop_reason: stopReason,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
           },

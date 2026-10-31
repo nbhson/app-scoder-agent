@@ -55,6 +55,8 @@ export type AgentEvent =
   | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string; permission: string }
   | { type: "step"; step: number; maxSteps: number }
   | { type: "llm_delta"; delta: string }
+  /** I-05: reasoning/thinking stream delta (rendered dim, toggleable). */
+  | { type: "llm_reasoning"; delta: string }
   | { type: "llm_usage"; usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number } }
   | { type: "tool_call"; step: number; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool_output"; name: string; stream: "stdout" | "stderr"; delta: string }
@@ -136,9 +138,11 @@ export class Agent {
       temperature: config.temperature,
     };
     // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
+    // I-05: thinking budget = 10% maxTokens khi reasoning on (Anthropic only).
+    const thinkingBudget = config.reasoning === "on" ? Math.max(1024, Math.floor(config.maxTokens * 0.25)) : 0;
     this.client =
       config.providerDef?.kind === "anthropic" || (!config.providerDef && config.provider === "anthropic")
-        ? new AnthropicClient({ ...commonOpts, enableCache: config.providerDef?.supportCache ?? true })
+        ? new AnthropicClient({ ...commonOpts, enableCache: config.providerDef?.supportCache ?? true, thinkingBudgetTokens: thinkingBudget })
         : new LlmClient({ ...commonOpts, stream: config.stream });
     const permLists = loadPermissionLists(config.workdir);
     this.permissions = new PermissionChecker({
@@ -331,6 +335,10 @@ export class Agent {
     let sawToolCallDelta = false;
     try {
       for await (const chunk of this.client.streamChat(this.messages, this.tools, { signal })) {
+        if (chunk.reasoningDelta) {
+          // I-05: reasoning hiển thị dim qua UI stream; không vào llm_delta.
+          this.emit({ type: "llm_reasoning", delta: chunk.reasoningDelta });
+        }
         if (chunk.contentDelta) {
           if (!started) {
             ui.llmStreamStart("assistant");

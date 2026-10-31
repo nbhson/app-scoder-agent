@@ -50,6 +50,8 @@ export interface AssistantMessage {
   content: string | null;
   stop_reason?: string;
   tool_calls?: ToolCall[];
+  /** I-05: model reasoning/thinking text — never sent back on the wire. */
+  reasoning?: string;
 }
 
 export interface ChatMessage {
@@ -88,6 +90,8 @@ export interface LlmClientOptions {
 export interface StreamChunk {
   /** Text delta from the assistant */
   contentDelta?: string;
+  /** I-05: reasoning/thinking delta (Anthropic thinking blocks, OpenAI reasoning_content). */
+  reasoningDelta?: string;
   /** Tool call delta — accumulates per call until name+complete args received */
   toolCallDelta?: {
     index: number;
@@ -284,7 +288,9 @@ export class LlmClient {
       cleanup();
     }
 
-    const choice = data.choices?.[0]?.message;
+    const choice = data.choices?.[0]?.message as
+      | (Record<string, unknown> & { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> })
+      | undefined;
     if (!choice) throw new LlmError("LLM API returned no message in response");
 
     // Extract cached prompt tokens when the provider reports them
@@ -302,7 +308,8 @@ export class LlmClient {
       message: {
         role: "assistant",
         content: choice.content ?? null,
-        stop_reason: choice.stop_reason ?? (choice.content ? "stop" : undefined),
+        stop_reason: (choice as { stop_reason?: string }).stop_reason ?? (choice.content ? "stop" : undefined),
+        reasoning: typeof choice.reasoning_content === "string" && choice.reasoning_content ? choice.reasoning_content : undefined,
         tool_calls: choice.tool_calls?.map((tc) => ({
           id: tc.id ?? "",
           name: tc.function?.name ?? "",
@@ -405,6 +412,8 @@ export class LlmClient {
 
     // Reset the partial-call record for this stream (H-09 continuation).
     this.lastPartialToolCalls = [];
+    // I-05: accumulate reasoning deltas for the final message.
+    let reasoningAccum = "";
 
     try {
       while (true) {
@@ -431,6 +440,8 @@ export class LlmClient {
               delta?: {
                 role?: string;
                 content?: string | null;
+                /** DeepSeek/OpenRouter-style reasoning stream (I-05). */
+                reasoning_content?: string | null;
                 tool_calls?: Array<{
                   index?: number;
                   id?: string;
@@ -462,6 +473,12 @@ export class LlmClient {
           // Text content delta
           if (delta?.content != null && delta.content.length > 0) {
             yield { contentDelta: delta.content, done: false };
+          }
+
+          // I-05: reasoning_content delta (DeepSeek/OpenRouter style)
+          if (delta?.reasoning_content) {
+            reasoningAccum += delta.reasoning_content;
+            yield { reasoningDelta: delta.reasoning_content, done: false };
           }
 
           // Tool call deltas
@@ -505,6 +522,7 @@ export class LlmClient {
                 content: null,
                 stop_reason: choice.finish_reason,
                 tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+                reasoning: reasoningAccum || undefined,
               },
               usage: chunkData.usage,
             };

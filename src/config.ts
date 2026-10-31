@@ -26,6 +26,8 @@ export interface AgentConfig {
   yes: boolean;
   /** Git shadow snapshots (H-11): false disables checkpoint capture. */
   snapshots?: boolean;
+  /** I-05: reasoning/thinking — "off" (default) | "on". */
+  reasoning?: "off" | "on";
   /** Disable session auto-save */
   noSave?: boolean;
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */
@@ -85,6 +87,8 @@ interface RcFile {
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
   /** Git shadow snapshots (H-11): false disables checkpoint capture. */
   snapshots?: boolean;
+  /** I-05: reasoning/thinking — "off" (default) | "on". */
+  reasoning?: "off" | "on";
 }
 
 function readRcFile(path: string, label: string): RcFile {
@@ -268,6 +272,11 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     mcpServers: rc.mcpServers,
     guardrails: rc.guardrails,
     stream: overrides.stream ?? (process.env.SCODER_STREAM !== "0" ? true : false),
+    reasoning:
+      overrides.reasoning ??
+      (process.env.SCODER_REASONING === "1" ? "on" : undefined) ??
+      rc.reasoning ??
+      "off",
     permissionMode: overrides.permissionMode ??
       parsePermissionMode(process.env.SCODER_PERMISSION ?? rc.permission ?? rc.permissions?.mode ?? "auto"),
     permissionRules: parsePermissionRules(rc.permissions?.rules),
