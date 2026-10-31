@@ -8,7 +8,7 @@
 
 ## Installation
 
-**Requirements:** Node.js ≥ 18
+**Requirements:** Node.js ≥ 20.19 (eslint 10 in devDependencies requires it; runtime itself works on 18+)
 
 ### Install from GitHub (current method)
 
