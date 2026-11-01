@@ -3,13 +3,13 @@ import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval 
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
-import { spawnSync } from "node:child_process";
 import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { invalidateFileIndex } from "./tui/at-complete.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
-import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
+import { PROMPT_VERSION } from "./prompt.js";
+import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock } from "./prompt-builder.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
@@ -19,24 +19,12 @@ import { JsonlLogger } from "./logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 import { loadRcFile } from "./config.js";
 import { McpManager } from "./mcp.js";
-import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
+import { discoverSkills, findSkill, type Skill } from "./skills.js";
 import { discoverAgents, findAgent } from "./agents.js";
+
 import * as ui from "./ui.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
-
-/** One-line environment snapshot for the system prompt (cache-stable per run). */
-function buildEnvInfo(workdir: string): string {
-  let git = "";
-  try {
-    const branch = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workdir, encoding: "utf8" });
-    if (branch.status === 0) git = ` · git:${branch.stdout.trim()}`;
-  } catch {
-    /* git unavailable */
-  }
-  return `Environment: ${process.platform} · node ${process.version}${git} · today ${new Date().toISOString().slice(0, 10)}`;
-}
-
 
 export interface AgentRunResult {
   success: boolean;
@@ -725,10 +713,7 @@ export class Agent {
     this.resetUsageTotals();
     this.filesModified = false;
     this.plan = [];
-    const skillsBlock =
-      this.skills.length > 0
-        ? `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(this.skills)}\nDynamic selection: BEFORE planning, scan this index against the task. If any skill's description matches the task's domain or workflow, call load_skill with its name FIRST and follow the returned instructions — the skill may change how you approach the whole task. Do not load a skill merely because it is listed; only when it genuinely matches. If two skills match, prefer the more specific one.`
-        : "";
+    const skillsBlock = buildSkillsBlock(this.skills); // I3
     this.messages = [
       {
         role: "system",
@@ -737,7 +722,7 @@ export class Agent {
           buildCmd,
           envInfo: buildEnvInfo(this.config.workdir),
           skillsBlock,
-        }),
+        }) + buildAgentsBlock(discoverAgents(this.config.workdir), this.config.allowSubagents !== false),
       },
       ...this.pendingContext.map((content) => ({ role: "user" as const, content })),
       { role: "user", content: task },
