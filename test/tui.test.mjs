@@ -80,7 +80,7 @@ describe("scoder tui — Ink full-screen UI", () => {
     assert.ok(clean.includes("run_command"), "phải render run_command (build)");
     assert.ok(/build passed|All done/i.test(clean), `phải render finish (tail: ${clean.slice(-300)})`);
     assert.ok(/success/i.test(clean), "status bar phải chuyển sang success");
-    assert.ok(/send · esc abort|abort · ctrl\+c/i.test(clean), "phải có status bar với keybind hints");
+    assert.ok(/esc abort|ctrl\+t thinking/i.test(clean), "phải có status bar với keybind hints");
     // Build Rail — bản sắc riêng: đèn build + step fuel gauge
     assert.ok(/● build (ok|fail)|no build yet/.test(clean), `phải có build lamp trong Build Rail (tail: ${clean.slice(-300)})`);
     assert.ok(/▰|▱/.test(clean), "phải có step fuel gauge ▰▱ trong Build Rail");

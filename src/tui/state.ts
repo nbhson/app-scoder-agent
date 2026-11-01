@@ -24,6 +24,7 @@ export type ChatItem =
       durationMs?: number;
     }
   | { kind: "notice"; text: string; level: "info" | "warn" | "error" }
+  | { kind: "thinking"; text: string; streaming: boolean }
   | { kind: "build"; success: boolean; command: string }
   | { kind: "todo"; items: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | {
@@ -62,6 +63,8 @@ export interface TuiState {
   guardrailCount: number;
   /** Guardrail gần nhất — "rule: reason" (ngắn) hiển thị trên header. */
   lastGuardrail: string | null;
+  /** T-10: thinking stream visibility (ctrl+t toggle). */
+  thinkingVisible: boolean;
   /** Các giai đoạn đã đi qua trong run (breadcrumb): plan/explore/edit/build/verify. */
   phases: string[];
 }
@@ -84,6 +87,7 @@ export function initialState(): TuiState {
     summary: null,
     guardrailCount: 0,
     lastGuardrail: null,
+    thinkingVisible: false,
     phases: [],
   };
 }
@@ -175,12 +179,26 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       }
       break;
     }
+    case "llm_reasoning": {
+      // T-10: thinking stream — chỉ append khi thinkingVisible; vẫn giữ trong
+      // reasoning buffer riêng để toggle bật lại thấy (đơn giản: drop khi off).
+      if (!state.thinkingVisible) break;
+      const last = lastItem(state);
+      if (last && last.kind === "thinking" && last.streaming) {
+        last.text += ev.delta;
+        if (last.text.length > MAX_TEXT_CHARS) last.text = last.text.slice(-MAX_TEXT_CHARS);
+      } else {
+        appendItem(state, { kind: "thinking", text: ev.delta, streaming: true });
+      }
+      break;
+    }
     case "step": {
       state.step = ev.step;
       state.maxSteps = ev.maxSteps;
       // A new step starts: close any still-"streaming" assistant message.
       const last = lastItem(state);
       if (last && last.kind === "assistant" && last.streaming) last.streaming = false;
+      if (last && last.kind === "thinking" && last.streaming) last.streaming = false;
       break;
     }
     case "llm_delta": {

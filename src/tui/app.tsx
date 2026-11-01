@@ -211,6 +211,15 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
         </Box>
       );
     }
+    case "thinking":
+      // T-10: reasoning stream — dim italic, ✻ prefix.
+      return (
+        <Box paddingLeft={1}>
+          <Text dimColor italic>
+            ✻ {item.text.split("\n").slice(-3).join("\n  ")}
+          </Text>
+        </Box>
+      );
     case "tool":
       return <ToolItemView item={item} />;
     case "diff":
@@ -349,7 +358,7 @@ function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null 
   const model = state.model || "—";
   // Left: status · elapsed · model. Right: scroll position or keybinds.
   // (Tokens live in the header metrics row only — no duplicated display here.)
-  const keybinds = scroll ? `↑ scrollback ${scroll} · ⏎ send · ctrl+c quit` : "⏎ send · pgup history · esc abort · ctrl+c quit";
+  const keybinds = scroll ? `↑ scrollback ${scroll} · ⏎ send · ctrl+c quit` : `⏎ send · pgup history · ctrl+t thinking ${state.thinkingVisible ? "on" : "off"} · ctrl+c quit`;
   const leftBudget = Math.max(20, width - keybinds.length - 2);
   const elapsed = state.startedAt ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}` : null;
   let left = statusLabel + (state.status === "running" && elapsed ? ` · ${elapsed}` : "");
@@ -969,6 +978,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // T-01/T-02: scroll + abort keybinds.
   useInput((_input, key) => {
     if (permPromptRef.current) return; // modal owns the keyboard
+    // T-10: ctrl+t toggles the thinking stream visibility.
+    if (key.ctrl && _input === "t") {
+      update((s) => ({ ...s, thinkingVisible: !s.thinkingVisible }));
+      return;
+    }
     if (key.pageUp || key.pageDown || key.home || key.end) {
       const page = Math.max(1, Math.floor((viewportRowsRef.current ?? 20) * 0.8));
       if (key.pageUp) setScrollOffset((o) => o + page);
