@@ -15,13 +15,7 @@ const baseCtx = {
   buildPassedThisStep: false,
   buildCallPresent: false,
   filesModified: true,
-  textOnlyStreak: 0,
-  sigRepeat: 0,
-  wrapUpInjected: false,
   chatDone: false,
-  toolErrorSig: "run_command:ERROR: module not found",
-  toolErrorRepeat: 0,
-  textOnlyLowTokenStreak: 0,
 };
 
 describe("errorLoopRule (H-12)", () => {
@@ -32,10 +26,6 @@ describe("errorLoopRule (H-12)", () => {
     assert.equal(d.action.kind, "inject");
     assert.match(d.action.reminder, /change your approach|different method/i);
   });
-  it("không kích hoạt dưới ngưỡng", () => {
-    assert.equal(rule.evaluate({ ...baseCtx, toolErrorRepeat: 0 }), null);
-    assert.equal(rule.evaluate({ ...baseCtx, toolErrorRepeat: 1 }), null);
-  });
   it("engine mặc định chứa error-loop rule", () => {
     const eng = createGuardrailEngine();
     assert.ok(eng.listRules().some((r) => r.name === "error-loop"));
@@ -45,18 +35,40 @@ describe("errorLoopRule (H-12)", () => {
 describe("tokenNoProgressRule (H-12)", () => {
   const rule = tokenNoProgressRule({});
   it("finish sau 3 step liên tiếp outputTokens < 20", () => {
-    const d = rule.evaluate({ ...baseCtx, outputTokensThisStep: 5, textOnlyLowTokenStreak: 3 });
+    const d = rule.evaluate({ ...baseCtx, outputTokensThisStep: 5, lowTokenStreak: 3 });
     assert.ok(d);
     assert.equal(d.action.kind, "finish");
     assert.equal(d.action.success, false);
   });
   it("không finish dưới 3 step", () => {
-    assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: 5, textOnlyLowTokenStreak: 2 }), null);
+    assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: 5, lowTokenStreak: 2 }), null);
   });
   it("outputTokens >= 20 không kích hoạt", () => {
-    assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: 50, textOnlyLowTokenStreak: 5 }), null);
+    assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: 50, lowTokenStreak: 5 }), null);
   });
   it("usage undefined (provider không báo) không kích hoạt", () => {
-    assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: undefined, textOnlyLowTokenStreak: 10 }), null);
+    assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: undefined, lowTokenStreak: 10 }), null);
+  });
+
+  it("engine-level (G1): tracker tự tính từ ctx — 3 bước low-token liên tiếp ⇒ finish", () => {
+    const eng = createGuardrailEngine();
+    const feed = () => eng.evaluate({ ...baseCtx, outputTokensThisStep: 5 });
+    feed();
+    feed();
+    const hit = feed();
+    const d = hit.find((x) => x.rule === "token-no-progress");
+    assert.ok(d, "step thứ 3 phải kích hoạt");
+    assert.equal(d.action.kind, "finish");
+  });
+
+  it("engine-level (G1): error-loop tự tính từ toolResults", () => {
+    const eng = createGuardrailEngine();
+    const calls = { role: "assistant", content: null, tool_calls: [{ id: "t1", name: "run_command", arguments: "{}" }] };
+    const results = new Map([["t1", { ok: false, output: "ERROR: module not found" }]]);
+    const feed = () => eng.evaluate({ ...baseCtx, message: calls, toolResults: results });
+    feed();
+    feed();
+    const hit = feed();
+    assert.ok(hit.find((x) => x.rule === "error-loop"), "lần error thứ 3 phải inject");
   });
 });

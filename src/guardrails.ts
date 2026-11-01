@@ -13,7 +13,7 @@
  *
  * Không copy code từ opencode — chỉ tham khảo ý tưởng "guardrails quanh loop".
  */
-import type { AssistantMessage } from "./llm.js";
+import type { AssistantMessage, ToolCall } from "./llm.js";
 import { claimsCompletion } from "./context.js";
 
 /** Marker do system prompt quy ước: lượt chat thuần, không cần build. */
@@ -57,28 +57,35 @@ export interface GuardrailContext {
   message: AssistantMessage | null;
   /** Có tool_calls trong bước này không. */
   hasToolCalls: boolean;
+  /** Kết quả tool đã chạy bước này (id → {ok, output}) — error-loop tracking. */
+  toolResults?: ReadonlyMap<string, { ok: boolean; output: string }>;
   /** Có tool call nào chạy đúng build command và thành công không. */
   buildPassedThisStep: boolean;
   /** Có tool call nào chạy đúng build command (dù fail) không. */
   buildCallPresent: boolean;
   /** Đã có file nào được sửa trong run này chưa. */
   filesModified: boolean;
+  /** Assistant vừa phát marker kết thúc lượt chat. */
+  chatDone: boolean;
+  /** Output tokens của bước này (token-no-progress, H-12). */
+  outputTokensThisStep?: number;
+}
+
+// ── Per-run tracker state (G1) — sống trong engine, không còn trong runLoop ──
+
+interface TrackerState {
   /** Số bước liên tiếp chỉ trả text (không gọi tool). */
   textOnlyStreak: number;
-  /** Số lần lặp lại chuỗi tool call giống hệt bước trước (0 = lần đầu). */
+  /** Chuỗi tool call của bước trước + số lần lặp lại giống hệt. */
+  lastCallSig: string;
   sigRepeat: number;
   /** Wrap-up reminder đã được inject trong run này chưa. */
   wrapUpInjected: boolean;
-  /** Assistant vừa phát marker kết thúc lượt chat. */
-  chatDone: boolean;
-  /** Chuỗi signature "tool+error" gần nhất — error-loop tracking (H-12). */
+  /** Signature "tool+error" gần nhất — error-loop tracking (H-12). */
   toolErrorSig: string;
-  /** Số lần lặp liên tiếp cùng tool + cùng error. */
   toolErrorRepeat: number;
-  /** Output tokens của bước này (token-no-progress, H-12). */
-  outputTokensThisStep?: number;
   /** Số bước liên tiếp outputTokens < 20 (H-12). */
-  textOnlyLowTokenStreak: number;
+  lowTokenStreak: number;
 }
 
 // ── Options: ngưỡng cấu hình được cho các rule ──────────────────────────────
@@ -118,7 +125,8 @@ export function wrapUpRule(opts: GuardrailOptions): GuardrailRule {
     name: "wrap-up",
     description: `inject reminder ${opts.wrapUpStepsBeforeEnd} steps before budget end`,
     evaluate(ctx) {
-      if (ctx.wrapUpInjected) return null;
+      const t = ctx as GuardrailContext & TrackerState;
+      if (t.wrapUpInjected) return null;
       if (ctx.maxSteps - ctx.step !== opts.wrapUpStepsBeforeEnd) return null;
       return {
         action: {
@@ -192,12 +200,13 @@ export function textOnlyStreakRule(opts: GuardrailOptions): GuardrailRule {
     name: "text-only-streak",
     description: `end the run after ${opts.textOnlyStreakLimit} consecutive tool-less steps with no file changes`,
     evaluate(ctx) {
+      const t = ctx as GuardrailContext & TrackerState;
       if (ctx.hasToolCalls) return null;
-      if (ctx.textOnlyStreak < opts.textOnlyStreakLimit) return null;
+      if (t.textOnlyStreak < opts.textOnlyStreakLimit) return null;
       if (ctx.filesModified) return null;
       return {
         action: { kind: "finish", success: true, summary: ctx.text || "(agent replied without acting)" },
-        reason: `${ctx.textOnlyStreak} consecutive text-only steps with no file changes`,
+        reason: `${t.textOnlyStreak} consecutive text-only steps with no file changes`,
       };
     },
   };
@@ -212,14 +221,15 @@ export function errorLoopRule(_opts: GuardrailOptions): GuardrailRule {
     name: "error-loop",
     description: "same tool + same error 3x in a row — force a strategy change",
     evaluate(ctx) {
-      if (ctx.toolErrorRepeat < 2) return null; // 3rd occurrence = repeat 2
+      const t = ctx as GuardrailContext & TrackerState;
+      if (t.toolErrorRepeat < 2) return null; // 3rd occurrence = repeat 2
       return {
         action: {
           kind: "inject",
           reminder:
             "<system-reminder>The same tool call has failed with the same error 3 times. Stop retrying: the approach itself is wrong. Diagnose the root cause, try a fundamentally different method, or report the blocker in your final message.</system-reminder>",
         },
-        reason: `same tool+error repeated ${ctx.toolErrorRepeat + 1}x`,
+        reason: `same tool+error repeated ${t.toolErrorRepeat + 1}x`,
       };
     },
   };
@@ -234,17 +244,18 @@ export function tokenNoProgressRule(opts: GuardrailOptions): GuardrailRule {
     name: "token-no-progress",
     description: "output tokens < 20 for 3 consecutive steps — end a degenerate run",
     evaluate(ctx) {
+      const t = ctx as GuardrailContext & TrackerState;
       void opts;
       if (ctx.outputTokensThisStep === undefined) return null;
       if (ctx.outputTokensThisStep >= 20) return null;
-      if (ctx.textOnlyLowTokenStreak < 3) return null;
+      if (t.lowTokenStreak < 3) return null;
       return {
         action: {
           kind: "finish",
           success: false,
           summary: "Run stopped: 3 consecutive near-empty LLM responses (no progress).",
         },
-        reason: `output tokens ${ctx.outputTokensThisStep} < 20 for ${ctx.textOnlyLowTokenStreak} steps`,
+        reason: `output tokens ${ctx.outputTokensThisStep} < 20 for ${t.lowTokenStreak} steps`,
       };
     },
   };
@@ -277,15 +288,16 @@ export function doomLoopRule(opts: GuardrailOptions): GuardrailRule {
     name: "doom-loop",
     description: `intervene after ${opts.doomLoopRepeats + 1} identical consecutive tool-call batches`,
     evaluate(ctx) {
+      const t = ctx as GuardrailContext & TrackerState;
       if (!ctx.hasToolCalls) return null;
-      if (ctx.sigRepeat < opts.doomLoopRepeats) return null;
+      if (t.sigRepeat < opts.doomLoopRepeats) return null;
       return {
         action: {
           kind: "inject",
           reminder:
             "<system-reminder>You have made the identical tool call 3 times in a row. This is a loop: read the last output carefully, change your approach, or report the blocker in your final message. Do NOT repeat the same call again.</system-reminder>",
         },
-        reason: `identical tool-call batch repeated ${ctx.sigRepeat + 1}x`,
+        reason: `identical tool-call batch repeated ${t.sigRepeat + 1}x`,
       };
     },
   };
@@ -350,15 +362,50 @@ export function defaultGuardrailRules(opts: GuardrailOptions = DEFAULT_GUARDRAIL
 /**
  * Engine chạy toàn bộ rule mỗi bước và thu thập các decision đã kích hoạt.
  * runLoop áp dụng: finish đầu tiên thắng; inject/trim gom lại áp một lần.
+ * G1: toàn bộ tracker state (textOnlyStreak, sigRepeat, wrapUpInjected,
+ * toolError*, lowTokenStreak) sống ở đây — runLoop chỉ emit sự kiện thô.
  */
 export class GuardrailEngine {
   private rules: GuardrailRule[];
+  /** G1: per-run tracker — reset() khi bắt đầu run mới. */
+  private tracker: TrackerState = {
+    textOnlyStreak: 0,
+    lastCallSig: "",
+    sigRepeat: 0,
+    wrapUpInjected: false,
+    toolErrorSig: "",
+    toolErrorRepeat: 0,
+    lowTokenStreak: 0,
+  };
 
   constructor(
     rules?: GuardrailRule[],
     private onDecision?: (d: GuardrailDecision) => void,
   ) {
     this.rules = rules ?? defaultGuardrailRules();
+  }
+
+  /** Reset tracker — gọi ở đầu mỗi run (per-run state, không rò rỉ giữa các run). */
+  reset(): void {
+    this.tracker = {
+      textOnlyStreak: 0,
+      lastCallSig: "",
+      sigRepeat: 0,
+      wrapUpInjected: false,
+      toolErrorSig: "",
+      toolErrorRepeat: 0,
+      lowTokenStreak: 0,
+    };
+  }
+
+  /** Steer batch được deliver — reset text-only allowance một lần cho cả batch. */
+  notifySteered(): void {
+    this.tracker.textOnlyStreak = 0;
+  }
+
+  /** Wrap-up reminder vừa được apply — chỉ inject một lần mỗi run. */
+  markWrapUpInjected(): void {
+    this.tracker.wrapUpInjected = true;
   }
 
   /** Đăng ký thêm rule (chạy sau các rule mặc định nếu thêm sau khi tạo). */
@@ -370,13 +417,20 @@ export class GuardrailEngine {
     return this.rules.map((r) => ({ name: r.name, description: r.description }));
   }
 
-  /** Chạy tất cả rule; trả về các decision ĐÃ kích hoạt (theo thứ tự ưu tiên). */
+  /**
+   * Chạy tất cả rule; trả về các decision ĐÃ kích hoạt (theo thứ tự ưu tiên).
+   * Tracker được cập nhật từ ctx thô TRƯỚC khi rule chạy (rule thấy giá trị
+   * của bước này — đúng semantics cũ của runLoop).
+   */
   evaluate(ctx: GuardrailContext): GuardrailDecision[] {
+    this.updateTrackers(ctx);
+    // Rules nhìn thấy tracker qua ctx mở rộng (internal — không thuộc API public).
+    const full = { ...ctx, ...this.tracker };
     const out: GuardrailDecision[] = [];
     for (const rule of this.rules) {
       let r: { action: GuardrailAction; reason: string } | null;
       try {
-        r = rule.evaluate(ctx);
+        r = rule.evaluate(full);
       } catch (err) {
         // Một rule lỗi không được phép làm gãy vòng lặp agent.
         r = { action: { kind: "none" }, reason: `rule threw: ${(err as Error).message}` };
@@ -391,6 +445,40 @@ export class GuardrailEngine {
       }
     }
     return out;
+  }
+
+  /**
+   * G1: cập nhật tracker từ sự kiện thô của bước này (thay cho state cục bộ
+   * của runLoop cũ). Semantics giữ nguyên 100% so với code inline trước đây.
+   */
+  private updateTrackers(ctx: GuardrailContext): void {
+    const t = this.tracker;
+    if (ctx.hasToolCalls) {
+      t.textOnlyStreak = 0;
+      // Doom-loop: chữ ký chuỗi tool call so với bước trước.
+      const callSig = (ctx.message?.tool_calls ?? [])
+        .map((tc: ToolCall) => `${tc.name}:${tc.arguments}`)
+        .sort()
+        .join("|");
+      t.sigRepeat = callSig === t.lastCallSig ? t.sigRepeat + 1 : 0;
+      t.lastCallSig = callSig;
+    } else {
+      t.textOnlyStreak++;
+    }
+    // Error-loop (H-12): signature tool+error từ kết quả bước này.
+    const errSig = (ctx.message?.tool_calls ?? [])
+      .map((tc: ToolCall) => {
+        const r = ctx.toolResults?.get(tc.id);
+        return r && !r.ok ? `${tc.name}:${r.output.slice(0, 80)}` : null;
+      })
+      .filter(Boolean)
+      .sort()
+      .join("|");
+    t.toolErrorRepeat = errSig && errSig === t.toolErrorSig ? t.toolErrorRepeat + 1 : 0;
+    if (errSig) t.toolErrorSig = errSig;
+    // Token-no-progress (H-12).
+    const outTok = ctx.outputTokensThisStep;
+    t.lowTokenStreak = outTok !== undefined && outTok < 20 ? t.lowTokenStreak + 1 : 0;
   }
 }
 

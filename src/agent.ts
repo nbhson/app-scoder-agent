@@ -868,13 +868,9 @@ export class Agent {
   ): Promise<AgentRunResult> {
     let steps = startSteps;
     let lastBuild: BuildResult | null = initialBuild;
-    let textOnlyStreak = 0;
-    let lastCallSig = "";
-    let sigRepeat = 0;
-    let wrapUpInjected = false;
-    let toolErrorSig = "";
-    let toolErrorRepeat = 0;
-    let lowTokenStreak = 0;
+    // G1: guardrail tracker state (textOnlyStreak, sigRepeat, toolError*,
+    // lowTokenStreak, wrapUpInjected) sống trong GuardrailEngine — reset mỗi run.
+    this.guardrails.reset();
     // H-10 compaction config (false = disabled → mechanical trim only).
     // I-02: contextWindow từ model catalog (lookup sync, cache/fallback) thay
     // vì default 128k cứng — compaction trigger chính xác theo model.
@@ -895,8 +891,9 @@ export class Agent {
           this.messages.push({ role: "user", content: s });
           this.events.append({ type: "message.added", message: { role: "user", content: s } });
         }
-        // One allowance reset for the whole steering batch (opencode behavior).
-        textOnlyStreak = 0;
+        // One allowance reset for the whole steering batch (opencode behavior)
+        // — engine exposes a hook so the runLoop doesn't touch tracker state.
+        this.guardrails.notifySteered();
         this.emit({ type: "steer_delivered", count: steered.length });
         ui.info(`steer: +${steered.length} user message(s) delivered`);
       }
@@ -947,7 +944,6 @@ export class Agent {
       if (!hasToolCalls) {
         this.messages.push({ role: "assistant", content: text });
         this.events.append({ type: "message.added", message: { role: "assistant", content: text } });
-        textOnlyStreak++;
         ui.llm("agent", text);
       } else {
         this.messages.push({
@@ -956,14 +952,6 @@ export class Agent {
           tool_calls: message.tool_calls,
         });
         this.events.append({ type: "message.added", message: this.messages[this.messages.length - 1] });
-        textOnlyStreak = 0;
-        // Doom-loop tracking: chữ ký chuỗi tool call so với bước trước.
-        const callSig = (message.tool_calls ?? [])
-          .map((tc) => `${tc.name}:${tc.arguments}`)
-          .sort()
-          .join("|");
-        sigRepeat = callSig === lastCallSig ? sigRepeat + 1 : 0;
-        lastCallSig = callSig;
       }
 
       // Execute each tool call (validate args before running)
@@ -1036,31 +1024,13 @@ export class Agent {
         text,
         message,
         hasToolCalls,
+        toolResults: stepToolResults,
         buildPassedThisStep,
         buildCallPresent: !!buildCall,
         filesModified: this.filesModified,
-        textOnlyStreak,
-        sigRepeat,
-        wrapUpInjected,
         chatDone,
-        toolErrorSig,
-        toolErrorRepeat,
         outputTokensThisStep: usage?.completion_tokens,
-        textOnlyLowTokenStreak: lowTokenStreak,
       });
-      // Update trackers AFTER evaluate (rules see this step's values).
-      const outTok = usage?.completion_tokens ?? undefined;
-      lowTokenStreak = outTok !== undefined && outTok < 20 ? lowTokenStreak + 1 : 0;
-      const errSig = (message.tool_calls ?? [])
-        .map((tc) => {
-          const r = stepToolResults.get(tc.id);
-          return r && !r.ok ? `${tc.name}:${r.output.slice(0, 80)}` : null;
-        })
-        .filter(Boolean)
-        .sort()
-        .join("|");
-      toolErrorRepeat = errSig && errSig === toolErrorSig ? toolErrorRepeat + 1 : 0;
-      if (errSig) toolErrorSig = errSig;
 
       // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
       const reminders: string[] = [];
@@ -1068,7 +1038,7 @@ export class Agent {
       for (const d of decisions) {
         const a = d.action;
         if (a.kind === "inject") {
-          if (d.rule === "wrap-up") wrapUpInjected = true; // chỉ inject một lần / run
+          if (d.rule === "wrap-up") this.guardrails.markWrapUpInjected(); // chỉ inject một lần / run
           reminders.push(a.reminder);
           continue;
         }
