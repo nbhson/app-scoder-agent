@@ -87,6 +87,34 @@ export function Markdown({ text }: { text: string }): React.JSX.Element {
       continue;
     }
 
+    // Table (GFM): header | separator | rows — collect the whole block.
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const MAX_CELL = 40;
+      const parseRow = (l: string) =>
+        l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+      const header = parseRow(line);
+      i += 2; // header + separator
+      const rows: string[][] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(parseRow(lines[i++]));
+      // Column widths (bounded — wide cells clip via clip()).
+      const widths = header.map((h, c) =>
+        Math.min(MAX_CELL, Math.max(h.length, ...rows.map((r) => (r[c] ?? "").length))),
+      );
+      const renderRow = (cells: string[], chars: { l: string; m: string; r: string }, color?: string, bold?: boolean, rowKey?: string) => {
+        const line =
+          chars.l + cells.map((c, ci) => (c.length > widths[ci] ? c.slice(0, widths[ci] - 1) + "…" : c).padEnd(widths[ci], " ")).join(chars.m) + chars.r;
+        return <Text key={rowKey} color={color} bold={bold}>{clip(line)}</Text>;
+      };
+      blocks.push(
+        <Box key={key++} flexDirection="column" marginTop={1}>
+          {renderRow(header, { l: "┌ ", m: " ┬ ", r: " ┐" }, undefined, true, `th${key}`)}
+          {renderRow(header.map(() => ""), { l: "├", m: "┼", r: "┤" }, "gray", false, `ts${key}`)}
+          {rows.map((r, ri) => renderRow(r, { l: "│ ", m: " │ ", r: " │" }, undefined, false, `tr${key}-${ri}`))}
+        </Box>,
+      );
+      continue;
+    }
+
     // Bullets
     const b = /^(\s*)[-*]\s+(.*)$/.exec(line);
     if (b) {
@@ -100,9 +128,16 @@ export function Markdown({ text }: { text: string }): React.JSX.Element {
       continue;
     }
 
-    // Numbered list — keep the numbering as-is
-    if (/^\s*\d+\.\s+/.test(line)) {
-      blocks.push(<Text key={key++}>{renderInline(line.trimStart(), `n${key}`)}</Text>);
+    // Numbered list — keep the numbering as-is; nested indent preserved.
+    const n = /^(\s*)(\d+\.)\s+(.*)$/.exec(line);
+    if (n) {
+      const indent = "  ".repeat(Math.floor(n[1].length / 2));
+      blocks.push(
+        <Text key={key++}>
+          <Text color="cyan">{indent}</Text>
+          {renderInline(`${n[2]} ${n[3]}`, `n${key}`)}
+        </Text>,
+      );
       i++;
       continue;
     }
