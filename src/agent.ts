@@ -22,6 +22,7 @@ import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, type Skill } from "./skills.js";
 import { discoverAgents, findAgent } from "./agents.js";
 
+import { SteeringInbox } from "./steering.js";
 import * as ui from "./ui.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
@@ -110,8 +111,8 @@ export class Agent {
   private usageTotals: UsageTotals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
   private mcp: McpManager | null = null;
   /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
-  /** Steering inbox — user input delivered at safe step boundaries (H-08). */
-  private steerInbox: string[] = [];
+  /** Steering inbox — user input delivered at safe step boundaries (H-08, I5 module). */
+  private steerInbox = new SteeringInbox();
   private runSignal = new AbortController();
   /** Optional structured-event sink (used by the HTTP/SSE server frontend). */
   onEvent: ((ev: AgentEvent) => void) | null = null;
@@ -255,27 +256,25 @@ export class Agent {
    * LLM call; resets the doom-loop text-allowance once for the whole batch.
    */
   steer(text: string): void {
+    this.steerInbox.steer(text);
     const t = text.trim();
     if (!t) return;
-    this.steerInbox.push(t);
     this.events.append({ type: "steer.enqueued", mode: "steer", text: t });
     this.emit({ type: "steer_queued", mode: "steer", text: t });
   }
 
   /** Queue: same inbox, but only relevant when the agent is idle (queued run). */
   queue(text: string): void {
+    this.steerInbox.queue(text);
     const t = text.trim();
     if (!t) return;
-    this.steerInbox.push(t);
     this.events.append({ type: "steer.enqueued", mode: "queue", text: t });
     this.emit({ type: "steer_queued", mode: "queue", text: t });
   }
 
   /** Drain the steering inbox; delivered at the top of the next step. */
   private drainSteerInbox(): string[] {
-    const drained = this.steerInbox;
-    this.steerInbox = [];
-    return drained;
+    return this.steerInbox.drain().map((x) => x.text);
   }
 
   /** Reset the run-signal so a new run() can use a fresh controller. */
