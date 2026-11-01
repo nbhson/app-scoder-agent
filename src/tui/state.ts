@@ -14,6 +14,8 @@ export type ChatItem =
       kind: "tool";
       name: string;
       args: Record<string, unknown>;
+      /** T6: tool_call id — correlate tool_result (parallel same-name calls). */
+      callId?: string;
       /** null = still running */
       ok: boolean | null;
       output: string;
@@ -275,6 +277,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         kind: "tool",
         name: ev.name,
         args: ev.args,
+        callId: ev.id,
         ok: null,
         output: "",
         step: ev.step,
@@ -300,9 +303,12 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       break;
     }
     case "tool_result": {
+      // T6: correlate theo callId (parallel calls cùng tên vẫn đúng card);
+      // fallback theo name cho event cũ không id.
       for (let i = state.items.length - 1; i >= 0; i--) {
         const it = state.items[i];
-        if (it.kind === "tool" && it.name === ev.name && it.ok === null) {
+        const match = it.kind === "tool" && it.ok === null && (ev.id ? it.callId === ev.id : it.name === ev.name);
+        if (match) {
           it.ok = ev.ok;
           if (it.startedAt != null) it.durationMs = Date.now() - it.startedAt;
           // Prefer the final (complete) result over accumulated live chunks.

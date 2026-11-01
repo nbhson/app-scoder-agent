@@ -57,11 +57,15 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
           ? fit(Object.keys(item.args).join(","), 24)
           : "";
   const preview = previewLines(item.output);
+  // T6: live elapsed cho tool đang chạy (durationMs chỉ có khi xong) — cập
+  // nhật theo tick render của Spinner (80ms) nên không cần timer riêng.
+  const liveElapsed = item.ok === null && item.startedAt != null ? Date.now() - item.startedAt : null;
+  const elapsedMs = item.durationMs ?? liveElapsed;
   const elapsed =
-    item.durationMs != null
-      ? item.durationMs >= 10_000
-        ? `${(item.durationMs / 1000).toFixed(0)}s`
-        : `${(item.durationMs / 1000).toFixed(1)}s`
+    elapsedMs != null
+      ? elapsedMs >= 10_000
+        ? `${(elapsedMs / 1000).toFixed(0)}s`
+        : `${(elapsedMs / 1000).toFixed(1)}s`
       : null;
   return (
     <Box flexDirection="column" paddingLeft={1}>

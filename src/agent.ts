@@ -58,6 +58,8 @@ export type AgentEvent =
       type: "tool_result";
       step: number;
       name: string;
+      /** T6: tool_call id — correlate với event tool_call (parallel calls). */
+      id: string;
       ok: boolean;
       output: string;
       /** Present for file-writing tools — unified diff of the change. */
@@ -377,7 +379,7 @@ export class Agent {
     logExtra: Record<string, unknown>,
   ): void {
     ui.toolResult(tc.name, false, output);
-    this.emit({ type: "tool_result", step, name: tc.name, ok: false, output });
+    this.emit({ type: "tool_result", step, id: tc.id, name: tc.name, ok: false, output });
     this.logger.log({ type: "tool", step, tool: tc.name, ok: false, ...logExtra });
     this.pushToolResult(tc, output);
   }
@@ -508,6 +510,7 @@ export class Agent {
         this.emit({
           type: "tool_result",
           step: steps,
+          id: tc.id,
           name: tc.name,
           ok: result.ok,
           output: result.output,
