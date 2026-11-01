@@ -6,6 +6,8 @@ import { unifiedDiff } from "./diff.js";
 import type { DiffResult } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
 import { discoverSkills, findSkill } from "./skills.js";
+import { redactSecrets } from "./llm.js";
+import { loadRcFile } from "./config.js";
 import * as ui from "./ui.js";
 import { toolWebFetch } from "./webfetch.js";
 
@@ -436,12 +438,38 @@ function formatFile(ctx: ToolContext, abs: string): string | null {
 /** Live output callback for run_command: called per chunk with its stream source. */
 export type CommandOutputListener = (stream: "stdout" | "stderr", delta: string) => void;
 
+// ── G3: child env allowlist ─────────────────────────────────────────────────
+// spawn /bin/sh -c with the FULL process.env leaks every secret in the shell's
+// environment (API keys, tokens) to any command the model runs — and thus to
+// the conversation/log via `env` or a misbehaving tool. Allowlist instead.
+
+/** Always passed through — minimum for node/python/git builds to work. */
+const BASE_ENV_KEYS = ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TERM", "SHELL", "USER", "LOGNAME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"];
+
+/**
+ * G3: build the child env. Base keys + SCODER_* config + explicit extras from
+ * the rc (`shellEnvAllow`), resolved from process.env. Missing keys are absent
+ * (not empty) so tools detect them correctly.
+ */
+export function buildChildEnv(workdir: string, extraKeys?: string[]): Record<string, string> {
+  const rc = loadRcFile(workdir) as { shellEnvAllow?: string[] };
+  const allow = [...BASE_ENV_KEYS, ...(rc.shellEnvAllow ?? []), ...(extraKeys ?? [])];
+  const out: Record<string, string> = {};
+  for (const k of allow) {
+    const v = process.env[k];
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 /**
  * Run a shell command asynchronously (async spawn keeps the event loop free,
  * so streaming output renders and SIGINT is handled promptly).
  * Kills the child on timeout or external abort (SIGINT via ctx.signal).
  * When `onOutput` is provided, stdout/stderr chunks are forwarded live as they
  * arrive (in addition to being collected into the final ToolResult).
+ * G3: output is redacted (secret shapes) before it enters the conversation,
+ * the live stream, or the JSONL log.
  */
 export async function toolRunCommand(
   workdir: string,
@@ -450,6 +478,10 @@ export async function toolRunCommand(
   onOutput?: (stream: "stdout" | "stderr", delta: string) => void,
 ): Promise<ToolResult> {
   const timeoutMs = Math.min(Math.max(args.timeout_secs ?? 120, 1), 600) * 1000;
+  // G3: the echoed command line itself may contain a secret (e.g. `curl -H
+  // "Authorization: Bearer sk-..."`) — redact the echo, never run redacted
+  // (the child gets the raw command).
+  const echoLine = `$ ${redactSecrets(args.command)}`;
 
   return new Promise<ToolResult>((resolve) => {
     let settled = false;
@@ -464,6 +496,7 @@ export async function toolRunCommand(
     const child = spawn("/bin/sh", ["-c", args.command], {
       cwd: workdir,
       stdio: ["ignore", "pipe", "pipe"],
+      env: buildChildEnv(workdir), // G3: allowlist — không kế thừa full process.env
     });
 
     let stdout = "";
@@ -488,40 +521,43 @@ export async function toolRunCommand(
     child.stdout?.on("data", (c: Buffer) => {
       const s = c.toString("utf8");
       stdout += s;
-      onOutput?.("stdout", s);
+      onOutput?.("stdout", redactSecrets(s)); // G3
     });
     child.stderr?.on("data", (c: Buffer) => {
       const s = c.toString("utf8");
       stderr += s;
-      onOutput?.("stderr", s);
+      onOutput?.("stderr", redactSecrets(s)); // G3
     });
 
     child.on("error", (err) => {
-      finish({ ok: false, output: clamp(`$ ${args.command}\n(spawn error) ${err.message}`) });
+      finish({ ok: false, output: clamp(`${echoLine}\n(spawn error) ${err.message}`) });
     });
 
     child.on("close", (code) => {
       if (killedReason === "timeout") {
         finish({
           ok: false,
-          output: clamp(`$ ${args.command}\n(command timed out after ${Math.round(timeoutMs / 1000)}s and was killed)\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+          output: clamp(`${echoLine}\n(command timed out after ${Math.round(timeoutMs / 1000)}s and was killed)\n--- stdout ---\n${redactSecrets(stdout)}\n--- stderr ---\n${redactSecrets(stderr)}`),
         });
         return;
       }
       if (killedReason === "aborted") {
         finish({
           ok: false,
-          output: clamp(`$ ${args.command}\n(interrupted by user)\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+          output: clamp(`${echoLine}\n(interrupted by user)\n--- stdout ---\n${redactSecrets(stdout)}\n--- stderr ---\n${redactSecrets(stderr)}`),
         });
         return;
       }
       const status = code ?? -1;
+      // G3: redact trước khi output vào conversation/log/TUI.
+      const redacted = redactSecrets(stdout);
+      const redactedErr = redactSecrets(stderr);
       if (status === 0) {
-        finish({ ok: true, output: clamp(`$ ${args.command}\n(exit 0)\n${stdout}`) });
+        finish({ ok: true, output: clamp(`${echoLine}\n(exit 0)\n${redacted}`) });
       } else {
         finish({
           ok: false,
-          output: clamp(`$ ${args.command}\n(exit ${status})\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`),
+          output: clamp(`${echoLine}\n(exit ${status})\n--- stdout ---\n${redacted}\n--- stderr ---\n${redactedErr}`),
         });
       }
     });

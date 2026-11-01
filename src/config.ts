@@ -94,6 +94,8 @@ interface RcFile {
     /** Rule engine v2 (see NOTICE — pattern from opencode): {action, resource, effect}. */
     rules?: unknown;
   };
+  /** G3: extra env vars passed through to run_command children (names only; values from process.env). */
+  shellEnvAllow?: string[];
   /** Auto-compaction (H-10): false = off, object = overrides. */
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
   /** I-11: post-edit formatter — true = auto-detect, string = binary or "npm:<script>". */

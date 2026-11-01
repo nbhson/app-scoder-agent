@@ -18,7 +18,7 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
   [/xox[bap]-[A-Za-z0-9-]{10,}/g, "xox***REDACTED***"],
   [/AKIA[0-9A-Z]{16}/g, "AKIA***REDACTED***"],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, "***PRIVATE-KEY***"],
-  [/\b(?:api[_-]?key|token|secret|password)["'\s:=]+[^\s"'&]{8,}/gi, "$1=***REDACTED***"],
+  [/\b(api[_-]?key|token|secret|password)["'\s:=]+[^\s"'&]{8,}/gi, "$1=***REDACTED***"],
 ];
 
 /** Redact known secret shapes from arbitrary tool/LLM/log output. */
