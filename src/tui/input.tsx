@@ -8,6 +8,7 @@ import type { AgentConfig } from "../config.js";
 import type { Agent } from "../agent.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg } from "./commands.js";
+import { applyNormalKey, type VimMode } from "./vim.js"; // T5
 import { theme } from "./theme.js";
 
 export interface InputProps {
@@ -37,6 +38,14 @@ export interface InputProps {
 export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
+
+  // ── T5: vim normal/insert mode ──
+  // Insert là mode mặc định (chat input); Esc → normal, i/a/A → insert.
+  // Cursor position chỉ có ý nghĩa khi normal mode; insert luôn ở cuối.
+  const [vimMode, setVimMode] = useState<VimMode>("insert");
+  const [cursor, setCursor] = useState<number | null>(null); // null = insert (cuối)
+  const vimRef = useRef<{ mode: VimMode; cursor: number }>({ mode: "insert", cursor: 0 });
+  vimRef.current = { mode: vimMode, cursor: cursor ?? value.length };
 
   // ── T-01: `@` fuzzy file autocomplete ──────────────────────────────────────
   // Overlay state kept out of React re-render hot path: suggestions are sync
@@ -81,6 +90,33 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
     (input, key) => {
       if (modalRef.current) return; // T-03: modal owns the keyboard
       const current = valueRef.current;
+      // T5: vim mode — Esc → normal (nếu không có @ overlay), normal keys qua keymap.
+      if (key.escape && !atStateRef.current) {
+        setCursor(vimRef.current.cursor);
+        setVimMode("normal");
+        return;
+      }
+      if (vimRef.current.mode === "normal" && input.length === 1 && !key.ctrl && !key.meta) {
+        const r = applyNormalKey(current, vimRef.current.cursor, input);
+        if (!r.unhandled) {
+          valueRef.current = r.value;
+          onChange(r.value);
+          setCursor(r.cursor);
+          setVimMode(r.mode);
+          return;
+        }
+        if (key.return) {
+          setVimMode("insert");
+          setCursor(null);
+          histIdx.current = null;
+          onSubmit(current);
+          return;
+        }
+        // Phím lạ trong normal mode (mũi tên, ctrl...) — fall through với
+        // cursor giữ nguyên, xử lý như insert bên dưới.
+      } else if (vimRef.current.mode === "normal") {
+        return; // normal mode bỏ qua paste chunks
+      }
       // T-01: Esc closes the @ overlay (before submit semantics).
       if (key.escape) {
         if (atStateRef.current) {
@@ -189,6 +225,8 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
         refreshAt(next);
         if (parts.length > 1) onSubmit(next); // newline in the chunk = submit
       }
+      // T5: bất kỳ phím gõ nào trong insert mode cũng đưa cursor về cuối.
+      if (vimRef.current.mode === "insert") setCursor(null);
     },
     // Always active: typing while the agent runs is allowed (text is kept,
     // submit is a no-op until idle) so keystrokes are never silently lost.
@@ -218,13 +256,24 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
       )}
       <Box>
         <Text color="magenta" bold>
-          {"❯ "}
+          {vimMode === "normal" ? "❯" : "❯ "}
         </Text>
-        <Text>{value}</Text>
-        {ghost && <Text dimColor>{ghost.rest}</Text>}
-        <Text dimColor>▌</Text>
+        {vimMode === "normal" && cursor !== null ? (
+          <>
+            <Text>{value.slice(0, cursor)}</Text>
+            <Text backgroundColor="gray" color="black">{value[cursor] ?? " "}</Text>
+            <Text>{value.slice(cursor + 1)}</Text>
+          </>
+        ) : (
+          <>
+            <Text>{value}</Text>
+            {ghost && <Text dimColor>{ghost.rest}</Text>}
+            <Text dimColor>▌</Text>
+          </>
+        )}
       </Box>
       {candidates && <Text dimColor>  {candidates}  (tab completes)</Text>}
+      {vimMode === "normal" && <Text dimColor>  -- NORMAL -- h/l/w/b/e · x · i/a/A insert · ⏎ send</Text>}
     </Box>
   );
 }

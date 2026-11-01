@@ -11,7 +11,7 @@
  * Driven entirely by AgentEvents (the same stream the HTTP/SSE server uses).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useBoxMetrics, useInput, useWindowSize, type DOMElement } from "ink";
+import { Box, Text, useApp, useBoxMetrics, useInput, useStdin, useWindowSize, type DOMElement } from "ink";
 import type { AgentConfig } from "../config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
@@ -24,6 +24,7 @@ import { ChatItemView, Spinner } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
 import { fileIndex } from "./at-complete.js";
+import { parseWheel, MOUSE_ENABLE, MOUSE_DISABLE } from "./mouse.js"; // T5
 import { getTheme, setActiveTheme, theme, THEMES, useNamedTheme } from "./theme.js";
 import { reviewFromResponse, reviewAnswerToCall, type ReviewState } from "./review.js"; // T2
 import { PermissionModal } from "./permission-modal.js"; // T2
@@ -89,6 +90,28 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const maxScroll = Math.max(0, content.height - viewport.clientHeight);
   // scrollOffset counts rows UP from the bottom; 0 = follow the newest item.
   const scrollTop = Math.max(0, maxScroll - scrollOffset);
+
+  // T5: mouse wheel scroll (SGR 1006) — raw stdin listener; Ink's useInput
+  // drops unrepresentable CSI sequences, so wheel events must be read here.
+  // Only in alt-screen TTY (mouse tracking sequences corrupt plain pipes).
+  const { stdin, setRawMode, isRawModeSupported } = useStdin();
+  const wheelScroll = useCallback((dir: "up" | "down") => {
+    setScrollOffset((o) => Math.max(0, o + (dir === "up" ? 3 : -3)));
+  }, []);
+  useEffect(() => {
+    if (process.stdout.isTTY !== true || !isRawModeSupported) return;
+    process.stdout.write(MOUSE_ENABLE);
+    setRawMode(true);
+    const onData = (chunk: Buffer | string) => {
+      const dir = parseWheel(String(chunk));
+      if (dir) wheelScroll(dir);
+    };
+    stdin.on("data", onData);
+    return () => {
+      stdin.off("data", onData);
+      process.stdout.write(MOUSE_DISABLE);
+    };
+  }, [stdin, setRawMode, isRawModeSupported, wheelScroll]);
   const skills = useMemo(() => discoverSkills(config.workdir), [config.workdir]);
   const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
   // T-02: completion sources (agents + files) computed once per mount.
