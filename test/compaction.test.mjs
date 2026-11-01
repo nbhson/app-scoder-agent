@@ -102,4 +102,20 @@ describe("applyCompaction", () => {
     const summary = extractSummaryInput("build the thing", msgs);
     assert.match(summary, /build the thing/);
   });
+
+  it("skeleton tool-call khung được giữ lại (I4)", () => {
+    const cfg = { ...DEFAULT_COMPACTION, contextWindow: 2000, keep: 0, buffer: 0 };
+    const msgs = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "u1 ".repeat(100) },
+      { role: "assistant", content: null, tool_calls: [{ id: "t1", name: "read_file", arguments: '{"path":"a/' + "x".repeat(300) + '"}' }] },
+      { role: "user", content: "ob".repeat(200) },
+      { role: "assistant", content: "claim xong" },
+    ];
+    const out = applyCompaction(msgs, "summary", cfg);
+    const skeletons = out.filter((m) => m.tool_calls?.length);
+    assert.ok(skeletons.length >= 1, "tool-call khung phải còn");
+    const tc = skeletons[0].tool_calls[0];
+    assert.ok(tc.arguments.length <= 121, `args phải truncated: ${tc.arguments.length}`);
+  });
 });

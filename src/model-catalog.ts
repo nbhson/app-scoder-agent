@@ -172,3 +172,20 @@ export function cacheAgeHours(): number {
     return -1;
   }
 }
+
+/** I6: TTL cho refresh() — 1h. */
+const REFRESH_TTL_MS = 3_600_000;
+/** Monotonic last-refresh stamp (process lifetime — tránh re-fetch mỗi lookup). */
+let lastRefreshAt = 0;
+
+/**
+ * I6: đảm bảo catalog tươi (TTL 1h) — process dùng lâu (server/TUI) gọi trước
+ * khi tra cứu. Cache còn mới → no-op. Lỗi network → giữ catalogue hiện có
+ * (không bao giờ throw). Returns source hiện hành.
+ */
+export async function refreshCatalog(): Promise<"cache" | "network" | "fallback"> {
+  if (Date.now() - lastRefreshAt < REFRESH_TTL_MS) return "cache";
+  const r = await loadCatalog(false);
+  lastRefreshAt = Date.now();
+  return r.source;
+}

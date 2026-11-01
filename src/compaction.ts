@@ -117,9 +117,26 @@ export function applyCompaction(
   const cut = findCutIndex(messages, cfg);
   const system = messages[0]?.role === "system" ? messages[0] : null;
   const tail = messages.slice(cut);
+  // I4: giữ lại "khung" tool-call các turn đã compact — skeleton (name + args
+  // truncated) của tool_calls bị cắt, để model biết nó đã thử gì mà không
+  // phải trả giá token của output đầy đủ.
+  const skeletons: ChatMessage[] = [];
+  for (const m of messages.slice(system ? 1 : 0, cut)) {
+    if (m.role === "assistant" && m.tool_calls?.length) {
+      skeletons.push({
+        role: "assistant",
+        content: null,
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments.length > 120 ? tc.arguments.slice(0, 120) + "…" : tc.arguments,
+        })),
+      });
+    }
+  }
   const summaryMsg: ChatMessage = {
     role: "user",
     content: `[system] Session summary (auto-compact). Earlier history was summarized:\n\n${summary}\n\nContinue the task from here.`,
   };
-  return [...(system ? [system] : []), summaryMsg, ...tail];
+  return [...(system ? [system] : []), summaryMsg, ...skeletons, ...tail];
 }
