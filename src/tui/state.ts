@@ -24,6 +24,8 @@ export type ChatItem =
       startedAt?: number;
       /** Set when the tool finishes — shown next to the tool line. */
       durationMs?: number;
+      /** T7: data URL ảnh (read_file trên file ảnh) — render halfblock/link. */
+      image?: string;
     }
   | { kind: "notice"; text: string; level: "info" | "warn" | "error" }
   | { kind: "thinking"; text: string; streaming: boolean }
@@ -313,6 +315,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
           if (it.startedAt != null) it.durationMs = Date.now() - it.startedAt;
           // Prefer the final (complete) result over accumulated live chunks.
           if (ev.output.length >= it.output.length) it.output = ev.output;
+          if (ev.image) it.image = ev.image;
           break;
         }
       }

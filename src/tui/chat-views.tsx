@@ -3,10 +3,11 @@
  * ChatItemView. Tách khỏi app.tsx (component-based, pattern từ opencode
  * packages/tui).
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text } from "ink";
 import type { ChatItem } from "./state.js";
 import { Markdown } from "./markdown.js";
+import { detectImageCaps, halfblockRows } from "./image.js"; // T7
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -35,6 +36,17 @@ export function Spinner({ active }: { active: boolean }): React.JSX.Element | nu
 
 const OUTPUT_PREVIEW_LINES = 2;
 
+/** T7: decode data URL → halfblock rows (null khi không PNG/không decode được). */
+function halfblockFromDataUrl(dataUrl: string): Array<{ text: string }> | null {
+  const m = /^data:image\/(\w+);base64,(.+)$/.exec(dataUrl);
+  if (!m) return null;
+  try {
+    return halfblockRows(Buffer.from(m[2], "base64"));
+  } catch {
+    return null;
+  }
+}
+
 /** Collapse run_command scaffolding ("--- stdout ---" etc.) to real content. */
 function previewLines(output: string): string[] {
   const lines = output
@@ -57,6 +69,12 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
           ? fit(Object.keys(item.args).join(","), 24)
           : "";
   const preview = previewLines(item.output);
+  // T7: image result — halfblock preview khi terminal truecolor, fallback link.
+  const caps = useMemo(() => detectImageCaps(), []);
+  const halfblocks = useMemo(
+    () => (item.image && caps.truecolor ? halfblockFromDataUrl(item.image) : null),
+    [item.image, caps.truecolor],
+  );
   // T6: live elapsed cho tool đang chạy (durationMs chỉ có khi xong) — cập
   // nhật theo tick render của Spinner (80ms) nên không cần timer riêng.
   const liveElapsed = item.ok === null && item.startedAt != null ? Date.now() - item.startedAt : null;
@@ -81,6 +99,17 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
           {"  └ "}{line.length > 140 ? line.slice(0, 140) + "…" : line}
         </Text>
       ))}
+      {halfblocks && (
+        <Box flexDirection="column" paddingLeft={2}>
+          {halfblocks.map((r, i) => (
+            <Text key={i}>{r.text}</Text>
+          ))}
+          <Text dimColor>  └ image preview (halfblock)</Text>
+        </Box>
+      )}
+      {item.image && !halfblocks && (
+        <Text dimColor>  └ image — terminal không hỗ trợ truecolor inline: {item.output}</Text>
+      )}
     </Box>
   );
 }

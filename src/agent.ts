@@ -64,6 +64,8 @@ export type AgentEvent =
       output: string;
       /** Present for file-writing tools — unified diff of the change. */
       diff?: ToolDiff;
+      /** T7: data URL khi tool đọc được ảnh — TUI render, không gửi LLM. */
+      image?: string;
     }
   | { type: "build"; success: boolean; command: string; output: string }
   | { type: "todo"; items: TodoItem[] }
@@ -515,6 +517,7 @@ export class Agent {
           ok: result.ok,
           output: result.output,
           ...(result.diff ? { diff: result.diff } : {}),
+          ...(result.image ? { image: result.image } : {}),
         });
         stepToolResults.set(tc.id, { ok: result.ok, output: result.output });
         this.pushToolResult(tc, summariseOutput(result.output));

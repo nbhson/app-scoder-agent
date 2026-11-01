@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { resolve, dirname, basename, join, relative, isAbsolute } from "node:path";
 import type { ToolSpec } from "./llm.js";
 import { unifiedDiff } from "./diff.js";
+import { detectImageBytes } from "./tui/image.js";
 import type { DiffResult } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
 import { discoverSkills, findSkill } from "./skills.js";
@@ -27,6 +28,8 @@ export interface ToolResult {
   output: string;
   /** Unified diff of the file change, when the tool modified a file. */
   diff?: ToolDiff;
+  /** T7: data URL khi tool đọc được ảnh — TUI render halfblock, LLM nhận text. */
+  image?: string;
 }
 
 /**
@@ -141,6 +144,18 @@ function toolReadFile(workdir: string, args: { path: string }): ToolResult {
       ok: false,
       output: `ERROR: ${args.path} is ${(st.size / 1024 / 1024).toFixed(1)}MB (limit ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB). Use run_command with grep/head/tail to inspect specific parts.`,
     };
+  }
+  // T7: image file → base64 notice cho TUI render (LLM vẫn nhận mô tả text).
+  let image: string | undefined;
+  try {
+    const probe = readFileSync(abs);
+    const ext = detectImageBytes(probe);
+    if (ext) image = `data:image/${ext};base64,${probe.toString("base64")}`;
+  } catch {
+    // not an image / unreadable — fall through to text read
+  }
+  if (image) {
+    return { ok: true, output: `[image: ${args.path}]`, image };
   }
   const content = readFileSync(abs, "utf8");
   const lines = content.split("\n");
@@ -740,7 +755,7 @@ export const AGENT_TOOLS: AgentTool[] = [
       type: "function",
       function: {
         name: "read_file",
-        description: "Read a text file. Returns content with 1-based line numbers.",
+        description: "Read a text file. Returns content with 1-based line numbers. Image files (PNG/JPG/GIF) return an `[image: path]` placeholder rendered inline by the TUI.",
         parameters: obj({ path: str("Relative file path") }, ["path"]),
       },
     },
