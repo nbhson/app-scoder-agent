@@ -562,6 +562,12 @@ export interface ToolContext {
    * refuses nested spawns (children inherit this via ctx).
    */
   allowSubagents?: boolean;
+  /**
+   * I-06 subagent runner — injected per-agent instance (no module-global
+   * state: two concurrent Agents each use their own runner; server-mode
+   * multi-run safe).
+   */
+  taskRunner?: TaskRunner;
 }
 
 /** One row of the agent's session plan (write_todos). */
@@ -806,7 +812,7 @@ export type TaskRunner = (
   args: { description: string; prompt: string; agent?: string },
 ) => Promise<ToolResult>;
 
-/** task tool definition — run callback set via setTaskRunner(). */
+/** task tool — runner resolved from ctx.taskRunner (per-agent, no global). */
 const taskTool: AgentTool = {
   spec: {
     type: "function",
@@ -828,19 +834,11 @@ const taskTool: AgentTool = {
       ),
     },
   },
-  run: () => ({ ok: false, output: "ERROR: task tool not wired (setTaskRunner missing)." }),
+  run: (ctx, args) => {
+    if (!ctx.taskRunner) return { ok: false, output: "ERROR: task tool not wired (no runner in context)." };
+    return ctx.taskRunner(ctx, args as { description: string; prompt: string; agent?: string });
+  },
 };
-
-let taskRunner: TaskRunner | null = null;
-void taskRunner;
-
-/** Wire the actual subagent runner (called from agent.ts constructor). */
-export function setTaskRunner(runner: TaskRunner | null): void {
-  taskRunner = runner;
-  taskTool.run = runner
-    ? (ctx, args) => runner(ctx, args as { description: string; prompt: string; agent?: string })
-    : () => ({ ok: false, output: "ERROR: task tool not wired (setTaskRunner missing)." });
-}
 
 export function getTool(name: string): AgentTool | undefined {
   return AGENT_TOOLS.find((t) => t.spec.function.name === name) ?? (name === "task" ? taskTool : undefined);

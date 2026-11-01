@@ -5,3 +5,4 @@ dist/
 .scoderrc.json
 .env
 .scoder/
+coverage/

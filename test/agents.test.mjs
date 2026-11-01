@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverAgents, findAgent } from "../dist/agents.js";
-import { getTool, setTaskRunner, allToolSpecs } from "../dist/tools.js";
+import { getTool, allToolSpecs } from "../dist/tools.js";
 
 let workdir;
 
@@ -18,7 +18,6 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(workdir, { recursive: true, force: true });
-  setTaskRunner(null);
 });
 
 describe("discoverAgents (I-06)", () => {
@@ -62,21 +61,34 @@ describe("task tool (I-06)", () => {
     assert.match(r.output, /not wired/);
   });
 
-  it("wire runner → chạy và trả summary", async () => {
-    setTaskRunner(async (_ctx, args) => {
-      assert.equal(args.prompt, "find the auth code");
-      return { ok: true, output: "[subagent explore done — 2 steps]\nauth lives in src/auth.ts" };
-    });
+  it("wire runner qua ctx → chạy và trả summary", async () => {
     const tool = getTool("task");
-    const r = await tool.run({ workdir }, { description: "locate auth", prompt: "find the auth code" });
+    const r = await tool.run(
+      { workdir, taskRunner: async (_ctx, args) => {
+        assert.equal(args.prompt, "find the auth code");
+        return { ok: true, output: "[subagent explore done — 2 steps]\nauth lives in src/auth.ts" };
+      } },
+      { description: "locate auth", prompt: "find the auth code" },
+    );
     assert.equal(r.ok, true);
     assert.match(r.output, /src\/auth\.ts/);
   });
 
   it("agent name lạ → lỗi sạch", async () => {
-    setTaskRunner(async () => ({ ok: false, output: "ERROR: agent \"nope\" not found" }));
     const tool = getTool("task");
-    const r = await tool.run({ workdir }, { description: "d", prompt: "p", agent: "nope" });
+    const r = await tool.run(
+      { workdir, taskRunner: async () => ({ ok: false, output: "ERROR: agent \"nope\" not found" }) },
+      { description: "d", prompt: "p", agent: "nope" },
+    );
     assert.equal(r.ok, false);
+  });
+
+  it("2 ctx song song → runner cô lập (server multi-run)", async () => {
+    const tool = getTool("task");
+    const a = tool.run({ workdir, taskRunner: async () => ({ ok: true, output: "A" }) }, { description: "d", prompt: "p" });
+    const b = tool.run({ workdir, taskRunner: async () => ({ ok: true, output: "B" }) }, { description: "d", prompt: "p" });
+    const [ra, rb] = await Promise.all([a, b]);
+    assert.equal(ra.output, "A");
+    assert.equal(rb.output, "B");
   });
 });

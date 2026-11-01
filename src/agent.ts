@@ -4,7 +4,7 @@ import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, 
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
-import { getTool, setTaskRunner, allToolSpecs, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
+import { getTool, allToolSpecs, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { invalidateFileIndex } from "./tui/at-complete.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
@@ -202,10 +202,11 @@ export class Agent {
     // relay, abort cascade via parent's runSignal). Depth-1 only: the runner
     // refuses when the calling agent was constructed with allowSubagents:false
     // (children set this; the runner checks ctx, not a global flag — global
-    // registration alone allowed grandchildren through).
+    // registration alone allowed grandchildren through). Runner lives on the
+    // per-instance ctx — concurrent Agents (server multi-run) stay isolated.
     if (config.allowSubagents !== false) {
-      setTaskRunner(async (ctx, args) => {
-        if ((ctx as { allowSubagents?: boolean }).allowSubagents === false) {
+      const runner: TaskRunner = async (ctx, args) => {
+        if (ctx.allowSubagents === false) {
           return { ok: false, output: "ERROR: task tool not available — subagents cannot spawn further subagents (depth limit)." };
         }
         const def = args.agent ? findAgent(config.workdir, args.agent) : findAgent(config.workdir, "explore");
@@ -240,7 +241,8 @@ export class Agent {
         } catch (err) {
           return { ok: false, output: `ERROR: subagent failed: ${(err as Error).message}` };
         }
-      });
+      };
+      this.ctx.taskRunner = runner;
     }
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.skills = discoverSkills(config.workdir);
