@@ -660,8 +660,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           return;
         }
         if (slash.cmd === "/model") {
-          const s = stateRef.current;
-          pushNotice(`model: ${s.model || config.model || "—"} · provider: ${s.provider || config.provider || "auto"}`);
+          const agent = agentRef.current;
+          if (slash.arg) {
+            // T-04: hot-swap — "openai/gpt-4o-mini" or bare "gpt-4o-mini".
+            const agent2 = agent ?? createAgent();
+            const notice = agent2.setModel(slash.arg.trim());
+            pushNotice(notice, notice.startsWith("ERROR") ? "error" : "info");
+          } else {
+            const s = stateRef.current;
+            pushNotice(`model: ${s.model || config.model || "—"} · provider: ${s.provider || config.provider || "auto"} — switch: /model <provider/model>`);
+          }
           return;
         }
         if (slash.cmd === "/skills") {

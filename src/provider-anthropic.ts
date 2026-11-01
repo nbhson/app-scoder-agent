@@ -203,6 +203,11 @@ export class AnthropicClient {
     return this.opts.model;
   }
 
+  /** T-04: runtime hot-swap — next request uses the new model id. */
+  setModel(model: string): void {
+    this.opts = { ...this.opts, model };
+  }
+
   /** I-05: request body builder — shared by chat/streamChat. */
   private buildBody(system: unknown, messages: AnthropicMessage[], tools: unknown, stream: boolean): string {
     // Extended thinking: temperature must be 1 và thinking block format.

@@ -146,7 +146,8 @@ function mergeRc(global: RcFile, project: RcFile): RcFile {
   return merged;
 }
 
-function loadRcFile(workdir: string): RcFile {
+/** T-04: exported for Agent.setModel custom-provider resolution. */
+export function loadRcFile(workdir: string): RcFile {
   const global = readRcFile(globalRcPath(), globalRcPath());
   for (const name of [".scoderrc.json", ".scoderrc"]) {
     const p = resolve(workdir, name);

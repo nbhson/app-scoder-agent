@@ -227,6 +227,11 @@ export class LlmClient {
     return this.opts.model;
   }
 
+  /** T-04: runtime hot-swap — next request uses the new model id. */
+  setModel(model: string): void {
+    this.opts = { ...this.opts, model };
+  }
+
   // ── Non-streaming ──────────────────────────────────────────────────────────
 
   async chat(

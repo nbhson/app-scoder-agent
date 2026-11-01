@@ -16,6 +16,8 @@ import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INST
 import { SnapshotManager } from "./snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
+import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
+import { loadRcFile } from "./config.js";
 import { McpManager } from "./mcp.js";
 import { discoverSkills, findSkill, formatSkillIndex, type Skill } from "./skills.js";
 import { discoverAgents, findAgent } from "./agents.js";
@@ -1247,6 +1249,34 @@ export class Agent {
     });
     this.ctx.permissionMode = mode;
     ui.info(`permission mode → ${mode}`);
+  }
+
+  /**
+   * T-04: runtime model hot-swap. Same provider → setModel on the live
+   * client (zero rebuild, mid-session). Different provider (provider/model
+   * syntax) → rebuild the runtime from the registry. Returns a notice line.
+   */
+  setModel(model: string): string {
+    const [prov, id] = splitProviderModel(model);
+    if (!prov || prov === this.config.provider) {
+      const m = id ?? model;
+      (this.client as { setModel?: (m: string) => void }).setModel?.(m);
+      this.config = { ...this.config, model: m };
+      return `model → ${m} (${this.config.provider})`;
+    }
+    // Cross-provider: rebuild the client runtime.
+    const resolved = resolveProvider(prov, parseCustomProviders(loadRcFile(this.config.workdir).providers));
+    if ("error" in resolved) return `ERROR: ${resolved.error}`;
+    this.client = createRuntime(resolved.def, {
+      baseUrl: this.config.baseUrl,
+      apiKey: this.config.apiKey,
+      model: id,
+      maxTokens: this.config.maxTokens,
+      temperature: this.config.temperature,
+      enableCache: resolved.def.supportCache,
+    });
+    this.config = { ...this.config, provider: prov as "openai" | "anthropic", model: id, providerDef: resolved.def };
+    return `model → ${id} (provider ${prov})`;
   }
 
   private finish(
