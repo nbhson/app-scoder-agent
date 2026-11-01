@@ -25,6 +25,8 @@ import { BuildRail, StatusBar } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
 import { fileIndex } from "./at-complete.js";
 import { getTheme, setActiveTheme, theme, THEMES, useNamedTheme } from "./theme.js";
+import { reviewFromResponse, reviewAnswerToCall, type ReviewState } from "./review.js"; // T2
+import { PermissionModal } from "./permission-modal.js"; // T2
 
 
 export interface TuiAppProps {
@@ -70,12 +72,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // `argsBase` holds the immutable prompt/context/language; `rewrittenPrompt`
   // is echoed back verbatim from the server's pending result (never from the
   // user or LLM) so only exactly what the user saw can be approved.
-  const reviewRef = useRef<{
-    stage: "level" | "selection";
-    tool: string;
-    argsBase: Record<string, unknown>;
-    rewrittenPrompt?: string;
-  } | null>(null);
+  const reviewRef = useRef<ReviewState | null>(null);
   const reviewBusyRef = useRef(false);
 
   // ── Scrollable chat viewport (Ink 8 alt-screen) ──
@@ -212,34 +209,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       reviewBusyRef.current = true;
       try {
         const r = await agent.callMcpTool(tool, args);
-        const sc = (r.structured ?? {}) as Record<string, unknown>;
-        const status = typeof sc.status === "string" ? sc.status : null;
-        if (!r.ok) {
-          reviewRef.current = null;
-          pushNotice(`prompt gate error: ${r.output.slice(0, 500)}`, "error");
-          return;
-        }
-        if (status === "pending_level_selection") {
-          reviewRef.current = { stage: "level", tool, argsBase: args };
-          pushNotice(
-            "Which rewrite level?\n  [1] light — minimal, close to original\n  [2] balanced — structure + context + criteria\n  [3] detailed — full spec with acceptance criteria\nReply 1, 2 or 3.",
-          );
-        } else if (status === "pending_user_selection") {
-          const rewritten = typeof sc.rewritten_prompt === "string" ? sc.rewritten_prompt : "";
-          reviewRef.current = { stage: "selection", tool, argsBase: args, rewrittenPrompt: rewritten };
-          pushNotice(
-            `--- ORIGINAL ---\n${String(sc.original_prompt ?? "(missing)")}\n\n--- REWRITTEN ---\n${rewritten}\n\nWhich should be used?\n  [1] original\n  [2] rewritten\n  [3] update — describe changes, rewrite again\n  [4] cancel\nReply 1-4 (or 3 + your changes).`,
-          );
-        } else if (status === "approved") {
-          reviewRef.current = null;
-          pushNotice(`✔ prompt approved:\n${String(sc.selected_prompt ?? "")}`);
-        } else if (status === "cancelled") {
-          reviewRef.current = null;
-          pushNotice("⏹ prompt gate cancelled — nothing approved.");
-        } else {
-          reviewRef.current = null;
-          pushNotice(`prompt gate: unexpected status ${status ?? "(none)"}\n${r.output.slice(0, 500)}`, "warn");
-        }
+        const out = reviewFromResponse(reviewRef.current, tool, args, r);
+        reviewRef.current = out.state;
+        if (out.notice) pushNotice(out.notice.text, out.notice.level);
       } catch (err) {
         reviewRef.current = null;
         pushNotice(`prompt gate failed: ${(err as Error).message}`, "error");
@@ -255,42 +227,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     (text: string) => {
       const rv = reviewRef.current;
       if (!rv || reviewBusyRef.current) return false;
-      const m = /^([1-4])(?:\s+([\s\S]+))?$/.exec(text.trim());
-      if (rv.stage === "level") {
-        if (!m) {
-          pushNotice("reply 1, 2 or 3 to pick the rewrite level", "warn");
-          return true;
-        }
-        const levels = ["light", "balanced", "detailed"];
-        void reviewStep(rv.tool, { ...rv.argsBase, rewrite_level: levels[Number(m[1]) - 1] });
-        return true;
-      }
-      // stage === "selection"
-      if (!m) {
-        pushNotice("reply 1-4 (or 3 + your requested changes)", "warn");
-        return true;
-      }
-      const n = m[1];
-      if (n === "3") {
-        const feedback = m[2]?.trim();
-        if (!feedback) {
-          pushNotice("update needs your requested changes: 3 <what to change>", "warn");
-          return true;
-        }
-        void reviewStep(rv.tool, {
-          ...rv.argsBase,
-          selection: "update",
-          feedback,
-          rewritten_prompt: rv.rewrittenPrompt,
-        });
-        return true;
-      }
-      const selection = n === "1" ? "original" : n === "2" ? "rewritten" : "cancel";
-      void reviewStep(rv.tool, {
-        ...rv.argsBase,
-        selection,
-        ...(selection === "rewritten" ? { rewritten_prompt: rv.rewrittenPrompt } : {}),
-      });
+      const out = reviewAnswerToCall(rv, text);
+      if (out.notice) pushNotice(out.notice.text, out.notice.level);
+      if (out.nextCall) void reviewStep(out.nextCall.tool, out.nextCall.args);
       return true;
     },
     [reviewStep, pushNotice],
@@ -639,27 +578,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         </Box>
       </Box>
       {/* T-03: permission modal — blocks the run until answered. */}
-      {permPrompt && (
-        <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-          <Text color="yellow" bold>
-            ⚠ permission required — {permPrompt.kind}
-          </Text>
-          <Text>{permPrompt.label}</Text>
-          {permPrompt.diff && (
-            <Box flexDirection="column" marginTop={1}>
-              {permPrompt.diff.split("\n").slice(0, 12).map((l, i) => (
-                <Text key={i} color={l.startsWith("+") ? "green" : l.startsWith("-") ? "red" : undefined}>
-                  {l}
-                </Text>
-              ))}
-              {permPrompt.diff.split("\n").length > 12 && <Text dimColor>… (truncated)</Text>}
-            </Box>
-          )}
-          <Text dimColor>
-            [y] yes · [a] always · [n] no · [q] quit — timeout {permPrompt.timeoutSecs}s ⇒ deny
-          </Text>
-        </Box>
-      )}
+      {permPrompt && <PermissionModal prompt={permPrompt} />}
       <Box paddingX={1} flexShrink={0}>
         <Input
           valueRef={inputRef}
