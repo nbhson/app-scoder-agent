@@ -96,6 +96,53 @@ const MAX_ITEMS = 400;
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_TEXT_CHARS = 40_000;
 
+/**
+ * T4: ước lượng chiều cao (rows) của một ChatItem khi render — dùng cho
+ * virtualization (chỉ render window quanh viewport thay vì cap cứng).
+ * Over-estimate nhẹ an toàn hơn under-estimate (viewport luôn đủ phủ).
+ * ponytail: heuristic theo chars, không đo Ink thật — nâng cấp thành đo
+ * height thật (useBoxMetrics per item) khi heuristic lệch đáng kể.
+ */
+export function estimateItemRows(item: ChatItem): number {
+  switch (item.kind) {
+    case "user":
+      return 2 + Math.ceil(item.text.length / 80);
+    case "assistant":
+    case "thinking":
+      return 1 + Math.ceil((item.text?.length ?? 0) / 80) + (item.text ? item.text.split("\n").length : 0);
+    case "tool":
+      return 1 + 2; // title + preview 2 lines
+    case "diff":
+      return 3 + Math.min(24, (item.text?.split("\n").length ?? 0)); // header + ≤24 lines + border
+    case "todo":
+      return 2 + item.items.length;
+    case "build":
+      return 1;
+    case "notice":
+      return 1 + Math.ceil(item.text.length / 2000);
+  }
+}
+
+/**
+ * T4: chọn window item để render: lấy từ cuối lên tới khi tổng rows ước
+ * lượng ≥ viewportRows + margin (render dư phía trên để scroll mượt), nhưng
+ * giữ toàn bộ khi tổng nhỏ. Trả về slice của items (không mutate).
+ */
+export function visibleWindow(
+  items: ChatItem[],
+  viewportRows: number,
+  margin = 50,
+): ChatItem[] {
+  const budget = viewportRows + margin;
+  let acc = 0;
+  let start = items.length;
+  while (start > 0 && acc < budget) {
+    start--;
+    acc += estimateItemRows(items[start]);
+  }
+  return start === 0 ? items : items.slice(start);
+}
+
 function appendItem(state: TuiState, item: ChatItem): void {
   state.items.push(item);
   if (state.items.length > MAX_ITEMS) state.items.splice(0, state.items.length - MAX_ITEMS);

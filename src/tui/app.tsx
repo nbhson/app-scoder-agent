@@ -17,7 +17,7 @@ import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
-import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
+import { applyEvent, initialState, markAborted, visibleWindow, type ChatItem, type TuiState } from "./state.js";
 import { parseSlashCommand } from "./commands.js";
 import { dispatchCommand, type CommandHost } from "./command-registry.js";
 import { ChatItemView, Spinner } from "./chat-views.js"; // T2
@@ -505,15 +505,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     prevStatusRef.current = state.status;
   }, [state.status]);
 
-  // The viewport renders ALL items (state.ts caps at 400) and scrolls with
-  // contentOffsetY — real pixel-accurate scrollback with a sticky frame.
-  // Perf cap: render at most the last RENDER_CAP items — older items stay in
-  // state (scrolling only covers this window) so long runs keep Ink fast.
-  // G7: cap cấu hình được qua rc limits.renderCap.
-  const { rows } = useWindowSize();
-  const RENDER_CAP = config.limits?.renderCap ?? 200;
+  // The viewport renders items around the visible window (T4 virtualization):
+  // chỉ render item có thể hiện ra viewport (+margin) — state giữ full, không
+  // còn cap cứng 200. maxScroll vẫn tính trên content thật (useBoxMetrics).
+  const viewportRows = viewport.clientHeight || 24;
   const total = state.items.length;
-  const visible = total > RENDER_CAP ? state.items.slice(-RENDER_CAP) : state.items;
+  const visible = useMemo(
+    () => visibleWindow(state.items, viewportRows),
+    [state.items, viewportRows],
+  );
+  const { rows } = useWindowSize();
 
   return (
     // flexShrink={0}: pinned chrome must never be squeezed when the chat
