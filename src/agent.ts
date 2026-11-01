@@ -765,6 +765,32 @@ export class Agent {
    * appends the task to the existing message history instead of resetting it,
    * then runs the autonomous loop. First call behaves like run().
    */
+  /**
+   * T-07: trim the conversation back one exchange (last user message +
+   * everything after) — fork/edit-resend. The caller re-sends an edited
+   * task via runTurn().
+   */
+  trimLastTurn(): void {
+    // Cut = last REAL user message (skip guardrail reminder tails injected at
+    // finish); drop it and everything after. Reminder tails BEFORE the cut
+    // point belong to earlier turns and stay (history intact).
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role !== "user") continue;
+      if (this.isReminderTail(String(m.content ?? ""))) continue;
+      this.messages = this.messages.slice(0, i);
+      return;
+    }
+    this.messages = [];
+  }
+  /** True for guardrail-injected user messages (not real user tasks). */
+  private isReminderTail(content: string): boolean {
+    return (
+      content.includes("<system-reminder>") ||
+      /^Continue working on (the task|the original task)\. Build must pass before you finish\.$/.test(content.trim())
+    );
+  }
+
   async runTurn(task: string): Promise<AgentRunResult> {
     if (this.messages.length === 0) {
       return this.run(task);

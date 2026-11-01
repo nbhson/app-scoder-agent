@@ -838,16 +838,42 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           return;
         }
         if (slash.cmd === "/undo") {
+          // T-07: /undo [edit|turn|files]
+          //   (bare)|files — revert files to the previous checkpoint.
+          //   edit — files + trim conversation back one turn, then the user
+          //          can edit and re-send (fork/edit-resend, opencode UX).
           const agent = agentRef.current;
+          const mode = slash.arg.trim() || "files";
           const cps = agent?.snapshots.list() ?? [];
           if (!agent || cps.length < 2) {
             pushNotice("undo: no snapshot checkpoint to revert to", "warn");
             return;
           }
+          if (mode !== "files" && mode !== "edit") {
+            pushNotice("usage: /undo [files|edit]", "warn");
+            return;
+          }
           // Revert to the second-newest checkpoint (newest = current state).
           const target = cps[cps.length - 2];
           const ok = agent.snapshots.restore(target.tree);
-          pushNotice(ok ? `undo: reverted to ${target.id} (${target.label})` : "undo: restore failed", ok ? "info" : "warn");
+          if (!ok) {
+            pushNotice("undo: restore failed", "warn");
+            return;
+          }
+          if (mode === "edit") {
+            // Fork: trim the transcript UI back to the last user message and
+            // put it in the input for editing + re-send.
+            const items = stateRef.current.items;
+            let lastUserIdx = -1;
+            for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === "user") { lastUserIdx = i; break; }
+            const resend = lastUserIdx >= 0 && items[lastUserIdx].kind === "user" ? (items[lastUserIdx] as { text: string }).text : "";
+            update((s) => ({ ...s, items: lastUserIdx >= 0 ? items.slice(0, lastUserIdx) : s.items, status: "idle", summary: null }));
+            if (resend) writeInput(resend);
+            agent.trimLastTurn();
+            pushNotice(`undo edit: files → ${target.id}; last task back in the input — edit + re-send`, "info");
+          } else {
+            pushNotice(`undo: reverted to ${target.id} (${target.label})`);
+          }
           return;
         }
         pushNotice(`unknown command ${slash.cmd} — try /help`, "warn");
