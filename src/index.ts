@@ -8,7 +8,7 @@ import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import { collectUsage, formatCostReport } from "./cost.js";
 import { getVersion as getPackageVersion } from "./version.js";
-import { formatSlashHelp, parseSlashCommand, parseMcpExec } from "./tui/commands.js";
+import { dispatchCommand, type CommandHost } from "./tui/command-registry.js";
 import * as ui from "./ui.js";
 
 // Single source of truth: read version from package.json (see src/version.ts).
@@ -359,91 +359,31 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
     if (!input) continue;
     if (input === "exit" || input === "quit") break;
 
-    // Slash commands — handled by the UI, never sent to the LLM.
-    const slash = parseSlashCommand(input);
-    if (slash) {
-      if (slash.cmd === "/exit" || slash.cmd === "/quit") break;
-      if (slash.cmd === "/help") {
-        console.log(formatSlashHelp("scoder"));
-        continue;
-      }
-      if (slash.cmd === "/clear") {
+    // Slash commands — registry dùng chung với TUI (T1). Command riêng của
+    // TUI (/review /undo /theme /diff turn-scope) do TUI tự xử lý trước.
+    const host: CommandHost = {
+      agent: () => agent,
+      config: cfg,
+      replaceAgent: (next) => {
+        agent.abort();
+        agent = next ?? new Agent(cfg);
+        first = true;
+      },
+      resumeAndRun: async (s) => {
         agent.abort();
         agent = new Agent(cfg);
-        first = true;
-        ui.info("conversation cleared — context reset");
-        continue;
-      }
-      if (slash.cmd === "/cost") {
-        const u = agent.getUsage();
-        console.log(
-          u.calls > 0
-            ? `session usage: ${u.calls} LLM calls · tokens in ${u.inputTokens} / out ${u.outputTokens}` +
-                (u.cachedTokens > 0 ? ` (+${u.cachedTokens} cached)` : "")
-            : "no LLM calls yet in this session",
-        );
-        continue;
-      }
-      if (slash.cmd === "/model") {
-        console.log(`model: ${cfg.model} · provider: ${cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}`);
-        continue;
-      }
-      if (slash.cmd === "/skills") {
-        const skills = agent.getSkills();
-        if (skills.length === 0) {
-          console.log("no skills discovered — add .scoder/skills/<name>/SKILL.md (name + description frontmatter)");
-        } else {
-          console.log("Skills:");
-          for (const s of skills) console.log(`  ${s.name.padEnd(20)} ${s.description || "(no description)"}  [${s.scope}]`);
-        }
-        continue;
-      }
-      if (slash.cmd === "/skill") {
-        if (!slash.arg) {
-          ui.error("usage: /skill <name>");
-          continue;
-        }
-        const r = agent.stageSkill(slash.arg);
-        if (r.ok) ui.success(r.message);
-        else ui.error(r.message);
-        continue;
-      }
-      if (slash.cmd === "/mcp") {
-        const exec = parseMcpExec(slash.arg);
-        if (exec === null) {
-          // list mode
-          const status = await agent.mcpStatus();
-          if (status.length === 0) {
-            console.log("no MCP servers configured — add mcpServers to .scoderrc.json");
-            continue;
-          }
-          for (const srv of status) {
-            console.log(`${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}${srv.connected ? ` (${srv.tools.length} tools)` : " (not connected)"}`);
-            for (const t of srv.tools) console.log(`    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`);
-          }
-          continue;
-        }
-        if ("error" in exec) {
-          ui.error(exec.error);
-          continue;
-        }
-        ui.info(`→ ${exec.fullName}`);
-        const r = await agent.callMcpTool(exec.fullName, exec.args);
-        if (r.ok) console.log(r.output.length > 4000 ? r.output.slice(0, 4000) + "\n… (truncated)" : r.output);
-        else ui.error(r.output);
-        continue;
-      }
-      if (slash.cmd === "/permission") {
-        const mode = slash.arg.toLowerCase();
-        if (!["auto", "ask", "readonly"].includes(mode)) {
-          console.log(`permission mode: ${cfg.permissionMode} — usage: /permission <auto|ask|readonly>`);
-          continue;
-        }
-        agent.setPermissionMode(mode as "auto" | "ask" | "readonly");
-        cfg.permissionMode = mode as "auto" | "ask" | "readonly";
-        continue;
-      }
-      ui.error(`unknown command ${slash.cmd} — try /help`);
+        first = false;
+        await agent.resume(s);
+        return { success: true, steps: 0, buildCmd: cfg.buildCmd, summary: "resumed" };
+      },
+    };
+    const { handled, outcome } = await dispatchCommand(input, host, (text, level) => {
+      if (level === "error") ui.error(text);
+      else console.log(text);
+    });
+    if (handled) {
+      if (outcome?.quit) break;
+      if (outcome?.notice) ui.info(outcome.notice);
       continue;
     }
 

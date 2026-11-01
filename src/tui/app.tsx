@@ -17,9 +17,9 @@ import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
-import { listSessions, resolveSessionId } from "../session.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
+import { dispatchCommand, type CommandHost } from "./command-registry.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { Markdown } from "./markdown.js";
 import { AgentMark, fit, getTheme, setActiveTheme, theme, THEMES, toolIcon, useNamedTheme } from "./theme.js";
@@ -537,6 +537,44 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     [update],
   );
 
+  /** T1: CommandHost cho registry dùng chung với REPL. */
+  const tuiHost = useCallback((): CommandHost => ({
+    agent: () => agentRef.current,
+    config,
+    isRunning: () => runningRef.current,
+    replaceAgent: (next) => {
+      agentRef.current?.abort();
+      agentRef.current = next;
+      if (!next) {
+        runningRef.current = false;
+        setScrollOffset(0);
+        eventQueue.current = [];
+        update(() => initialState());
+      }
+      setPermMode(config.permissionMode);
+    },
+    resumeAndRun: async (s) => {
+      const agent = createAgent();
+      // Replace the pane with the restored transcript, then continue.
+      update(() => ({
+        ...initialState(),
+        items: s.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m): ChatItem => (m.role === "user" ? { kind: "user", text: typeof m.content === "string" ? m.content : "" } : { kind: "assistant", text: typeof m.content === "string" ? m.content : "", streaming: false })),
+      }));
+      runningRef.current = true;
+      setScrollOffset(0);
+      try {
+        await agent.resume(s);
+        runningRef.current = false;
+      } catch (err) {
+        runningRef.current = false;
+        pushNotice(`resume failed: ${(err as Error).message}`, "error");
+      }
+      return { success: true, steps: 0, buildCmd: config.buildCmd, summary: "resumed" };
+    },
+  }), [config, update, pushNotice, createAgent]);
+
   /** One round of the /review state machine: call the gate, render the result. */
   const reviewStep = useCallback(
     async (tool: string, args: Record<string, unknown>) => {
@@ -645,7 +683,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         exit();
         return;
       }
-      // Slash commands — handled by the UI itself, never sent to the LLM.
+      // Slash commands — TUI-specific first (/review /diff /theme /undo),
+      // then the shared registry (T1) for the rest.
       const slash = parseSlashCommand(task);
       if (slash) {
         writeInput("");
@@ -669,7 +708,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           return;
         }
         if (slash.cmd === "/diff") {
-          // T-06: /diff turn | session | branch (default: turn).
+          // T-06: /diff turn | session | branch (default: turn). TUI-specific —
+          // turn scope reads the reducer's diff items.
           const scope = slash.arg.trim() || "turn";
           const diffs = stateRef.current.items.filter((i) => i.kind === "diff");
           if (scope === "turn") {
@@ -716,174 +756,6 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           bumpFrame();
           return;
         }
-        if (slash.cmd === "/exit" || slash.cmd === "/quit") {
-          agentRef.current?.abort();
-          exit();
-          return;
-        }
-        if (slash.cmd === "/sessions") {
-          // T-05: list + resume. Bare → list; "/sessions resume <id|last>" →
-          // restore messages into a fresh agent and continue in this TUI.
-          if (slash.arg.startsWith("resume")) {
-            const ref = slash.arg.replace(/^resume\s*/, "").trim() || "last";
-            const s = resolveSessionId(config.workdir, ref);
-            if (!s) {
-              pushNotice(`session not found: ${ref} — bare /sessions lists saved ones`, "error");
-              return;
-            }
-            if (runningRef.current) {
-              pushNotice("agent is running — wait or Esc first", "warn");
-              return;
-            }
-            agentRef.current?.abort();
-            const agent = createAgent();
-            // Replace the pane with the restored transcript, then continue.
-            update(() => ({
-              ...initialState(),
-              items: s.messages
-                .filter((m) => m.role === "user" || m.role === "assistant")
-                .map((m): ChatItem => (m.role === "user" ? { kind: "user", text: typeof m.content === "string" ? m.content : "" } : { kind: "assistant", text: typeof m.content === "string" ? m.content : "", streaming: false })),
-            }));
-            runningRef.current = true;
-            setScrollOffset(0);
-            try {
-              await agent.resume(s);
-              runningRef.current = false;
-            } catch (err) {
-              runningRef.current = false;
-              pushNotice(`resume failed: ${(err as Error).message}`, "error");
-            }
-            return;
-          }
-          const all = listSessions(config.workdir);
-          pushNotice(
-            all.length === 0
-              ? "no saved sessions — completed runs auto-save to .scoder/sessions/"
-              : all.slice(0, 10).map((x) => `${x.id.slice(0, 8)}  ${x.updatedAt.slice(0, 16).replace("T", " ")}  ${x.steps} steps  ${x.task}`).join("\n") + "\nresume: /sessions resume <id|last>",
-          );
-          return;
-        }
-        if (slash.cmd === "/help") {
-          pushNotice(formatSlashHelp("scoder tui"));
-          return;
-        }
-        if (slash.cmd === "/clear") {
-          agentRef.current?.abort();
-          agentRef.current = null;
-          runningRef.current = false;
-          writeInput("");
-          setScrollOffset(0);
-          eventQueue.current = [];
-          update(() => initialState());
-          return;
-        }
-        if (slash.cmd === "/cost") {
-          const u = stateRef.current.usage;
-          pushNotice(
-            u.calls > 0
-              ? `session usage: ${u.calls} LLM calls · tokens in ${u.inputTokens} / out ${u.outputTokens}` +
-                  (u.cachedTokens > 0 ? ` (+${u.cachedTokens} cached)` : "")
-              : "no LLM calls yet in this session",
-          );
-          return;
-        }
-        if (slash.cmd === "/model") {
-          const agent = agentRef.current;
-          if (slash.arg) {
-            // T-04: hot-swap — "openai/gpt-4o-mini" or bare "gpt-4o-mini".
-            const agent2 = agent ?? createAgent();
-            const notice = agent2.setModel(slash.arg.trim());
-            pushNotice(notice, notice.startsWith("ERROR") ? "error" : "info");
-          } else {
-            const s = stateRef.current;
-            pushNotice(`model: ${s.model || config.model || "—"} · provider: ${s.provider || config.provider || "auto"} — switch: /model <provider/model>`);
-          }
-          return;
-        }
-        if (slash.cmd === "/skills") {
-          if (skills.length === 0) {
-            pushNotice("no skills discovered — add .scoder/skills/<name>/SKILL.md (name + description frontmatter)");
-          } else {
-            pushNotice(
-              "Skills:\n" +
-                skills
-                  .map((s) => `  ${s.name.padEnd(26)} ${fit(s.description || "(no description)", 72)} [${s.scope}]`)
-                  .join("\n"),
-            );
-          }
-          return;
-        }
-        if (slash.cmd === "/skill") {
-          if (!slash.arg) {
-            pushNotice(`usage: /skill <name>${skillNames.length ? ` — available: ${skillNames.join(", ")}` : ""}`, "warn");
-            return;
-          }
-          const hit = skills.find((s) => s.name.toLowerCase() === slash.arg.toLowerCase());
-          if (!hit) {
-            pushNotice(`skill "${slash.arg}" not found — try /skills`, "warn");
-            return;
-          }
-          const agent = agentRef.current ?? createAgent();
-          const r = agent.stageSkill(hit.name);
-          pushNotice(r.message, r.ok ? "info" : "error");
-          return;
-        }
-        if (slash.cmd === "/mcp") {
-          const agent = agentRef.current ?? createAgent();
-          const exec = parseMcpExec(slash.arg);
-          if (exec === null) {
-            // list mode
-            try {
-              const status = await agent.mcpStatus();
-              if (status.length === 0) {
-                pushNotice("no MCP servers configured — add mcpServers to .scoderrc.json");
-              } else {
-                pushNotice(
-                  status
-                    .map(
-                      (srv) =>
-                        `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}` +
-                        (srv.connected ? ` (${srv.tools.length} tools)\n` + srv.tools.map((t) => `    mcp__${srv.name}__${t.name}`).join("\n") : " (not connected)"),
-                    )
-                    .join("\n"),
-                );
-              }
-            } catch (err) {
-              pushNotice(`MCP status failed: ${(err as Error).message}`, "error");
-            }
-            return;
-          }
-          if ("error" in exec) {
-            pushNotice(exec.error, "warn");
-            return;
-          }
-          // exec mode — call one MCP tool directly (long calls stream nothing; show busy notice first)
-          pushNotice(`→ ${exec.fullName} …`);
-          try {
-            const r = await agent.callMcpTool(exec.fullName, exec.args);
-            pushNotice(
-              r.ok
-                ? `${exec.fullName} →\n${r.output.length > 2000 ? r.output.slice(0, 2000) + "… (truncated)" : r.output}`
-                : r.output,
-              r.ok ? "info" : "error",
-            );
-          } catch (err) {
-            pushNotice(`MCP exec failed: ${(err as Error).message}`, "error");
-          }
-          return;
-        }
-        if (slash.cmd === "/permission") {
-          const mode = slash.arg.toLowerCase();
-          if (!["auto", "readonly"].includes(mode)) {
-            pushNotice(`permission: ${permMode} — usage: /permission <auto|readonly> (ask is not supported in the TUI)`, "warn");
-            return;
-          }
-          setPermMode(mode as "auto" | "readonly");
-          agentRef.current?.setPermissionMode(mode as "auto" | "readonly");
-          update((s) => ({ ...s, permission: mode }));
-          pushNotice(`permission mode → ${mode}`);
-          return;
-        }
         if (slash.cmd === "/undo") {
           // T-07: /undo [edit|turn|files]
           //   (bare)|files — revert files to the previous checkpoint.
@@ -923,7 +795,12 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           }
           return;
         }
-        pushNotice(`unknown command ${slash.cmd} — try /help`, "warn");
+        // T1: phần còn lại qua registry dùng chung với REPL.
+        const { handled, outcome } = await dispatchCommand(task, tuiHost(), pushNotice);
+        if (handled && outcome?.quit) {
+          agentRef.current?.abort();
+          exit();
+        }
         return;
       }
       if (runningRef.current) {
@@ -964,7 +841,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         update((s) => ({ ...s, items: [...s.items, { kind: "notice", text: (err as Error).message, level: "error" }] }));
       }
     },
-    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep],
+    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep, tuiHost],
   );
 
   /** Create (or return) the session agent — permission mode always current. */
