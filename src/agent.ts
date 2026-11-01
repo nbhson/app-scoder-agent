@@ -99,7 +99,7 @@ export type AgentEvent =
   | { type: "error"; message: string };
 
 export class Agent {
-  private client: LlmClient | AnthropicClient;
+  private client: import("./provider-registry.js").ProviderRuntimeContract;
   private messages: ChatMessage[] = [];
   private tools: ToolSpec[] = allToolSpecs();
   private ctx: ToolContext;
@@ -639,7 +639,7 @@ export class Agent {
         sawToolCallDelta &&
         (isTimeout || /ECONNRESET|socket hang up|network|terminated/i.test(e?.message ?? ""))
       ) {
-        const partial = (this.client as { lastPartialToolCalls?: ToolCall[] }).lastPartialToolCalls ?? [];
+        const partial = this.client.lastPartialToolCalls ?? [];
         if (partial.length > 0) {
           ui.warn("stream interrupted after complete tool-call(s) — continuing with what was received");
           return {
@@ -1257,7 +1257,7 @@ export class Agent {
     const [prov, id] = splitProviderModel(model);
     if (!prov || prov === this.config.provider) {
       const m = id ?? model;
-      (this.client as { setModel?: (m: string) => void }).setModel?.(m);
+      this.client.setModel(m);
       this.config = { ...this.config, model: m };
       return `model → ${m} (${this.config.provider})`;
     }

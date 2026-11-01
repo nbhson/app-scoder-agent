@@ -12,7 +12,7 @@
  *   ollama            — local Ollama (http://localhost:11434/v1)
  *   gemini            — Gemini via its OpenAI-compat endpoint
  */
-import { LlmClient } from "./llm.js";
+import { LlmClient, type ChatMessage, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 
 export interface ProviderDef {
@@ -52,6 +52,24 @@ export const BUILTIN_PROVIDERS: Record<string, ProviderDef> = {
 
 /** Runtime either client type exposes (structural — both already match). */
 export type ProviderRuntime = LlmClient | AnthropicClient;
+
+/**
+ * I1: interface runtime chính thức — Agent/session code chỉ được dùng surface
+ * này; mọi cast `as {...}` đã xoá. Hai client implement structural-match.
+ */
+export interface ProviderRuntimeContract {
+  readonly model: string;
+  /** T-04: hot-swap model id — request sau dùng model mới. */
+  setModel(model: string): void;
+  /** H-09: tool calls dồn từ stream bị đứt (continuation). */
+  lastPartialToolCalls: ToolCall[];
+  chat(messages: ChatMessage[], tools: ToolSpec[], opts?: { signal?: AbortSignal }): Promise<import("./llm.js").ChatResult>;
+  streamChat(
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    opts?: { signal?: AbortSignal; idleTimeoutMs?: number },
+  ): AsyncGenerator<import("./llm.js").StreamChunk>;
+}
 
 export interface ProviderRuntimeOptions {
   baseUrl: string;

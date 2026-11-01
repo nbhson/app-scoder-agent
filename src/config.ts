@@ -40,7 +40,7 @@ export interface AgentConfig {
    * scripted client instead of consuming the parent's transcript.
    * @internal
    */
-  clientFactory?: () => import("./llm.js").LlmClient | import("./provider-anthropic.js").AnthropicClient;
+  clientFactory?: () => import("./provider-registry.js").ProviderRuntimeContract;
   /** Disable session auto-save */
   noSave?: boolean;
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */
