@@ -23,6 +23,8 @@ import { completeSlashCommand, completionProviders, ghostText, completeMcpArg, f
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { Markdown } from "./markdown.js";
 import { AgentMark, fit, getTheme, setActiveTheme, theme, THEMES, toolIcon, useNamedTheme } from "./theme.js";
+import { contextWindowFor } from "../model-catalog.js";
+import { resolveModelPricing } from "../constants.js";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 80;
@@ -246,12 +248,19 @@ function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
 }
 
 /** Build Rail — scoder's signature top bar: badges + lamp + fuel gauge. */
+/** T-11: gauge segment color — green (headroom) → yellow → red (nearly spent). */
+function gaugeColor(step: number, maxSteps: number): string {
+  const ratio = maxSteps > 0 ? Math.min(step, maxSteps) / maxSteps : 0;
+  return ratio < 0.6 ? theme.success : ratio < 0.85 ? theme.warn : theme.error;
+}
+
 function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6); // usable inner width
   const lampColor = state.buildLamp === "ok" ? theme.success : state.buildLamp === "fail" ? theme.error : theme.dim;
   const lampLabel = state.buildLamp === "ok" ? "build ok" : state.buildLamp === "fail" ? "build fail" : "no build yet";
   const gauge = fuelGauge(state.step, state.maxSteps);
+  const gColor = gaugeColor(state.step, state.maxSteps);
   const perm = state.permission || config.permissionMode;
   const model = state.model || config.model || "—";
 
@@ -279,7 +288,7 @@ function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }):
         <Text>
           {gauge && (
             <>
-              <Text color={theme.brand}>{gauge}</Text>
+              <Text color={gColor}>{gauge}</Text>
               <Text dimColor> {state.step}/{state.maxSteps}</Text>
             </>
           )}
@@ -331,6 +340,17 @@ function LiveMetrics({ state }: { state: TuiState }): React.JSX.Element {
       const s = ((state.endedAt ?? Date.now()) - state.startedAt) / 1000;
       if (s > 0.5) tok += ` · ${fmt(Math.round(state.usage.outputTokens / s))} tok/s`;
     }
+    // T-11: context % — input tokens so với model context window (catalog).
+    const win = contextWindowFor(state.provider, state.model);
+    if (win > 0) {
+      const pct = Math.round((state.usage.inputTokens / win) * 100);
+      tok += ` · ctx ${pct}%`;
+    }
+    // T-11: cost estimate live (pricing từ models.dev bảng builtin).
+    const cost =
+      (state.usage.inputTokens / 1_000_000) * resolveModelPricing(state.model).input +
+      (state.usage.outputTokens / 1_000_000) * resolveModelPricing(state.model).output;
+    if (cost > 0) tok += ` · $${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`;
     parts.push(tok);
   }
   if (state.startedAt) {
