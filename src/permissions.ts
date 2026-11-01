@@ -193,6 +193,11 @@ function extractFirstWord(command: string): string {
 /**
  * Classify a command given current permission config and session allowlist.
  */
+/**
+ * G2: classifyCommand đã bị xoá — dùng `PermissionChecker.classify()`.
+ * Giữ lại chỉ vì test cũ; body chuyển hướng sang checker thuần (không
+ * config lists — G2 lists là builtin rules trong checker).
+ */
 export function classifyCommand(
   command: string,
   mode: PermissionMode,
@@ -200,44 +205,15 @@ export function classifyCommand(
   configDeny: string[],
   sessionAllow: SessionAllowlist,
 ): PermissionResult {
-  const safeFirst = extractFirstWord(command);
-
-  // 1. Catastrophic — always deny
-  if (isCatastrophic(command)) {
-    return { decision: "deny", reason: "matches catastrophic command pattern" };
-  }
-
-  // 2. Config deny list
-  if (configDeny.some((p) => command.startsWith(p.trim()))) {
-    return { decision: "deny", reason: "matches denyCommands pattern in config" };
-  }
-
-  // 3. Session allowlist
-  if (sessionAllow.hasMatch(command)) {
-    return { decision: "allow", reason: "allowed by session allowlist" };
-  }
-
-  // 4. Config allow list
-  if (configAllow.some((p) => command.startsWith(p.trim()))) {
-    return { decision: "allow", reason: "allowed by config allowCommands" };
-  }
-
-  // 5. Mode-dependent
-  switch (mode) {
-    case "auto":
-      return { decision: "allow", reason: "auto mode — run without confirmation" };
-    case "readonly":
-      return {
-        decision: "deny",
-        reason: "readonly mode — shell commands are disabled",
-      };
-    case "ask":
-      return {
-        decision: "ask",
-        reason: "requires user confirmation",
-        alwaysAllowPrefix: safeFirst + " ",
-      };
-  }
+  // Reconstruct semantics qua rule engine: lists → builtin rules.
+  const checker = new PermissionChecker({
+    mode,
+    allowCommands: configAllow,
+    denyCommands: configDeny,
+    nonInteractive: true,
+  });
+  if (sessionAllow.hasMatch(command)) return { decision: "allow", reason: "allowed by session allowlist" };
+  return checker.classify(command);
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +349,18 @@ export interface PermissionConfig {
   policyRules?: PermissionRule[];
 }
 
+/**
+ * G2: legacy allow/deny prefix lists → builtin rules (last-match-wins:
+ * deny list đặt sau allow list để deny luôn thắng khi cả hai khớp).
+ * Được append SAU user rules trong activeRules() — giữ nguyên ngữ nghĩa cũ
+ * (config lists override rules cho prefix trùng).
+ */
+function builtinRulesFromLists(allow: string[], deny: string[]): PermissionRule[] {
+  const toRules = (list: string[], effect: PermissionEffect): PermissionRule[] =>
+    list.filter((p) => p.trim().length > 0).map((p) => ({ action: "shell", resource: p.trim(), effect }));
+  return [...toRules(allow, "allow"), ...toRules(deny, "deny")];
+}
+
 export class PermissionChecker {
   private sessionAllow = new SessionAllowlist();
   private allowAllEdits = false;
@@ -406,7 +394,14 @@ export class PermissionChecker {
 
   /** Rules for one evaluation: config rules + saved rules (config wins on deny). */
   private activeRules(): PermissionRule[] {
-    return [...(this.config.savedRules ?? []), ...(this.config.rules ?? [])];
+    // G2: legacy allow/deny lists trở thành builtin rules (priority thấp
+    // nhất — user/saved rules override). Deny list sau allow list trong
+    // builtin để deny thắng khi cả hai khớp (last-match-wins).
+    return [
+      ...builtinRulesFromLists(this.config.allowCommands, this.config.denyCommands),
+      ...(this.config.savedRules ?? []),
+      ...(this.config.rules ?? []),
+    ];
   }
 
   /**
@@ -463,28 +458,25 @@ export class PermissionChecker {
       if (allow === "allow") return { decision: "allow", reason: "allowed by permission rule" };
       return { decision: "ask", reason: "requires approval by policy", alwaysAllowPrefix: extractFirstWord(command) + " " };
     }
-    // Rule engine next.
-    const ruleEffect = matchRule(this.activeRules(), "shell", command);
-    if (ruleEffect) {
-      const base = classifyCommand(command, this.config.mode, this.config.allowCommands, this.config.denyCommands, this.sessionAllow);
-      if (base.decision === "deny") return base; // catastrophic/config deny never overridden
-      const alwaysAllowPrefix = ruleEffect === "ask" ? extractFirstWord(command) + " " : undefined;
-      switch (ruleEffect) {
-        case "allow":
-          return { decision: "allow", reason: "allowed by permission rule" };
-        case "deny":
-          return { decision: "deny", reason: "denied by permission rule" };
-        case "ask":
-          return { decision: "ask", reason: "requires approval by permission rule", alwaysAllowPrefix };
-      }
+    // G2: một đường duy nhất — rules (bao gồm builtin từ allow/deny lists,
+    // last-match-wins) → mode fallback. Session allowlist map thành rule allow.
+    if (this.sessionAllow.hasMatch(command)) {
+      return { decision: "allow", reason: "allowed by session allowlist" };
     }
-    return classifyCommand(
-      command,
-      this.config.mode,
-      this.config.allowCommands,
-      this.config.denyCommands,
-      this.sessionAllow,
-    );
+    const ruleEffect = matchRule(this.activeRules(), "shell", command);
+    if (ruleEffect === "allow") return { decision: "allow", reason: "allowed by permission rule" };
+    if (ruleEffect === "deny") return { decision: "deny", reason: "denied by permission rule" };
+    if (ruleEffect === "ask") {
+      return { decision: "ask", reason: "requires approval by permission rule", alwaysAllowPrefix: extractFirstWord(command) + " " };
+    }
+    switch (this.config.mode) {
+      case "auto":
+        return { decision: "allow", reason: "auto mode — run without confirmation" };
+      case "readonly":
+        return { decision: "deny", reason: "readonly mode — shell commands are disabled" };
+      case "ask":
+        return { decision: "ask", reason: "requires user confirmation", alwaysAllowPrefix: extractFirstWord(command) + " " };
+    }
   }
 
   /**
