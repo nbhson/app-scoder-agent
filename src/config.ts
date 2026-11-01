@@ -17,8 +17,8 @@ export interface AgentConfig {
   buildCmd: string | null;
   /** Max autonomous loop iterations before giving up */
   maxSteps: number;
-  /** Guardrail thresholds (doom-loop, text-only streak, wrap-up timing) */
-  guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number };
+  /** Guardrail thresholds (doom-loop, text-only streak, wrap-up timing, G6 token budget) */
+  guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number; tokenBudget?: number };
   /** Max tokens for chat completions */
   maxTokens: number;
   temperature: number;
@@ -87,7 +87,7 @@ interface RcFile {
   /** Max steps before wrap-up reminder injection. */
   wrapUpStepsBeforeEnd?: number;
   /** Guardrail thresholds override (rc: "guardrails": {...}). */
-  guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number };
+  guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number; tokenBudget?: number };
   mcpServers?: Record<string, import("./mcp.js").McpServerConfig>;
   permissions?: {
     mode?: string;

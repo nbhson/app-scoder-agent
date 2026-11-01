@@ -69,6 +69,9 @@ export interface GuardrailContext {
   chatDone: boolean;
   /** Output tokens của bước này (token-no-progress, H-12). */
   outputTokensThisStep?: number;
+  /** G6: tổng token tích luỹ cả run (budget rule). */
+  totalTokensIn?: number;
+  totalTokensOut?: number;
 }
 
 // ── Per-run tracker state (G1) — sống trong engine, không còn trong runLoop ──
@@ -98,6 +101,8 @@ export interface GuardrailOptions {
   doomLoopRepeats: number;
   /** Còn bao nhiêu bước trước khi hết budget thì inject wrap-up reminder. */
   wrapUpStepsBeforeEnd: number;
+  /** G6: tổng token (in+out) tối đa mỗi run — bỏ qua khi không set. */
+  tokenBudget?: number;
 }
 
 export const DEFAULT_GUARDRAIL_OPTIONS: GuardrailOptions = {
@@ -111,8 +116,13 @@ export const DEFAULT_GUARDRAIL_OPTIONS: GuardrailOptions = {
 export interface GuardrailRule {
   name: string;
   description: string;
-  /** Trả về {action, reason} khi rule kích hoạt, null khi không vi phạm. */
-  evaluate(ctx: GuardrailContext): { action: GuardrailAction; reason: string } | null;
+  /**
+   * Trả về {action, reason} khi rule kích hoạt, null khi không vi phạm.
+   * G6: có thể async (Promise) — engine await tuần tự; rule sync vẫn chạy
+   * như cũ (verify-build pattern: rule async không tự chạy build, trả action
+   * để loop chạy).
+   */
+  evaluate(ctx: GuardrailContext): { action: GuardrailAction; reason: string } | null | Promise<{ action: GuardrailAction; reason: string } | null>;
 }
 
 /**
@@ -313,6 +323,31 @@ const historyTrimRule: GuardrailRule = {
 };
 
 /**
+ * G6: token budget per run — tổng (input+output) vượt cap → kết thúc run
+ * (pause thay vì đốt tiền). Đọc usage từ ctx (loop truyền usageTotals).
+ */
+export function tokenBudgetRule(capTokens: number): GuardrailRule {
+  return {
+    name: "token-budget",
+    description: `end the run when total session tokens exceed ${capTokens}`,
+    evaluate(ctx) {
+      const total = (ctx.totalTokensIn ?? 0) + (ctx.totalTokensOut ?? 0);
+      if (total < capTokens) return null;
+      return {
+        action: {
+          kind: "finish",
+          success: false,
+          summary:
+            `Token budget exhausted: ${total} tokens used (cap ${capTokens}). ` +
+            "Report current progress in the summary.",
+        },
+        reason: `token budget ${total}/${capTokens}`,
+      };
+    },
+  };
+}
+
+/**
  * Build stop condition: bước này có tool call chạy ĐÚNG build command →
  * thành công là điều kiện kết thúc run (dùng lại kết quả tool, không build
  * lần 2); thất bại thì tự xác minh lại rồi nudge fix.
@@ -346,6 +381,9 @@ export function defaultGuardrailRules(opts: GuardrailOptions = DEFAULT_GUARDRAIL
   return [
     wrapUpRule(opts),
     chatDoneRule,
+    // G6: budget rule đứng sớm — vượt cap là finish ngay, trước mọi rule khác
+    // (trừ wrap-up, vốn vô hại khi budget đã cạn).
+    ...(opts.tokenBudget ? [tokenBudgetRule(opts.tokenBudget)] : []),
     completionClaimRule,
     textOnlyStreakRule(opts),
     continueNudgeRule,
@@ -422,29 +460,32 @@ export class GuardrailEngine {
    * Tracker được cập nhật từ ctx thô TRƯỚC khi rule chạy (rule thấy giá trị
    * của bước này — đúng semantics cũ của runLoop).
    */
-  evaluate(ctx: GuardrailContext): GuardrailDecision[] {
+  evaluate(ctx: GuardrailContext): Promise<GuardrailDecision[]> {
     this.updateTrackers(ctx);
     // Rules nhìn thấy tracker qua ctx mở rộng (internal — không thuộc API public).
     const full = { ...ctx, ...this.tracker };
-    const out: GuardrailDecision[] = [];
-    for (const rule of this.rules) {
-      let r: { action: GuardrailAction; reason: string } | null;
-      try {
-        r = rule.evaluate(full);
-      } catch (err) {
-        // Một rule lỗi không được phép làm gãy vòng lặp agent.
-        r = { action: { kind: "none" }, reason: `rule threw: ${(err as Error).message}` };
+    // G6: rule có thể async — chạy tuần tự (thứ tự ưu tiên giữ nguyên).
+    return (async () => {
+      const out: GuardrailDecision[] = [];
+      for (const rule of this.rules) {
+        let r: { action: GuardrailAction; reason: string } | null;
+        try {
+          r = await rule.evaluate(full);
+        } catch (err) {
+          // Một rule lỗi không được phép làm gãy vòng lặp agent.
+          r = { action: { kind: "none" }, reason: `rule threw: ${(err as Error).message}` };
+        }
+        if (!r) continue;
+        const d: GuardrailDecision = { rule: rule.name, action: r.action, reason: r.reason };
+        out.push(d);
+        try {
+          this.onDecision?.(d);
+        } catch {
+          /* logging không được phép giết loop */
+        }
       }
-      if (!r) continue;
-      const d: GuardrailDecision = { rule: rule.name, action: r.action, reason: r.reason };
-      out.push(d);
-      try {
-        this.onDecision?.(d);
-      } catch {
-        /* logging không được phép giết loop */
-      }
-    }
-    return out;
+      return out;
+    })();
   }
 
   /**

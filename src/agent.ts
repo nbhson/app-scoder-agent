@@ -1017,7 +1017,7 @@ export class Agent {
         if (r && r.ok) buildPassedThisStep = true;
       }
 
-      const decisions = this.guardrails.evaluate({
+      const decisions = await this.guardrails.evaluate({
         step: steps,
         maxSteps: this.config.maxSteps,
         text,
@@ -1029,6 +1029,8 @@ export class Agent {
         filesModified: this.filesModified,
         chatDone,
         outputTokensThisStep: usage?.completion_tokens,
+        totalTokensIn: this.usageTotals.inputTokens, // G6 budget rule
+        totalTokensOut: this.usageTotals.outputTokens,
       });
 
       // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.

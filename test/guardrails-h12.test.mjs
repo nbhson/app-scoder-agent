@@ -50,25 +50,25 @@ describe("tokenNoProgressRule (H-12)", () => {
     assert.equal(rule.evaluate({ ...baseCtx, outputTokensThisStep: undefined, lowTokenStreak: 10 }), null);
   });
 
-  it("engine-level (G1): tracker tự tính từ ctx — 3 bước low-token liên tiếp ⇒ finish", () => {
+  it("engine-level (G1): tracker tự tính từ ctx — 3 bước low-token liên tiếp ⇒ finish", async () => {
     const eng = createGuardrailEngine();
-    const feed = () => eng.evaluate({ ...baseCtx, outputTokensThisStep: 5 });
-    feed();
-    feed();
-    const hit = feed();
+    const feed = async () => await eng.evaluate({ ...baseCtx, outputTokensThisStep: 5 });
+    await feed();
+    await feed();
+    const hit = await feed();
     const d = hit.find((x) => x.rule === "token-no-progress");
     assert.ok(d, "step thứ 3 phải kích hoạt");
     assert.equal(d.action.kind, "finish");
   });
 
-  it("engine-level (G1): error-loop tự tính từ toolResults", () => {
+  it("engine-level (G1): error-loop tự tính từ toolResults", async () => {
     const eng = createGuardrailEngine();
     const calls = { role: "assistant", content: null, tool_calls: [{ id: "t1", name: "run_command", arguments: "{}" }] };
     const results = new Map([["t1", { ok: false, output: "ERROR: module not found" }]]);
-    const feed = () => eng.evaluate({ ...baseCtx, message: calls, toolResults: results });
-    feed();
-    feed();
-    const hit = feed();
+    const feed = async () => await eng.evaluate({ ...baseCtx, message: calls, toolResults: results });
+    await feed();
+    await feed();
+    const hit = await feed();
     assert.ok(hit.find((x) => x.rule === "error-loop"), "lần error thứ 3 phải inject");
   });
 });
