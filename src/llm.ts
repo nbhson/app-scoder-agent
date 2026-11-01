@@ -84,6 +84,8 @@ export interface LlmClientOptions {
   temperature: number;
   /** Stream LLM output in real-time. Default: true. */
   stream?: boolean;
+  /** G7: per-request timeout ms (default LLM_REQUEST_TIMEOUT_MS). */
+  requestTimeoutMs?: number;
 }
 
 /** A piece of streamed output. */
@@ -232,6 +234,10 @@ export class LlmClient {
     this.opts = { ...this.opts, model };
   }
 
+  private get timeoutMs(): number {
+    return this.opts.requestTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+  }
+
   // ── Non-streaming ──────────────────────────────────────────────────────────
 
   async chat(
@@ -240,7 +246,7 @@ export class LlmClient {
     opts: { signal?: AbortSignal } = {},
   ): Promise<ChatResult> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const { signal, cleanup } = combinedSignal(opts.signal, this.timeoutMs);
     const body = JSON.stringify({
       model: this.opts.model,
       messages: toWireMessages(messages),
@@ -337,7 +343,7 @@ export class LlmClient {
     opts: { signal?: AbortSignal; idleTimeoutMs?: number } = {},
   ): AsyncGenerator<StreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, this.timeoutMs);
     const bodyStr = JSON.stringify({
       model: this.opts.model,
       messages: toWireMessages(messages),
@@ -384,7 +390,7 @@ export class LlmClient {
     // "LLM stream timed out while reading the response".) SIGINT still aborts
     // through the same signal — stopTimer keeps the external listener alive.
     stopTimer();
-    const idleTimeoutMs = opts.idleTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+    const idleTimeoutMs = opts.idleTimeoutMs ?? this.timeoutMs;
     const readWithIdleTimeout = async (): Promise<{ done: boolean; value?: Uint8Array }> => {
       const ac = new AbortController();
       const t = setTimeout(

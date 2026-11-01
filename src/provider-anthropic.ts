@@ -155,8 +155,14 @@ export class AnthropicClient {
       enableCache?: boolean;
       /** I-05: thinking budget tokens (Anthropic extended thinking). 0 = off. */
       thinkingBudgetTokens?: number;
+      /** G7: per-request timeout ms (default LLM_REQUEST_TIMEOUT_MS). */
+      requestTimeoutMs?: number;
     },
   ) {}
+
+  private get timeoutMs(): number {
+    return this.opts.requestTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+  }
 
   /**
    * I-04 prompt caching — Anthropic 4-block formula (≤4 cache breakpoints):
@@ -231,7 +237,7 @@ export class AnthropicClient {
   ): Promise<ChatResult> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
-    const { signal, cleanup } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const { signal, cleanup } = combinedSignal(opts.signal, this.timeoutMs);
     const cached = this.applyCacheControl(system, translated, tools);
     const body = this.buildBody(cached.system, cached.messages, cached.tools, false);
 
@@ -283,7 +289,7 @@ export class AnthropicClient {
   ): AsyncGenerator<StreamChunk> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
-    const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, LLM_REQUEST_TIMEOUT_MS);
+    const { signal, cleanup, stopTimer } = combinedSignal(opts.signal, this.timeoutMs);
     const cached = this.applyCacheControl(system, translated, tools);
     const body = this.buildBody(cached.system, cached.messages, cached.tools, true);
 
@@ -332,7 +338,7 @@ export class AnthropicClient {
     // Headers received — switch whole-request timeout to idle timeout per read
     // (same rationale as LlmClient.streamChat: long streams are normal).
     stopTimer();
-    const idleTimeoutMs = opts.idleTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
+    const idleTimeoutMs = opts.idleTimeoutMs ?? this.timeoutMs;
     const readWithIdleTimeout = async (): Promise<{ done: boolean; value?: Uint8Array }> => {
       const ac = new AbortController();
       const t = setTimeout(

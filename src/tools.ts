@@ -29,7 +29,17 @@ export interface ToolResult {
   diff?: ToolDiff;
 }
 
-const MAX_OUTPUT_CHARS = 20_000;
+/**
+ * G7: max chars tool output — default 20_000, runtime override qua
+ * setMaxOutputChars (agent constructor gọi với config.limits).
+ * ponytail: module-level mutable thay vì ctx param vào 12 call sites —
+ * 1 agent/process đổi 1 lần lúc khởi tạo; đa-config cùng process (server mode)
+ * chỉ cần giá trị giống nhau, nâng cấp thành ctx field khi có nhu cầu khác nhau.
+ */
+let MAX_OUTPUT_CHARS = 20_000;
+export function setMaxOutputChars(n: number): void {
+  if (Number.isFinite(n) && n > 0) MAX_OUTPUT_CHARS = Math.floor(n);
+}
 const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // refuse to read files > 2MB
 
 function clamp(s: string, max = MAX_OUTPUT_CHARS): string {
@@ -620,6 +630,8 @@ export interface ToolContext {
    * cũ). mode readonly/workspace-write → wrap qua sandbox-exec/bwrap/docker.
    */
   sandbox?: SandboxConfig;
+  /** G7: max chars tool output (default 20_000) — clamp() đọc từ đây. */
+  maxOutputChars?: number;
 }
 
 /** One row of the agent's session plan (write_todos). */

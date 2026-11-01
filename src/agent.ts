@@ -4,7 +4,7 @@ import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, 
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
-import { getTool, allToolSpecs, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
+import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { invalidateFileIndex } from "./tui/at-complete.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
@@ -155,6 +155,7 @@ export class Agent {
       model: config.model,
       maxTokens: config.maxTokens,
       temperature: config.temperature,
+      requestTimeoutMs: config.limits?.requestTimeoutMs, // G7
     };
     // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
     // I-05: thinking budget = 10% maxTokens khi reasoning on (Anthropic only).
@@ -196,6 +197,8 @@ export class Agent {
       sandbox: config.sandbox,
       allowSubagents: config.allowSubagents,
     };
+    // G7: thresholds từ rc limits.
+    if (config.limits?.maxOutputChars) setMaxOutputChars(config.limits.maxOutputChars);
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
     this.snapshots = new SnapshotManager(config.workdir, config.snapshots !== false);
@@ -975,7 +978,7 @@ export class Agent {
       if (calls.length > 1 && !needsAsk) {
         const readOnly = calls.every((tc) => Agent.READONLY_TOOLS.has(tc.name));
         if (readOnly) {
-          const results = await this.parallelMap(calls, (tc) => this.executeToolCall(tc, steps, stepToolResults), 4);
+          const results = await this.parallelMap(calls, (tc) => this.executeToolCall(tc, steps, stepToolResults), this.config.limits?.toolConcurrency ?? 4);
           for (const r of results) {
             if (r.post) r.post();
           }

@@ -34,6 +34,17 @@ export interface AgentConfig {
   formatter?: boolean | string;
   /** G4: sandbox profile for run_command (rc `sandbox`). */
   sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
+  /** G7: runtime thresholds — thay magic number rải trong code. */
+  limits?: {
+    /** LLM request timeout ms (default 120_000). */
+    requestTimeoutMs?: number;
+    /** Max chars tool output vào conversation (default 20_000). */
+    maxOutputChars?: number;
+    /** Parallel tool-call concurrency (default 4). */
+    toolConcurrency?: number;
+    /** TUI render cap — số item cuối được render (default 200). */
+    renderCap?: number;
+  };
   /**
    * I-12: LLM client factory override (eval harness). Called once per Agent
    * construction — a factory (not an instance) so subagents get their own
@@ -100,14 +111,44 @@ interface RcFile {
   shellEnvAllow?: string[];
   /** G4: sandbox profile for run_command — "off" (default) | "readonly" | "workspace-write"; optional wrapper override. */
   sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
+  /** G7: runtime thresholds (rc "limits"). */
+  limits?: {
+    requestTimeoutMs?: number;
+    maxOutputChars?: number;
+    toolConcurrency?: number;
+    renderCap?: number;
+  };
   /** Auto-compaction (H-10): false = off, object = overrides. */
-  compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
-  /** I-11: post-edit formatter — true = auto-detect, string = binary or "npm:<script>". */
+  compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;  /** I-11: post-edit formatter — true = auto-detect, string = binary or "npm:<script>". */
   formatter?: boolean | string;
   /** Git shadow snapshots (H-11): false disables checkpoint capture. */
   snapshots?: boolean;
   /** I-05: reasoning/thinking — "off" (default) | "on". */
   reasoning?: "off" | "on";
+}
+
+/**
+ * G7: parse + validate rc "limits" — số nguyên dương; giá trị sai bỏ qua
+ * (dùng default). Defaults là nguồn sự thật duy nhất (resolveLimits).
+ */
+export const LIMIT_DEFAULTS = { requestTimeoutMs: 120_000, maxOutputChars: 20_000, toolConcurrency: 4, renderCap: 200 } as const;
+
+function parseLimits(raw: unknown): AgentConfig["limits"] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
+  const out: NonNullable<AgentConfig["limits"]> = {};
+  for (const k of ["requestTimeoutMs", "maxOutputChars", "toolConcurrency", "renderCap"] as const) {
+    const v = num(r[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** G7: limits đã resolve (defaults + rc override) — các module đọc từ đây. */
+export function resolveLimits(limits: AgentConfig["limits"]): { requestTimeoutMs: number; maxOutputChars: number; toolConcurrency: number; renderCap: number } {
+  return { ...LIMIT_DEFAULTS, ...limits };
 }
 
 function readRcFile(path: string, label: string): RcFile {
@@ -303,6 +344,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     compaction: rc.compaction ?? undefined,
     formatter: rc.formatter ?? undefined,
     sandbox: rc.sandbox,
+    limits: parseLimits(rc.limits),
     snapshots: rc.snapshots,
     modelPricing: parsePricing(rc.modelPricing),
   };

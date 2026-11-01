@@ -940,8 +940,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // contentOffsetY — real pixel-accurate scrollback with a sticky frame.
   // Perf cap: render at most the last RENDER_CAP items — older items stay in
   // state (scrolling only covers this window) so long runs keep Ink fast.
+  // G7: cap cấu hình được qua rc limits.renderCap.
   const { rows } = useWindowSize();
-  const RENDER_CAP = 200;
+  const RENDER_CAP = config.limits?.renderCap ?? 200;
   const total = state.items.length;
   const visible = total > RENDER_CAP ? state.items.slice(-RENDER_CAP) : state.items;
 
