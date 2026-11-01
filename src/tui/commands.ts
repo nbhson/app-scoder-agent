@@ -57,6 +57,100 @@ export function completeSlashCommand(
   return { completed: prefix + (matches.length === 1 ? " " : ""), candidates: matches };
 }
 
+// ── T-02: completion-provider interface ─────────────────────────────────────
+// One provider per resource kind; the Input overlay asks every provider for
+// candidates and renders one ranked list. Providers are sync + cheap (≤200ms
+// p95 SLO): sources are in-memory lists or the T-01 cached file index.
+
+export interface CompletionCandidate {
+  label: string;
+  desc?: string;
+  /** Inserted text (replaces the current token). */
+  insert: string;
+}
+
+export interface CompletionProvider {
+  /** Source id — also the overlay section header. */
+  id: string;
+  /** Does this provider own the current token? (e.g. token starts with "@") */
+  match(token: string): boolean;
+  candidates(token: string): CompletionCandidate[];
+}
+
+import { suggest } from "./at-complete.js";
+
+/** Build providers from runtime context (called once per keystroke burst). */
+export function completionProviders(sources: {
+  skills: string[];
+  agents: string[];
+  files: string[];
+}): CompletionProvider[] {
+  return [
+    {
+      id: "commands",
+      match: (t) => t.startsWith("/") && !t.slice(1).includes(" "),
+      candidates: (t) =>
+        SLASH_COMMANDS.filter((c) => c.cmd.startsWith(t.toLowerCase()))
+          .map((c) => ({ label: c.cmd, desc: c.desc, insert: c.cmd + " " })),
+    },
+    {
+      id: "files",
+      match: (t) => t.startsWith("@") && t.length > 1,
+      candidates: (t) =>
+        suggest(sources.files, t.slice(1)).map((f) => ({ label: f, insert: "@" + f + (f.endsWith("/") ? "" : " ") })),
+    },
+    {
+      id: "skills",
+      match: (t) => t.startsWith("@") && t.length > 1,
+      candidates: (t) => {
+        const q = t.slice(1).toLowerCase();
+        return sources.skills
+          .filter((s) => s.toLowerCase().includes(q))
+          .slice(0, 4)
+          .map((s) => ({ label: `@${s}`, desc: "skill", insert: `@${s} ` }));
+      },
+    },
+    {
+      id: "agents",
+      match: (t) => t.startsWith("@") && t.length > 1,
+      candidates: (t) => {
+        const q = t.slice(1).toLowerCase();
+        return sources.agents
+          .filter((a) => a.toLowerCase().includes(q))
+          .slice(0, 4)
+          .map((a) => ({ label: `@${a}`, desc: "agent", insert: `@${a} ` }));
+      },
+    },
+  ];
+}
+
+/**
+ * Ghost text: when the current input has exactly ONE candidate across all
+ * providers and it extends the typed token, return the remainder to render
+ * dim after the cursor (Tab accepts). Returns null otherwise.
+ */
+export function ghostText(
+  value: string,
+  providers: CompletionProvider[],
+): { rest: string; insert: string } | null {
+  const tokens = value.split(/\s/);
+  const token = tokens[tokens.length - 1] ?? "";
+  if (!token || value.endsWith(" ")) return null;
+  const all: CompletionCandidate[] = [];
+  for (const p of providers) {
+    if (!p.match(token)) continue;
+    all.push(...p.candidates(token));
+    if (all.length > 1) return null;
+  }
+  if (all.length !== 1) return null;
+  const insert = all[0].insert;
+  // Ghost shows only the unread part of a plain extension (no replacement).
+  if (!insert.toLowerCase().startsWith(token.toLowerCase())) return null;
+  const rest = insert.slice(token.length);
+  if (!rest) return null;
+  return { rest, insert };
+}
+
 /** Format the /help listing (shared so both frontends render identically). */
 export function formatSlashHelp(commandName: string): string {
   const rows = SLASH_COMMANDS.map((c) => `  ${c.cmd.padEnd(12)} ${c.desc}`).join("\n");

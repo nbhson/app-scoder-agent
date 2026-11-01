@@ -16,8 +16,9 @@ import type { AgentConfig } from "../config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
+import { discoverAgents } from "../agents.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
-import { completeSlashCommand, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
+import { completeSlashCommand, completionProviders, ghostText, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { Markdown } from "./markdown.js";
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
@@ -423,6 +424,15 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   const scrollTop = Math.max(0, maxScroll - scrollOffset);
   const skills = useMemo(() => discoverSkills(config.workdir), [config.workdir]);
   const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
+  // T-02: completion sources (agents + files) computed once per mount.
+  const atSources = useMemo(
+    () => ({
+      skills: skillNames,
+      agents: discoverAgents(config.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name),
+      files: fileIndex(config.workdir),
+    }),
+    [config.workdir, skillNames],
+  );
 
   // Mirror of state for the submit path (isFirst, /cost, /model) and the
   // abort handler — kept in sync synchronously by update() below, so it is
@@ -952,6 +962,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           skillNames={skillNames}
           agentRef={agentRef}
           config={config}
+          atSources={atSources}
         />
       </Box>
       <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
@@ -1003,9 +1014,11 @@ interface InputProps {
   agentRef: React.MutableRefObject<Agent | null>;
   /** Workdir for the @ file index (T-01). */
   config: AgentConfig;
+  /** T-02: completion sources (skills/agents/files). */
+  atSources: { skills: string[]; agents: string[]; files: string[] };
 }
 
-function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config }: InputProps): React.JSX.Element {
+function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
 
@@ -1123,6 +1136,13 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
           }
           return;
         }
+        // T-02: Tab accepts ghost text (unique candidate extension).
+        if (!atStateRef.current && ghostRef.current) {
+          const v = ghostRef.current.insert;
+          valueRef.current = v;
+          onChange(v);
+          return;
+        }
         // T-01: Tab accepts the active @ suggestion (dirs keep trailing slash).
         if (atStateRef.current) {
           acceptAt(atStateRef.current.suggestions[atStateRef.current.idx]);
@@ -1161,6 +1181,11 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
   const hint = value.startsWith("/") && !value.includes(" ") ? completeSlashCommand(value) : null;
   const candidates = hint && hint.candidates.length > 1 ? hint.candidates.map((c) => c.cmd).join("  ") : null;
   const at = atState;
+  // T-02 ghost text: unique extension of the last token, dim after cursor.
+  const providers = useMemo(() => completionProviders(atSources), [atSources]);
+  const ghost = useMemo(() => (atState ? null : ghostText(value, providers)), [value, providers, atState]);
+  const ghostRef = useRef(ghost);
+  ghostRef.current = ghost;
   return (
     <Box flexDirection="column">
       {at && (
@@ -1179,6 +1204,7 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
           {"❯ "}
         </Text>
         <Text>{value}</Text>
+        {ghost && <Text dimColor>{ghost.rest}</Text>}
         <Text dimColor>▌</Text>
       </Box>
       {candidates && <Text dimColor>  {candidates}  (tab completes)</Text>}
