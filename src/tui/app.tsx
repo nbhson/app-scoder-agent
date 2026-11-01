@@ -631,6 +631,44 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           });
           return;
         }
+        if (slash.cmd === "/diff") {
+          // T-06: /diff turn | session | branch (default: turn).
+          const scope = slash.arg.trim() || "turn";
+          const diffs = stateRef.current.items.filter((i) => i.kind === "diff");
+          if (scope === "turn") {
+            // Diffs since the last user message (current turn).
+            let count = 0;
+            const turnDiffs: string[] = [];
+            for (let i = stateRef.current.items.length - 1; i >= 0; i--) {
+              const it = stateRef.current.items[i];
+              if (it.kind === "user" && count > 0) break;
+              if (it.kind === "diff") {
+                count++;
+                turnDiffs.unshift(`✎ ${it.path} (+${it.added}/-${it.removed})\n${it.text}`);
+              }
+            }
+            pushNotice(turnDiffs.length ? turnDiffs.join("\n\n") : "no file edits in this turn yet");
+          } else if (scope === "session") {
+            const total = diffs.reduce((a, d) => ({ add: a.add + d.added, rem: a.rem + d.removed }), { add: 0, rem: 0 });
+            pushNotice(
+              diffs.length === 0
+                ? "no file edits this session"
+                : diffs.map((d) => `✎ ${d.path} (+${d.added}/-${d.removed})`).join("\n") + `\n${diffs.length} files · +${total.add}/-${total.rem}`,
+            );
+          } else if (scope === "branch") {
+            const agent = agentRef.current;
+            const snaps = agent?.snapshots.list() ?? [];
+            if (!agent || snaps.length === 0) {
+              pushNotice("no snapshot checkpoints — /diff branch needs at least one captured edit batch");
+            } else {
+              const d = agent.snapshots.diff(snaps[0].tree, null);
+              pushNotice(d ? d : "worktree matches the first checkpoint (no net change)");
+            }
+          } else {
+            pushNotice("usage: /diff [turn|session|branch]", "warn");
+          }
+          return;
+        }
         if (slash.cmd === "/exit" || slash.cmd === "/quit") {
           agentRef.current?.abort();
           exit();

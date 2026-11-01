@@ -90,7 +90,7 @@ export class SnapshotManager {
       });
     try {
       // Add all (shadow index is independent from the project's index).
-      if (run(["add", "-A", "."]).status !== 0) return null;
+      if (run(["add", "-A", "--", ".", ":(exclude).scoder"]).status !== 0) return null;
       const tree = run(["write-tree"]);
       if (tree.status !== 0) return null;
       const hash = tree.stdout.trim();
@@ -108,6 +108,24 @@ export class SnapshotManager {
   /** List checkpoints (newest last). */
   list(): SnapshotEntry[] {
     return [...this.checkpoints];
+  }
+
+  /**
+   * T-06: diff between two checkpoint trees (or tree vs current worktree
+   * when `to` is null). Returns unified diff text or null.
+   */
+  diff(fromTree: string, toTree: string | null): string | null {
+    if (!this.enabled || !this.init()) return null;
+    const run = (args: string[]) =>
+      spawnSync("git", args, {
+        cwd: this.workdir,
+        encoding: "utf8",
+        env: { ...process.env, GIT_DIR: this.gitDir, GIT_WORK_TREE: this.workdir },
+      });
+    const args = toTree ? ["diff-tree", "-p", fromTree, toTree] : ["diff", fromTree];
+    const r = run(args);
+    if (r.status !== 0 && r.stdout.length === 0) return null;
+    return r.stdout || null;
   }
 
   /** Revert tracked files to a checkpoint tree. Files added after it are deleted. */
