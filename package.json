@@ -53,6 +53,7 @@
     "typescript-eslint": "^8.72.1"
   },
   "dependencies": {
+    "fuzzysort": "^3.1.0",
     "gpt-tokenizer": "^4.1.0",
     "ink": "^8.0.0",
     "react": "^19.3.1",

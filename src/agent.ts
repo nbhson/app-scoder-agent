@@ -5,6 +5,7 @@ import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { spawnSync } from "node:child_process";
 import { getTool, setTaskRunner, allToolSpecs, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
+import { invalidateFileIndex } from "./tui/at-complete.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
@@ -445,6 +446,8 @@ export class Agent {
         // Track file modifications — a completion claim with no edits needs no
         // build verification, and conversational turns never touch files.
         if (filesModified) this.filesModified = true;
+        // T-01: @-autocomplete index invalidate on tool writes.
+        if (filesModified) invalidateFileIndex();
         this.endToolStream();
         this.currentToolCall = null;
         ui.toolResult(tc.name, result.ok, result.output);

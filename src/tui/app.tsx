@@ -18,6 +18,7 @@ import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
 import { completeSlashCommand, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
+import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { Markdown } from "./markdown.js";
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
 
@@ -950,6 +951,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           historyRef={historyRef}
           skillNames={skillNames}
           agentRef={agentRef}
+          config={config}
         />
       </Box>
       <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
@@ -999,22 +1001,79 @@ interface InputProps {
   skillNames: string[];
   /** Agent ref — /mcp Tab completion reads mcpStatus() lazily (servers + tools). */
   agentRef: React.MutableRefObject<Agent | null>;
+  /** Workdir for the @ file index (T-01). */
+  config: AgentConfig;
 }
 
-function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef }: InputProps): React.JSX.Element {
+function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
+
+  // ── T-01: `@` fuzzy file autocomplete ──────────────────────────────────────
+  // Overlay state kept out of React re-render hot path: suggestions are sync
+  // (fuzzysort over cached index ≤5s TTL) so we can compute inside useInput.
+  const [atState, setAtState] = useState<{ at: { start: number; query: string }; suggestions: string[]; idx: number } | null>(null);
+  const atStateRef = useRef(atState);
+  const workdir = config?.workdir ?? process.cwd();
+  const refreshAt = useCallback(
+    (v: string) => {
+      const at = atQuery(v);
+      if (!at) {
+        if (atStateRef.current) {
+          atStateRef.current = null;
+          setAtState(null);
+        }
+        return;
+      }
+      const suggestions = suggest(fileIndex(workdir), at.query);
+      const prev = atStateRef.current;
+      // Keep selection when the query narrows (still points at same entry).
+      const idx = prev && prev.at.start === at.start && suggestions[prev.idx] === prev.suggestions[prev.idx] ? prev.idx : 0;
+      const next = suggestions.length > 0 ? { at, suggestions, idx } : null;
+      atStateRef.current = next;
+      setAtState(next);
+    },
+    [workdir],
+  );
+  const acceptAt = useCallback(
+    (sel: string | undefined) => {
+      const st = atStateRef.current;
+      if (!st || sel === undefined) return;
+      const v = applySuggestion(valueRef.current, st.at, sel);
+      valueRef.current = v;
+      onChange(v);
+      atStateRef.current = null;
+      setAtState(null);
+    },
+    [onChange, valueRef],
+  );
 
   useInput(
     (input, key) => {
       const current = valueRef.current;
+      // T-01: Esc closes the @ overlay (before submit semantics).
+      if (key.escape) {
+        if (atStateRef.current) {
+          atStateRef.current = null;
+          setAtState(null);
+        }
+        return;
+      }
       if (key.return) {
         histIdx.current = null;
         onSubmit(current);
         return;
       }
-      // ↑/↓ message history recall
+      // ↑/↓ message history recall — but T-01 @ overlay takes precedence.
       if (key.upArrow || key.downArrow) {
+        if (atStateRef.current) {
+          const st = atStateRef.current;
+          const idx = key.upArrow ? Math.max(0, st.idx - 1) : Math.min(st.suggestions.length - 1, st.idx + 1);
+          const next = { ...st, idx };
+          atStateRef.current = next;
+          setAtState(next);
+          return;
+        }
         const hist = historyRef.current;
         if (hist.length === 0) return;
         if (histIdx.current === null) {
@@ -1064,6 +1123,11 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
           }
           return;
         }
+        // T-01: Tab accepts the active @ suggestion (dirs keep trailing slash).
+        if (atStateRef.current) {
+          acceptAt(atStateRef.current.suggestions[atStateRef.current.idx]);
+          return;
+        }
         const comp = completeSlashCommand(current);
         if (comp) {
           valueRef.current = comp.completed;
@@ -1075,6 +1139,7 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
         const next = current.slice(0, -1);
         valueRef.current = next;
         onChange(next);
+        refreshAt(next);
         return;
       }
       if (input.length > 0 && !key.ctrl && !key.meta && !key.escape && !key.upArrow && !key.downArrow && !key.tab) {
@@ -1084,6 +1149,7 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
         const next = current + parts[0];
         valueRef.current = next;
         onChange(next);
+        refreshAt(next);
         if (parts.length > 1) onSubmit(next); // newline in the chunk = submit
       }
     },
@@ -1094,8 +1160,20 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
   // Live candidates hint while a slash command is partially typed.
   const hint = value.startsWith("/") && !value.includes(" ") ? completeSlashCommand(value) : null;
   const candidates = hint && hint.candidates.length > 1 ? hint.candidates.map((c) => c.cmd).join("  ") : null;
+  const at = atState;
   return (
     <Box flexDirection="column">
+      {at && (
+        <Box flexDirection="column" paddingLeft={2}>
+          {at.suggestions.map((s, i) => (
+            <Text key={s} color={i === at.idx ? theme.brand : undefined} bold={i === at.idx}>
+              {i === at.idx ? "▸ " : "  "}
+              {s}
+            </Text>
+          ))}
+          <Text dimColor>  ↑/↓ select · tab/enter accept · esc close</Text>
+        </Box>
+      )}
       <Box>
         <Text color="magenta" bold>
           {"❯ "}
