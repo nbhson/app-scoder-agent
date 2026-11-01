@@ -468,9 +468,9 @@ export class Agent {
       if (tool) {
         result = await tool.run(this.ctx, args);
       } else {
-        // MCP tools — per-tool permission action (pattern from opencode:
-        // action mcp__<server>__<tool>; wildcard rules supported).
-        const mcpDecision = this.permissions.classifyAction(tc.name, "*");
+        // MCP tools — G5: đi qua permission engine như tool thường
+        // (policy floor → rules → mode fallback). Không có nhánh bypass.
+        const mcpDecision = this.permissions.classifyMcpTool(tc.name);
         if (mcpDecision?.decision === "deny") {
           const output = `ERROR: MCP tool "${tc.name}" denied by permission policy (${mcpDecision.reason}).`;
           this.rejectToolCall(steps, tc, output, { args, denied: mcpDecision.reason });
@@ -482,16 +482,14 @@ export class Agent {
             output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. Allow it explicitly with a permission rule (mcp__${tc.name.replace(/^mcp__/, "").replace(/__/, "__")} or a wildcard).`,
           };
         } else if (mcpDecision?.decision === "ask" && !this.config.yes) {
-          const allowed = await this.permissions.confirmMcpTool(tc.name);
+          const allowed = await this.confirmMcpTool(tc.name);
           if (!allowed) {
             const output = `ERROR: user denied permission to call MCP tool: ${tc.name}`;
             this.rejectToolCall(steps, tc, output, { args, denied: "user" });
             return {};
           }
-          result = await this.invokeMcpTool(tc.name, args);
-        } else {
-          result = await this.invokeMcpTool(tc.name, args);
         }
+        result = await this.invokeMcpTool(tc.name, args);
       }
       this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: result.ok, elapsedMs: Date.now() - t0 });
     } catch (err) {

@@ -431,6 +431,17 @@ export class PermissionChecker {
     return null;
   }
 
+  /**
+   * G5: unified MCP tool decision — policy floor → rules → null (caller
+   * falls back to mode). Every mcp__* call goes through here; no bypass.
+   */
+  classifyMcpTool(fullName: string): { decision: CommandDecision; reason: string } | null {
+    const policy = this.policyEffect(fullName, "*");
+    if (policy === "deny") return { decision: "deny", reason: "denied by policy (hard floor)" };
+    if (policy === "allow") return { decision: "allow", reason: "allowed by policy" };
+    return this.classifyAction(fullName, "*");
+  }
+
   /** Shell decision: policy floor → rules → legacy lists/mode. */
   classify(command: string): PermissionResult {
     // Catastrophic deny is the absolute floor.
