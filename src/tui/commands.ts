@@ -15,6 +15,7 @@ export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/help", desc: "show this command list" },
   { cmd: "/sessions", desc: "list saved sessions — /sessions resume <id|last>" },
   { cmd: "/diff", desc: "show diffs: /diff turn | session | branch" },
+  { cmd: "/theme", desc: "switch palette: /theme <mission|paper|mono>" },
   { cmd: "/clear", desc: "clear the conversation and reset agent context" },
   { cmd: "/cost", desc: "token usage of the current session" },
   { cmd: "/model", desc: "show the active model & provider" },

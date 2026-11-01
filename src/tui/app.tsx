@@ -22,7 +22,7 @@ import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } f
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { Markdown } from "./markdown.js";
-import { AgentMark, fit, theme, toolIcon } from "./theme.js";
+import { AgentMark, fit, getTheme, setActiveTheme, theme, THEMES, toolIcon, useNamedTheme } from "./theme.js";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_MS = 80;
@@ -375,6 +375,14 @@ export interface TuiAppProps {
 
 export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element {
   const { exit } = useApp();
+  // T-09: theme resolve at mount (.scoder/theme.json > builtin). Proxy-based
+  // theme reads re-render via a bump.
+  const [, bump] = useState(0);
+  const bumpFrame = useCallback(() => bump((n) => n + 1), []);
+  useEffect(() => {
+    setActiveTheme(getTheme(config.workdir));
+    bumpFrame();
+  }, [config.workdir, bumpFrame]);
   const [state, setState] = useState<TuiState>(initialState);
   const [input, setInput] = useState(initialTask ?? "");
   /** Rows scrolled up from the bottom; 0 = follow the newest content. */
@@ -667,6 +675,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           } else {
             pushNotice("usage: /diff [turn|session|branch]", "warn");
           }
+          return;
+        }
+        if (slash.cmd === "/theme") {
+          // T-09: palette hot-swap.
+          if (!slash.arg) {
+            pushNotice(`themes: ${Object.keys(THEMES).join(", ")} — /theme <name>; project default qua .scoder/theme.json`);
+            return;
+          }
+          pushNotice(useNamedTheme(slash.arg.trim()), "info");
+          bumpFrame();
           return;
         }
         if (slash.cmd === "/exit" || slash.cmd === "/quit") {
