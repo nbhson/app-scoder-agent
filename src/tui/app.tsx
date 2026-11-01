@@ -370,17 +370,19 @@ function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null 
 export interface TuiAppProps {
   config: AgentConfig;
   initialTask: string | null;
-  /** Shown as a notice in the chat pane on boot (e.g. the ask→auto fallback). */
-  bootNotice?: string | null;
 }
 
-export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.JSX.Element {
+export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element {
   const { exit } = useApp();
   const [state, setState] = useState<TuiState>(initialState);
   const [input, setInput] = useState(initialTask ?? "");
   /** Rows scrolled up from the bottom; 0 = follow the newest content. */
   const [scrollOffset, setScrollOffset] = useState(0);
   const [permMode, setPermMode] = useState(config.permissionMode);
+  // T-03: active permission prompt (modal) — the run blocks until answered.
+  const [permPrompt, setPermPrompt] = useState<Extract<AgentEvent, { type: "permission_request" }> | null>(null);
+  const permPromptRef = useRef(permPrompt);
+  permPromptRef.current = permPrompt;
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {
@@ -471,6 +473,12 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   }, [update]);
   const queueEvent = useCallback(
     (ev: AgentEvent) => {
+      // T-03: permission modal must appear instantly (not batched) — the run
+      // blocks on the answer.
+      if (ev.type === "permission_request") {
+        setPermPrompt(ev);
+        return;
+      }
       eventQueue.current.push(ev);
       if (!flushTimer.current) flushTimer.current = setTimeout(flushEvents, FLUSH_MS);
     },
@@ -484,15 +492,6 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
     },
     [flushEvents],
   );
-
-  // Boot notice (e.g. "permission=ask is not supported in the TUI") as a chat
-  // item, so it scrolls with the conversation instead of being lost off-screen.
-  const bootedRef = useRef(false);
-  useEffect(() => {
-    if (bootedRef.current) return;
-    bootedRef.current = true;
-    if (bootNotice) update((s) => ({ ...s, items: [{ kind: "notice", text: bootNotice, level: "warn" }, ...s.items] }));
-  }, [bootNotice, update]);
 
   const pushNotice = useCallback(
     (text: string, level: "info" | "warn" | "error" = "info") =>
@@ -824,7 +823,19 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
   useEffect(() => {
     scrollOffsetRef.current = scrollOffset;
   }, [scrollOffset]);
+  // T-03: permission modal keybinds — intercepts y/a/n/q while open.
+  useInput((input, key) => {
+    const p = permPromptRef.current;
+    if (!p) return;
+    const answer = key.return ? "yes" : input.toLowerCase() === "y" ? "yes" : input.toLowerCase() === "a" ? "always" : input.toLowerCase() === "n" ? "no" : input.toLowerCase() === "q" ? "quit" : key.escape ? "no" : null;
+    if (!answer) return;
+    setPermPrompt(null);
+    agentRef.current?.resolvePermission(p.id, answer);
+  });
+
+  // T-01/T-02: scroll + abort keybinds.
   useInput((_input, key) => {
+    if (permPromptRef.current) return; // modal owns the keyboard
     if (key.pageUp || key.pageDown || key.home || key.end) {
       const page = Math.max(1, Math.floor((viewportRowsRef.current ?? 20) * 0.8));
       if (key.pageUp) setScrollOffset((o) => o + page);
@@ -952,6 +963,28 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           )}
         </Box>
       </Box>
+      {/* T-03: permission modal — blocks the run until answered. */}
+      {permPrompt && (
+        <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
+          <Text color="yellow" bold>
+            ⚠ permission required — {permPrompt.kind}
+          </Text>
+          <Text>{permPrompt.label}</Text>
+          {permPrompt.diff && (
+            <Box flexDirection="column" marginTop={1}>
+              {permPrompt.diff.split("\n").slice(0, 12).map((l, i) => (
+                <Text key={i} color={l.startsWith("+") ? "green" : l.startsWith("-") ? "red" : undefined}>
+                  {l}
+                </Text>
+              ))}
+              {permPrompt.diff.split("\n").length > 12 && <Text dimColor>… (truncated)</Text>}
+            </Box>
+          )}
+          <Text dimColor>
+            [y] yes · [a] always · [n] no · [q] quit — timeout {permPrompt.timeoutSecs}s ⇒ deny
+          </Text>
+        </Box>
+      )}
       <Box paddingX={1} flexShrink={0}>
         <Input
           valueRef={inputRef}
@@ -963,6 +996,7 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
           agentRef={agentRef}
           config={config}
           atSources={atSources}
+          modalRef={permPromptRef}
         />
       </Box>
       <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
@@ -973,13 +1007,8 @@ export function TuiApp({ config, initialTask, bootNotice }: TuiAppProps): React.
 /** Mount the TUI (called from the `scoder tui` subcommand). */
 export async function runTui(config: AgentConfig, initialTask: string | null): Promise<void> {
   setQuiet(true);
-  // `ask` prompts via readline on stdin, which corrupts the alt-screen TUI
-  // (same rule as `scoder serve`): fall back to auto with an in-pane notice.
-  let bootNotice: string | null = null;
-  if (config.permissionMode === "ask") {
-    config = { ...config, permissionMode: "auto" };
-    bootNotice = "permission=ask is not supported in the TUI — falling back to auto";
-  }
+  // T-03: permission=ask works in the TUI — prompts route through the
+  // in-pane modal (permission_request events), not stdin readline.
   const { render } = await import("ink");
   // Alternate screen buffer (vim/htop style): the app owns the whole screen,
   // the BuildRail stays pinned at the top and the input at the bottom while
@@ -987,7 +1016,7 @@ export async function runTui(config: AgentConfig, initialTask: string | null): P
   // Fallback: terminals without alt-screen support (TERM=dumb, non-TTY pipes,
   // some CI runners) render inline instead — the layout still works.
   const altScreen = process.stdout.isTTY === true && process.env.TERM !== "dumb";
-  const { waitUntilExit } = render(<TuiApp config={config} initialTask={initialTask} bootNotice={bootNotice} />, {
+  const { waitUntilExit } = render(<TuiApp config={config} initialTask={initialTask} />, {
     alternateScreen: altScreen,
   });
   await waitUntilExit();
@@ -1016,9 +1045,11 @@ interface InputProps {
   config: AgentConfig;
   /** T-02: completion sources (skills/agents/files). */
   atSources: { skills: string[]; agents: string[]; files: string[] };
+  /** T-03: when set, the permission modal owns the keyboard. */
+  modalRef: React.MutableRefObject<unknown>;
 }
 
-function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources }: InputProps): React.JSX.Element {
+function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
 
@@ -1063,6 +1094,7 @@ function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, ag
 
   useInput(
     (input, key) => {
+      if (modalRef.current) return; // T-03: modal owns the keyboard
       const current = valueRef.current;
       // T-01: Esc closes the @ overlay (before submit semantics).
       if (key.escape) {

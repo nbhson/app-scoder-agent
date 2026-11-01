@@ -10,7 +10,7 @@ import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { PROMPT_VERSION, buildSystemPrompt } from "./prompt.js";
-import { PermissionChecker } from "./permissions.js";
+import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { SnapshotManager } from "./snapshot.js";
@@ -82,6 +82,17 @@ export type AgentEvent =
   | { type: "mcp_status"; line: string }
   /** Guardrail Engine kích hoạt một rule (dùng cho metrics/debug frontend). */
   | { type: "guardrail"; rule: string; action: string; reason: string }
+  /** T-03: permission prompt — frontend renders a modal, answers via resolvePermission(). */
+  | {
+      type: "permission_request";
+      id: string;
+      kind: "shell" | "edit" | "mcp";
+      label: string;
+      command?: string;
+      diff?: string;
+      alwaysAllowPrefix?: string;
+      timeoutSecs: number;
+    }
   | { type: "finish"; success: boolean; steps: number; summary: string }
   | { type: "error"; message: string };
 
@@ -91,6 +102,9 @@ export class Agent {
   private tools: ToolSpec[] = allToolSpecs();
   private ctx: ToolContext;
   private permissions: PermissionChecker;
+  /** T-03: pending permission prompts — id → resolve (TUI/serve answer them). */
+  private pendingPermissions = new Map<string, (a: PermissionAnswer) => void>();
+  private permSeq = 0;
   private session: SessionStore;
   /** v2 durable event log (session/ + events.jsonl) — crash recovery + steering. */
   private events: EventSessionStore;
@@ -158,6 +172,9 @@ export class Agent {
       savedRules: loadSavedApprovals(config.workdir),
       policyRules: loadPolicyRules(config.workdir),
     });
+    // T-03: route permission prompts through the event stream when an event
+    // sink is attached (TUI/serve) — readline on stdin corrupts alt-screen.
+    this.permissions.promptHandler = (req) => this.programmaticPermissionPrompt(req);
     this.ctx = {
       workdir: config.workdir,
       permissions: this.permissions,
@@ -278,6 +295,50 @@ export class Agent {
   private emit(ev: AgentEvent): void {
     this.onEvent?.(ev);
   }
+
+  /**
+   * T-03: permission ask via the event stream. Emits permission_request and
+   * waits for resolvePermission(); when no sink is attached, falls back to
+   * deny (the TUI always attaches one; programmatic callers answer directly).
+   * Timeout ⇒ deny + auto-resolve (no leaked promise).
+   */
+  private programmaticPermissionPrompt(req: PermissionRequest): Promise<PermissionAnswer> {
+    if (!this.onEvent) return Promise.resolve("no");
+    const id = `perm-${++this.permSeq}`;
+    return new Promise<PermissionAnswer>((resolve) => {
+      const timer = setTimeout(() => {
+        if (this.pendingPermissions.delete(id)) resolve("no");
+      }, req.timeoutSecs * 1000);
+      this.pendingPermissions.set(id, (a) => {
+        clearTimeout(timer);
+        resolve(a);
+      });
+      this.emit({
+        type: "permission_request",
+        id,
+        kind: req.kind,
+        label: req.label,
+        ...(req.command !== undefined ? { command: req.command } : {}),
+        ...(req.diff !== undefined ? { diff: req.diff } : {}),
+        ...(req.alwaysAllowPrefix !== undefined ? { alwaysAllowPrefix: req.alwaysAllowPrefix } : {}),
+        timeoutSecs: req.timeoutSecs,
+      });
+    });
+  }
+
+  /**
+   * T-03: answer a pending permission_request (called from the TUI modal /
+   * HTTP API). Unknown id → silently ignored (already timed out).
+   */
+  resolvePermission(id: string, answer: PermissionAnswer): void {
+    const res = this.pendingPermissions.get(id);
+    if (res) {
+      this.pendingPermissions.delete(id);
+      res(answer);
+    }
+  }
+
+  /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
 
   /**
    * Live tool-output handler: renders chunks in the terminal (dimmed block) and

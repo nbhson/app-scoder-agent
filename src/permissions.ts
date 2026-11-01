@@ -342,6 +342,23 @@ export async function promptForPermission(
 // Permission Checker — wired into Agent
 // ---------------------------------------------------------------------------
 
+/** T-03: answer set for programmatic permission prompts (TUI modal). */
+export type PermissionAnswer = "yes" | "always" | "no" | "quit";
+
+/** T-03: request payload handed to a promptHandler (or rendered by readline). */
+export interface PermissionRequest {
+  kind: "shell" | "edit" | "mcp";
+  /** Human label — command line, file path, or MCP tool name. */
+  label: string;
+  /** Full command (shell kind). */
+  command?: string;
+  /** Unified diff preview (edit kind, truncated). */
+  diff?: string;
+  /** Prefix for "always" (shell kind — session allowlist). */
+  alwaysAllowPrefix?: string;
+  timeoutSecs: number;
+}
+
 export interface PermissionConfig {
   mode: PermissionMode;
   allowCommands: string[];
@@ -360,9 +377,32 @@ export class PermissionChecker {
   private sessionAllow = new SessionAllowlist();
   private allowAllEdits = false;
 
+  /**
+   * T-03: programmatic prompt hook (TUI). When set, confirm/confirmEdit/
+   * confirmAsk route through it instead of readline stdin (which corrupts
+   * alt-screen). Returns a Promise resolved by the frontend modal.
+   */
+  promptHandler: ((req: PermissionRequest) => Promise<PermissionAnswer>) | null = null;
+
   constructor(
     private config: PermissionConfig,
   ) {}
+
+  /** Dispatch to promptHandler with timeout ⇒ deny (safe default). */
+  private async ask(req: PermissionRequest): Promise<boolean> {
+    if (!this.promptHandler) return false; // no handler in alt-screen = deny
+    try {
+      const answer = await this.promptHandler(req);
+      if (answer === "quit") this.abortRequested = true;
+      if (answer === "always" && req.kind === "edit") this.allowAllEdits = true;
+      if (answer === "always" && req.kind === "shell" && req.alwaysAllowPrefix) {
+        this.sessionAllow.addPrefix(req.alwaysAllowPrefix);
+      }
+      return answer === "yes" || answer === "always";
+    } catch {
+      return false; // handler error/timeout — deny
+    }
+  }
 
   /** Rules for one evaluation: config rules + saved rules (config wins on deny). */
   private activeRules(): PermissionRule[] {
@@ -516,6 +556,17 @@ export class PermissionChecker {
       return false;
     }
 
+    // T-03: programmatic handler (TUI) — no stdin readline.
+    if (this.promptHandler) {
+      return this.ask({
+        kind: "shell",
+        label: command.length > 80 ? command.slice(0, 80) + "..." : command,
+        command,
+        alwaysAllowPrefix: result.alwaysAllowPrefix,
+        timeoutSecs: 60,
+      });
+    }
+
     return promptForPermission(
       {
         command,
@@ -546,6 +597,16 @@ export class PermissionChecker {
     if (policy === "allow") return true;
     if (this.config.nonInteractive) {
       return false;
+    }
+
+    // T-03: programmatic handler (TUI) — modal shows the diff.
+    if (this.promptHandler) {
+      return this.ask({
+        kind: "edit",
+        label: path,
+        diff: diffText.length > 4000 ? diffText.slice(0, 4000) + "\n… (truncated)" : diffText,
+        timeoutSecs,
+      });
     }
 
     const ac = new AbortController();
@@ -606,6 +667,12 @@ export class PermissionChecker {
    */
   async confirmAsk(label: string, onAlways?: () => void): Promise<boolean> {
     if (this.config.nonInteractive) return false;
+    // T-03: programmatic handler (TUI).
+    if (this.promptHandler) {
+      const ok = await this.ask({ kind: "mcp", label, timeoutSecs: 60 });
+      if (ok && onAlways) onAlways();
+      return ok;
+    }
     return promptForPermission(
       { command: label, alwaysAllowPrefix: undefined },
       // promptForPermission passes a prefix; we only need the "a" signal.

@@ -145,6 +145,11 @@ function applyGuardrail(state: TuiState, ev: { rule: string; action: string; rea
  */
 export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
   switch (ev.type) {
+    case "permission_request": {
+      // T-03: surfaced via a dedicated React state hook in TuiApp (not the
+      // chat items — the modal is modal, not transcript).
+      break;
+    }
     case "run_start": {
       state.model = ev.model;
       state.provider = ev.provider;
