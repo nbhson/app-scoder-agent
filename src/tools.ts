@@ -93,9 +93,32 @@ function toResult(fn: () => ToolResult): ToolResult {
   }
 }
 
+// H-04: protected files — read ⇒ ask (khi không allow rule), write luôn gate.
+// `.env.example` và các biến thể template luôn được phép đọc.
+const PROTECTED_READ_PATTERNS = [/^\.env$/, /\/\.env$/, /^\.env\.[^/]+$/, /\/\.env\.[^/]+$/];
+const PROTECTED_READ_EXEMPT = [/^\.env\.example$/, /\/\.env\.example$/, /^\.env\.sample$/, /\/\.env\.sample$/, /^\.env\.template$/, /\/\.env\.template$/];
+
+export function isProtectedEnvFile(relPath: string): "ask" | "allow" | null {
+  if (PROTECTED_READ_EXEMPT.some((rx) => rx.test(relPath))) return "allow";
+  if (PROTECTED_READ_PATTERNS.some((rx) => rx.test(relPath))) return "ask";
+  return null;
+}
+
 function toolReadFile(workdir: string, args: { path: string }): ToolResult {
   return toResult(() => {
   const abs = safePath(workdir, args.path);
+  // H-04: .env read policy — ask trước khi trả nội dung (secrets hygiene).
+  const rel = relative(workdir, abs);
+  const envPolicy = isProtectedEnvFile(rel);
+  if (envPolicy === "ask") {
+    return {
+      ok: false,
+      output:
+        `ASK_PERMISSION: ${rel} may contain secrets (env file). ` +
+        `Ask the user to confirm before reading; suggest reading .env.example instead ` +
+        `or running with a permission rule ({"action":"shell","resource":"read .env","effect":"allow"}).`,
+    };
+  }
   const st = statSync(abs);
   if (st.isDirectory()) {
     return { ok: false, output: `ERROR: ${args.path} is a directory — use list_files instead.` };
