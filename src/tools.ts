@@ -8,6 +8,7 @@ import type { PermissionChecker, PermissionMode } from "./permissions.js";
 import { discoverSkills, findSkill } from "./skills.js";
 import { redactSecrets } from "./llm.js";
 import { loadRcFile } from "./config.js";
+import { resolveSandbox, type SandboxConfig } from "./sandbox.js";
 import * as ui from "./ui.js";
 import { toolWebFetch } from "./webfetch.js";
 
@@ -476,12 +477,22 @@ export async function toolRunCommand(
   args: { command: string; timeout_secs?: number },
   signal?: AbortSignal,
   onOutput?: (stream: "stdout" | "stderr", delta: string) => void,
+  sandbox?: SandboxConfig,
 ): Promise<ToolResult> {
   const timeoutMs = Math.min(Math.max(args.timeout_secs ?? 120, 1), 600) * 1000;
   // G3: the echoed command line itself may contain a secret (e.g. `curl -H
   // "Authorization: Bearer sk-..."`) — redact the echo, never run redacted
   // (the child gets the raw command).
   const echoLine = `$ ${redactSecrets(args.command)}`;
+
+  // G4: sandbox wrap khi config bật. Wrapper thiếu → warn + chạy trực tiếp.
+  const sandboxed = await resolveSandbox(sandbox ?? {}, workdir, args.command);
+  if (sandboxed.argv) {
+    ui.info(`sandbox: ${sandboxed.wrapper} (${(sandbox ?? {}).mode})`);
+  } else if ((sandbox ?? {}).mode && (sandbox ?? {}).mode !== "off") {
+    ui.warn(`sandbox: ${sandboxed.reason}`);
+  }
+  const spawnArgv = sandboxed.argv ?? ["/bin/sh", "-c", args.command];
 
   return new Promise<ToolResult>((resolve) => {
     let settled = false;
@@ -493,7 +504,7 @@ export async function toolRunCommand(
       resolve(result);
     };
 
-    const child = spawn("/bin/sh", ["-c", args.command], {
+    const child = spawn(spawnArgv[0], spawnArgv.slice(1), {
       cwd: workdir,
       stdio: ["ignore", "pipe", "pipe"],
       env: buildChildEnv(workdir), // G3: allowlist — không kế thừa full process.env
@@ -600,10 +611,15 @@ export interface ToolContext {
   allowSubagents?: boolean;
   /**
    * I-06 subagent runner — injected per-agent instance (no module-global
-   * state: two concurrent Agents each use their own runner; server-mode
+   * * state: two concurrent Agents each use their own runner; server-mode
    * multi-run safe).
    */
   taskRunner?: TaskRunner;
+  /**
+   * G4: sandbox config for run_command. Omit → off (chạy trực tiếp, hành vi
+   * cũ). mode readonly/workspace-write → wrap qua sandbox-exec/bwrap/docker.
+   */
+  sandbox?: SandboxConfig;
 }
 
 /** One row of the agent's session plan (write_todos). */
@@ -774,6 +790,7 @@ export const AGENT_TOOLS: AgentTool[] = [
         args as { command: string; timeout_secs?: number },
         ctx.signal,
         ctx.onToolOutput ? (stream, delta) => ctx.onToolOutput?.("run_command", stream, delta) : undefined,
+        ctx.sandbox,
       ),
   },
   {

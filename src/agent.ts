@@ -193,6 +193,7 @@ export class Agent {
         },
       },
       formatter: config.formatter,
+      sandbox: config.sandbox,
       allowSubagents: config.allowSubagents,
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);

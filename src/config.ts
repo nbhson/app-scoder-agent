@@ -32,6 +32,8 @@ export interface AgentConfig {
   allowSubagents?: boolean;
   /** I-11: post-edit formatter (rc `formatter`). */
   formatter?: boolean | string;
+  /** G4: sandbox profile for run_command (rc `sandbox`). */
+  sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
   /**
    * I-12: LLM client factory override (eval harness). Called once per Agent
    * construction — a factory (not an instance) so subagents get their own
@@ -96,6 +98,8 @@ interface RcFile {
   };
   /** G3: extra env vars passed through to run_command children (names only; values from process.env). */
   shellEnvAllow?: string[];
+  /** G4: sandbox profile for run_command — "off" (default) | "readonly" | "workspace-write"; optional wrapper override. */
+  sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
   /** Auto-compaction (H-10): false = off, object = overrides. */
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
   /** I-11: post-edit formatter — true = auto-detect, string = binary or "npm:<script>". */
@@ -298,6 +302,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     permissionRules: parsePermissionRules(rc.permissions?.rules),
     compaction: rc.compaction ?? undefined,
     formatter: rc.formatter ?? undefined,
+    sandbox: rc.sandbox,
     snapshots: rc.snapshots,
     modelPricing: parsePricing(rc.modelPricing),
   };
