@@ -141,11 +141,12 @@ export class Agent {
     };
     // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
     // I-05: thinking budget = 10% maxTokens khi reasoning on (Anthropic only).
+    // I-12: eval harness — scripted client override thay vì construct.
     const thinkingBudget = config.reasoning === "on" ? Math.max(1024, Math.floor(config.maxTokens * 0.25)) : 0;
-    this.client =
-      config.providerDef?.kind === "anthropic" || (!config.providerDef && config.provider === "anthropic")
+    this.client = config.clientFactory?.() ??
+      (config.providerDef?.kind === "anthropic" || (!config.providerDef && config.provider === "anthropic")
         ? new AnthropicClient({ ...commonOpts, enableCache: config.providerDef?.supportCache ?? true, thinkingBudgetTokens: thinkingBudget })
-        : new LlmClient({ ...commonOpts, stream: config.stream });
+        : new LlmClient({ ...commonOpts, stream: config.stream }));
     const permLists = loadPermissionLists(config.workdir);
     this.permissions = new PermissionChecker({
       mode: config.permissionMode,
@@ -172,16 +173,21 @@ export class Agent {
         },
       },
       formatter: config.formatter,
+      allowSubagents: config.allowSubagents,
     };
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
     this.snapshots = new SnapshotManager(config.workdir, config.snapshots !== false);
     // I-06: task tool → child Agent run (same process, own session, event
-    // relay, abort cascade via parent's runSignal). Depth-1 only: children
-    // are constructed with allowSubagents:false so they never re-register
-    // the global runner (and their task tool reports "not wired").
+    // relay, abort cascade via parent's runSignal). Depth-1 only: the runner
+    // refuses when the calling agent was constructed with allowSubagents:false
+    // (children set this; the runner checks ctx, not a global flag — global
+    // registration alone allowed grandchildren through).
     if (config.allowSubagents !== false) {
-      setTaskRunner(async (_ctx, args) => {
+      setTaskRunner(async (ctx, args) => {
+        if ((ctx as { allowSubagents?: boolean }).allowSubagents === false) {
+          return { ok: false, output: "ERROR: task tool not available — subagents cannot spawn further subagents (depth limit)." };
+        }
         const def = args.agent ? findAgent(config.workdir, args.agent) : findAgent(config.workdir, "explore");
         if (args.agent && !def) {
           return { ok: false, output: `ERROR: agent "${args.agent}" not found — available: ${discoverAgents(config.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name).join(", ")}` };

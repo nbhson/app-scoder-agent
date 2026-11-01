@@ -32,6 +32,13 @@ export interface AgentConfig {
   allowSubagents?: boolean;
   /** I-11: post-edit formatter (rc `formatter`). */
   formatter?: boolean | string;
+  /**
+   * I-12: LLM client factory override (eval harness). Called once per Agent
+   * construction — a factory (not an instance) so subagents get their own
+   * scripted client instead of consuming the parent's transcript.
+   * @internal
+   */
+  clientFactory?: () => import("./llm.js").LlmClient | import("./provider-anthropic.js").AnthropicClient;
   /** Disable session auto-save */
   noSave?: boolean;
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */

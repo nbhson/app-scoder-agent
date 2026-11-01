@@ -534,6 +534,11 @@ export interface ToolContext {
    * node_modules); string = binary path or "npm:<script>". Omit = off.
    */
   formatter?: boolean | string;
+  /**
+   * I-06/I-12: depth guard — false on subagent contexts so the task runner
+   * refuses nested spawns (children inherit this via ctx).
+   */
+  allowSubagents?: boolean;
 }
 
 /** One row of the agent's session plan (write_todos). */
@@ -813,7 +818,6 @@ export function setTaskRunner(runner: TaskRunner | null): void {
     ? (ctx, args) => runner(ctx, args as { description: string; prompt: string; agent?: string })
     : () => ({ ok: false, output: "ERROR: task tool not wired (setTaskRunner missing)." });
 }
-void taskRunner;
 
 export function getTool(name: string): AgentTool | undefined {
   return AGENT_TOOLS.find((t) => t.spec.function.name === name) ?? (name === "task" ? taskTool : undefined);
