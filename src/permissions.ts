@@ -380,7 +380,19 @@ export class PermissionChecker {
   private async ask(req: PermissionRequest): Promise<boolean> {
     if (!this.promptHandler) return false; // no handler in alt-screen = deny
     try {
-      const answer = await this.promptHandler(req);
+      // T3: timeout enforced HERE (checker-level) — a hung frontend handler
+      // (TUI modal never answered, server client disconnected) must not leak
+      // the pending permission promise forever.
+      const answer = await Promise.race([
+        this.promptHandler(req),
+        new Promise<never>((_, rej) =>
+          setTimeout(() => {
+            const e = new Error("permission handler timed out");
+            e.name = "AbortError";
+            rej(e);
+          }, req.timeoutSecs * 1000),
+        ),
+      ]);
       if (answer === "quit") this.abortRequested = true;
       if (answer === "always" && req.kind === "edit") this.allowAllEdits = true;
       if (answer === "always" && req.kind === "shell" && req.alwaysAllowPrefix) {

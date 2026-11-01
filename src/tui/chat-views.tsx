@@ -82,7 +82,7 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
 }
 
 /** One colored line of a unified diff (+ green, - red, @@ cyan, header bold). */
-function DiffLine({ line }: { line: string }): React.JSX.Element {
+export function DiffLine({ line }: { line: string }): React.JSX.Element {
   if (line.startsWith("+++") || line.startsWith("---")) return <Text bold>{line}</Text>;
   if (line.startsWith("@@")) return <Text color="cyan">{line}</Text>;
   if (line.startsWith("+")) return <Text color="green">{line}</Text>;
