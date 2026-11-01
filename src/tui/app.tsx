@@ -17,6 +17,7 @@ import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
+import { listSessions, resolveSessionId } from "../session.js";
 import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg, formatSlashHelp, parseMcpExec, parseSlashCommand } from "./commands.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
@@ -633,6 +634,48 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         if (slash.cmd === "/exit" || slash.cmd === "/quit") {
           agentRef.current?.abort();
           exit();
+          return;
+        }
+        if (slash.cmd === "/sessions") {
+          // T-05: list + resume. Bare → list; "/sessions resume <id|last>" →
+          // restore messages into a fresh agent and continue in this TUI.
+          if (slash.arg.startsWith("resume")) {
+            const ref = slash.arg.replace(/^resume\s*/, "").trim() || "last";
+            const s = resolveSessionId(config.workdir, ref);
+            if (!s) {
+              pushNotice(`session not found: ${ref} — bare /sessions lists saved ones`, "error");
+              return;
+            }
+            if (runningRef.current) {
+              pushNotice("agent is running — wait or Esc first", "warn");
+              return;
+            }
+            agentRef.current?.abort();
+            const agent = createAgent();
+            // Replace the pane with the restored transcript, then continue.
+            update(() => ({
+              ...initialState(),
+              items: s.messages
+                .filter((m) => m.role === "user" || m.role === "assistant")
+                .map((m): ChatItem => (m.role === "user" ? { kind: "user", text: typeof m.content === "string" ? m.content : "" } : { kind: "assistant", text: typeof m.content === "string" ? m.content : "", streaming: false })),
+            }));
+            runningRef.current = true;
+            setScrollOffset(0);
+            try {
+              await agent.resume(s);
+              runningRef.current = false;
+            } catch (err) {
+              runningRef.current = false;
+              pushNotice(`resume failed: ${(err as Error).message}`, "error");
+            }
+            return;
+          }
+          const all = listSessions(config.workdir);
+          pushNotice(
+            all.length === 0
+              ? "no saved sessions — completed runs auto-save to .scoder/sessions/"
+              : all.slice(0, 10).map((x) => `${x.id.slice(0, 8)}  ${x.updatedAt.slice(0, 16).replace("T", " ")}  ${x.steps} steps  ${x.task}`).join("\n") + "\nresume: /sessions resume <id|last>",
+          );
           return;
         }
         if (slash.cmd === "/help") {
