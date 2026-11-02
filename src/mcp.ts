@@ -39,6 +39,12 @@ function expandEnv(env: Record<string, string> | undefined): Record<string, stri
 
 // ── JSON-RPC stdio connection ─────────────────────────────────────────────────
 
+/** M1: connection state — surface qua onState cho AgentEvent mcp_status. */
+export type McpConnState = "connecting" | "ready" | "reconnecting" | "dead";
+
+const RECONNECT_MAX = 5;
+const RECONNECT_BASE_MS = 500; // backoff: 0.5s, 1s, 2s, 4s, 8s
+
 export class McpConnection {
   private proc: ChildProcess | null = null;
   private nextId = 1;
@@ -46,6 +52,12 @@ export class McpConnection {
   private buf = "";
   /** Tail of the server's stderr (last 4KB) — surfaced on connect failures. */
   stderrTail = "";
+  /** M1: current state machine position. */
+  state: McpConnState = "connecting";
+  /** M1: status/state sink (AgentEvent mcp_status). */
+  onState: ((state: McpConnState, detail: string) => void) | null = null;
+  private manuallyClosed = false;
+  private reconnectAttempt = 0;
 
   constructor(
     readonly name: string,
@@ -56,7 +68,17 @@ export class McpConnection {
     return this.proc !== null && this.proc.exitCode === null;
   }
 
+  private setState(s: McpConnState, detail: string): void {
+    this.state = s;
+    this.onState?.(s, detail);
+  }
+
   async connect(timeoutMs = 15_000): Promise<void> {
+    this.manuallyClosed = false;
+    await this.spawnAndHandshake(timeoutMs);
+  }
+
+  private async spawnAndHandshake(timeoutMs: number): Promise<void> {
     const p = spawn(this.cfg.command, this.cfg.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...expandEnv(this.cfg.env) },
@@ -69,7 +91,13 @@ export class McpConnection {
     });
 
     p.on("error", (e) => this.drain(new Error(`spawn: ${e.message}`)));
-    p.on("exit", () => this.drain(new Error("process exited")));
+    // M1: exit → reconnect với exponential backoff (tối đa 5 lần), trừ khi
+    // kill() chủ đích. Pending calls reject rõ ràng ngay lập tức.
+    p.on("exit", (code) => {
+      this.drain(new Error(`MCP server "${this.name}" process exited (code ${code ?? "?"})`));
+      if (this.manuallyClosed) return;
+      void this.scheduleReconnect();
+    });
 
     p.stdout?.on("data", (c: Buffer) => this.onChunk(c));
 
@@ -80,6 +108,40 @@ export class McpConnection {
       clientInfo: { name: CLIENT_NAME, version: getVersion() },
     }, timeoutMs);
     this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    this.setState("ready", "connected");
+  }
+
+  /** M1: exponential backoff reconnect — tools/list refresh do Manager lo. */
+  private async scheduleReconnect(): Promise<void> {
+    if (this.reconnectAttempt >= RECONNECT_MAX) {
+      this.setState("dead", `reconnect failed after ${RECONNECT_MAX} attempts`);
+      return;
+    }
+    this.reconnectAttempt++;
+    const delay = RECONNECT_BASE_MS * 2 ** (this.reconnectAttempt - 1);
+    this.setState("reconnecting", `attempt ${this.reconnectAttempt}/${RECONNECT_MAX} in ${delay}ms`);
+    await new Promise((r) => setTimeout(r, delay));
+    if (this.manuallyClosed) return;
+    try {
+      await this.spawnAndHandshake(15_000);
+      this.reconnectAttempt = 0;
+      this.setState("ready", "reconnected");
+    } catch (e) {
+      this.drain(e as Error);
+      await this.scheduleReconnect();
+    }
+  }
+
+  /** M1: health check — ping không có response trong MCP spec stdio → dùng
+   *  tools/list với timeout ngắn làm liveness probe. */
+  async healthy(timeoutMs = 5_000): Promise<boolean> {
+    if (!this.alive) return false;
+    try {
+      await this.rpc("tools/list", {}, timeoutMs);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async listTools(timeoutMs = 120_000): Promise<McpTool[]> {
@@ -101,6 +163,8 @@ export class McpConnection {
   }
 
   kill(): void {
+    this.manuallyClosed = true;
+    this.setState("dead", "closed by client");
     this.drain(new Error("disconnected"));
     if (this.proc) {
       try { this.proc.kill(); } catch { /* already dead */ }
@@ -177,13 +241,9 @@ export class McpManager {
     await Promise.allSettled(
       Object.entries(this.configs).map(async ([name, cfg]) => {
         const conn = new McpConnection(name, cfg);
+        this.wireReconnect(name, conn);
         await conn.connect();
-        const defs = await conn.listTools();
-        for (const def of defs) {
-          const key = mcpToolKey(name, def.name);
-          if (this.tools.has(key)) throw new Error(`Duplicate MCP tool: ${key}`);
-          this.tools.set(key, { conn, serverName: name, toolName: def.name, def });
-        }
+        await this.registerTools(name, conn);
         this.conns.set(name, conn);
       }),
     ).then((results) => {
@@ -199,6 +259,39 @@ export class McpManager {
       });
     });
     return this.tools.size;
+  }
+
+  /** M1: surface connection state machine + refresh tools sau reconnect. */
+  private wireReconnect(name: string, conn: McpConnection): void {
+    conn.onState = (state, detail) => {
+      const report = this.onStatus ?? ((line: string) => console.error(line));
+      if (state === "reconnecting") report(`⚠  MCP "${name}" ${detail}`);
+      if (state === "dead") report(`✘ MCP "${name}" dead: ${detail}`);
+      if (state === "ready" && detail === "reconnected") {
+        report(`✓ MCP "${name}" reconnected`);
+        // Refresh tool list — server có thể đăng ký bộ tool mới.
+        conn
+          .listTools()
+          .then((defs) => this.reregisterTools(name, conn, defs))
+          .catch(() => {});
+      }
+    };
+  }
+
+  private async registerTools(name: string, conn: McpConnection): Promise<void> {
+    const defs = await conn.listTools();
+    this.reregisterTools(name, conn, defs);
+  }
+
+  /** Replace một server's tool registrations (reconnect refresh). */
+  private reregisterTools(name: string, conn: McpConnection, defs: McpTool[]): void {
+    for (const [key, t] of [...this.tools]) {
+      if (t.serverName === name) this.tools.delete(key);
+    }
+    for (const def of defs) {
+      const key = mcpToolKey(name, def.name);
+      this.tools.set(key, { conn, serverName: name, toolName: def.name, def });
+    }
   }
 
   hasTool(name: string): boolean {
