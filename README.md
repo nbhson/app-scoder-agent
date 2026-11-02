@@ -150,7 +150,7 @@ Machine-wide defaults shared by **all** projects: `mcpServers`, `model`, `baseUr
 | `stream` | `true` | Stream LLM output token-by-token |
 | `provider` | auto-detected | `openai` \| `anthropic` |
 | `permission` | `auto` | `auto` \| `ask` \| `readonly` |
-| `mcpServers` | — | MCP stdio servers (see below) |
+| `mcpServers` | — | MCP servers — stdio (`command`) hoặc HTTP (`url`) (see below) |
 | `permissions` | — | `{ mode, allowCommands, denyCommands }` |
 
 #### Precedence
@@ -224,6 +224,9 @@ scoder can load reusable instruction packs ("skills") into the conversation. A s
 ---
 name: code-review
 description: Review code for bugs, security issues, and style
+allowed-tools: read_file, grep
+license: MIT
+when-to-use: Run after any multi-file change before committing
 ---
 Read the current diff. Check for: null derefs, injection risks, ...
 ```
@@ -231,6 +234,9 @@ Read the current diff. Check for: null derefs, injection risks, ...
 - **Advertised to the model** — every run's system prompt lists skill names + descriptions; the agent reads a matching `SKILL.md` itself via `read_file` when a task fits
 - **Explicit load** — `/skill <name>` stages the skill's content; it is injected as context before your next task
 - **`/skills`** lists everything discovered (both scopes)
+- **Metadata (Anthropic convention)** — `description` is required (a skill without one is skipped with a warning); optional `allowed-tools` (comma-separated tool list, informational — enforcement goes through permission rules), `license`, `when-to-use`
+- **Validation warnings** — duplicate names across scopes warn (project wins); missing `description` skips the skill; warnings surface in the log/notice stream
+- **Hot-reload** — `.scoderrc` and `.scoder/skills/` are watched (debounced); a skill added mid-session is advertised on the next turn, no restart needed
 
 ## Slash commands (REPL + TUI)
 
@@ -294,7 +300,7 @@ TOTAL (1 session(s))  ...  |  success-rate=1/1
 
 The system prompt is versioned (`PROMPT_VERSION` in `src/prompt.ts`) and stamped into every session log (`type: "prompt_version"`) so prompt quality can be compared across versions.
 
-## MCP Servers (stdio)
+## MCP Servers (stdio / HTTP)
 
 scoder can use tools from [MCP](https://modelcontextprotocol.io) servers configured in `.scoderrc.json`:
 
@@ -309,6 +315,10 @@ scoder can use tools from [MCP](https://modelcontextprotocol.io) servers configu
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": { "GITHUB_TOKEN": "{env:GITHUB_TOKEN}" }
+    },
+    "remote": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "authorization": "Bearer {env:MCP_TOKEN}" }
     }
   }
 }
@@ -316,7 +326,9 @@ scoder can use tools from [MCP](https://modelcontextprotocol.io) servers configu
 
 - Tools are exposed to the LLM as `mcp__<server>__<tool>` (no name collisions with built-ins)
 - Servers connect at agent start; a failing server only logs a warning — the agent keeps running with its built-in tools
-- `{env:VAR}` substitution keeps secrets out of config files
+- `{env:VAR}` substitution keeps secrets out of config files (both `env` and `headers`)
+- **Transports**: `command` → stdio (line-delimited JSON-RPC); `url` → Streamable HTTP (POST JSON-RPC, JSON or SSE responses, `Mcp-Session-Id` echo). Force with `"type": "stdio" | "http"`
+- **Resilience**: a dead stdio server reconnects with exponential backoff (max 5 attempts) and refreshes its tool list; HTTP calls are stateless and retry on the next call
 - Built-in tools always take priority over MCP tools with colliding names
 - ⚠️ **MCP tools bypass the built-in permission system** (no command classification, no diff preview). In `readonly` mode they are therefore disabled entirely; in `auto`/`ask` mode they run unsandboxed — only add MCP servers you trust.
 

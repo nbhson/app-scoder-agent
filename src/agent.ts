@@ -1205,15 +1205,17 @@ export class Agent {
 
   /** MCP server overview (for /mcp): config always; tools once connected. */
   async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }> }>> {
-    const configs = (this.config.mcpServers ?? {}) as Record<string, { command: string }>;
+    const configs = (this.config.mcpServers ?? {}) as Record<string, { command?: string; url?: string }>;
+    // M3: http server hiển thị url thay vì command.
+    const target = (cfg: { command?: string; url?: string }) => cfg.url ?? cfg.command ?? "(unknown)";
     if (!this.mcp) {
-      return Object.entries(configs).map(([name, cfg]) => ({ name, command: cfg.command, connected: false, tools: [] }));
+      return Object.entries(configs).map(([name, cfg]) => ({ name, command: target(cfg), connected: false, tools: [] }));
     }
     await this.connectMcp();
     const byServer = new Map(this.mcp.listToolsByServer().map((s) => [s.server, s.tools]));
     return Object.entries(configs).map(([name, cfg]) => ({
       name,
-      command: cfg.command,
+      command: target(cfg),
       connected: byServer.has(name),
       tools: byServer.get(name) ?? [],
     }));

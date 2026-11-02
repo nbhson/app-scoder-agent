@@ -1,19 +1,28 @@
 /**
- * Minimal MCP (Model Context Protocol) client for stdio servers.
+ * Minimal MCP (Model Context Protocol) client.
  *
- * Implements JSON-RPC 2.0 over stdin/stdout with line-delimited messages.
- * Connects to configured stdio servers, exposes their tools as
- * `mcp__<server>__<tool>` prefixed names in the agent's tool registry.
+ * M3: pluggable transport — `StdioTransport` (JSON-RPC 2.0 over stdin/stdout,
+ * line-delimited) và `HttpTransport` (Streamable HTTP: POST JSON-RPC, nhận
+ * JSON hoặc SSE stream, echo `Mcp-Session-Id`). Config `url` → http, ngược
+ * lại → stdio. Exposes discovered tools as `mcp__<server>__<tool>` prefixed
+ * names in the agent's tool registry.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { CLIENT_NAME, getVersion } from "./version.js";
 import { redactSecrets } from "./llm.js";
 
 export interface McpServerConfig {
-  command: string;
+  /** stdio: command to spawn (mặc định khi không có url). */
+  command?: string;
   args?: string[];
   /** Supports {env:VAR} substitution — never hardcode secrets in config */
   env?: Record<string, string>;
+  /** M3: HTTP transport — URL của MCP endpoint (Streamable HTTP). */
+  url?: string;
+  /** M3: headers cho HTTP transport (auth token qua {env:VAR} substitution). */
+  headers?: Record<string, string>;
+  /** M3: override loại transport; mặc định suy ra từ url/command. */
+  type?: "stdio" | "http";
 }
 
 export interface McpTool {
@@ -37,7 +46,193 @@ function expandEnv(env: Record<string, string> | undefined): Record<string, stri
   return out;
 }
 
-// ── JSON-RPC stdio connection ─────────────────────────────────────────────────
+// ── Transport abstraction (M3) ───────────────────────────────────────────────
+
+/** A JSON-RPC message channel to one MCP server. */
+export interface McpTransport {
+  readonly kind: "stdio" | "http";
+  /** Channel usable for send()? */
+  readonly alive: boolean;
+  /** Establish the channel (spawn process / reset session state). */
+  start(): Promise<void>;
+  /** Send one JSON-RPC message. HTTP: resolves khi response đã được parse. */
+  send(msg: object): Promise<void>;
+  /** Inbound JSON-RPC messages (responses + server notifications). */
+  onMessage(cb: (msg: Record<string, unknown>) => void): void;
+  /** Channel died irrecoverably (process exit). HTTP: không dùng (stateless). */
+  onDown(cb: (err: Error) => void): void;
+  close(): void;
+}
+
+/** stdio transport — spawn process, line-delimited JSON-RPC trên stdin/stdout. */
+export class StdioTransport implements McpTransport {
+  readonly kind = "stdio" as const;
+  proc: ChildProcess | null = null;
+  /** Tail of the server's stderr (last 4KB) — surfaced on connect failures. */
+  stderrTail = "";
+  private buf = "";
+  private msgCb: ((msg: Record<string, unknown>) => void) | null = null;
+  private downCb: ((err: Error) => void) | null = null;
+
+  constructor(private cfg: McpServerConfig) {}
+
+  get alive(): boolean {
+    return this.proc !== null && this.proc.exitCode === null;
+  }
+
+  onMessage(cb: (msg: Record<string, unknown>) => void): void {
+    this.msgCb = cb;
+  }
+
+  onDown(cb: (err: Error) => void): void {
+    this.downCb = cb;
+  }
+
+  async start(): Promise<void> {
+    const p = spawn(this.cfg.command!, this.cfg.args ?? [], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...expandEnv(this.cfg.env) },
+    });
+    this.proc = p;
+    p.stderr?.on("data", (c: Buffer) => {
+      // Keep the tail for diagnostics (server logs/help output on crash);
+      // otherwise stderr is intentionally ignored.
+      this.stderrTail = (this.stderrTail + c.toString("utf8")).slice(-4096);
+    });
+    p.on("error", (e) => this.downCb?.(new Error(`spawn: ${e.message}`)));
+    p.on("exit", (code) => this.downCb?.(new Error(`process exited (code ${code ?? "?"})`)));
+    p.stdout?.on("data", (c: Buffer) => this.onChunk(c));
+  }
+
+  send(msg: object): Promise<void> {
+    if (!this.proc?.stdin?.writable) return Promise.resolve();
+    try { this.proc.stdin.write(JSON.stringify(msg) + "\n"); } catch { /* ignore */ }
+    return Promise.resolve();
+  }
+
+  close(): void {
+    if (this.proc) {
+      try { this.proc.kill(); } catch { /* already dead */ }
+      this.proc = null;
+    }
+  }
+
+  private onChunk(chunk: Buffer): void {
+    this.buf += chunk.toString("utf8");
+    let i: number;
+    while ((i = this.buf.indexOf("\n")) !== -1) {
+      const line = this.buf.slice(0, i).trim();
+      this.buf = this.buf.slice(i + 1);
+      if (!line) continue;
+      try { this.msgCb?.(JSON.parse(line) as Record<string, unknown>); } catch { /* skip malformed */ }
+    }
+  }
+}
+
+/**
+ * M3: Streamable HTTP transport — POST một JSON-RPC message, server trả về
+ * `application/json` (single response) hoặc `text/event-stream` (SSE; parse
+ * các `data:` events). Echo `Mcp-Session-Id` từ initialize trên các request
+ * sau. Stateless: lỗi request → reject call hiện tại; call sau tự retry
+ * (không cần background reconnect như stdio).
+ */
+export class HttpTransport implements McpTransport {
+  readonly kind = "http" as const;
+  private sessionId: string | null = null;
+  private msgCb: ((msg: Record<string, unknown>) => void) | null = null;
+  private closed = false;
+
+  constructor(private cfg: McpServerConfig) {}
+
+  get alive(): boolean {
+    return !this.closed;
+  }
+
+  onMessage(cb: (msg: Record<string, unknown>) => void): void {
+    this.msgCb = cb;
+  }
+
+  onDown(_cb: (err: Error) => void): void {
+    // HTTP là stateless — không có channel chết để báo.
+  }
+
+  async start(): Promise<void> {
+    this.closed = false;
+  }
+
+  async send(msg: object): Promise<void> {
+    if (this.closed) throw new Error(`MCP HTTP transport "${this.cfg.url}" closed`);
+    const res = await this.post(msg, this.sessionId);
+    // Session expired (server restart) → thử lại một lần không session.
+    if ((res.status === 404 || res.status === 400) && this.sessionId) {
+      this.sessionId = null;
+      const retry = await this.post(msg, null);
+      return this.consume(retry);
+    }
+    return this.consume(res);
+  }
+
+  close(): void {
+    this.closed = true;
+    this.sessionId = null;
+  }
+
+  private async post(msg: object, sessionId: string | null): Promise<Response> {
+    // M3: headers hỗ trợ {env:VAR} substitution như env — không hardcode secrets.
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...expandEnv(this.cfg.headers),
+    };
+    if (sessionId) headers["mcp-session-id"] = sessionId;
+    try {
+      return await fetch(this.cfg.url!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(msg),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (e) {
+      throw new Error(`MCP HTTP "${this.cfg.url}": ${(e as Error).message}`);
+    }
+  }
+
+  private async consume(res: Response): Promise<void> {
+    const sid = res.headers.get("mcp-session-id");
+    if (sid) this.sessionId = sid;
+    if (!res.ok) {
+      res.body?.cancel().catch(() => {});
+      throw new Error(`MCP HTTP ${res.status} ${res.statusText}`);
+    }
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("text/event-stream")) {
+      const text = await res.text();
+      for (const m of parseSseMessages(text)) this.msgCb?.(m);
+    } else if (ct.includes("application/json")) {
+      const body = (await res.text()).trim();
+      if (body) {
+        try { this.msgCb?.(JSON.parse(body) as Record<string, unknown>); } catch { /* skip malformed */ }
+      }
+    } // 202/no-content (notifications) — nothing to parse
+  }
+}
+
+/** Parse SSE text thành JSON-RPC messages (concat các dòng `data:` liên tiếp). */
+export function parseSseMessages(text: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => l.slice(5).trim())
+      .join("\n");
+    if (!data) continue;
+    try { out.push(JSON.parse(data) as Record<string, unknown>); } catch { /* skip malformed */ }
+  }
+  return out;
+}
+
+// ── JSON-RPC connection ──────────────────────────────────────────────────────
 
 /** M1: connection state — surface qua onState cho AgentEvent mcp_status. */
 export type McpConnState = "connecting" | "ready" | "reconnecting" | "dead";
@@ -46,12 +241,9 @@ const RECONNECT_MAX = 5;
 const RECONNECT_BASE_MS = 500; // backoff: 0.5s, 1s, 2s, 4s, 8s
 
 export class McpConnection {
-  private proc: ChildProcess | null = null;
+  private transport: McpTransport;
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }>();
-  private buf = "";
-  /** Tail of the server's stderr (last 4KB) — surfaced on connect failures. */
-  stderrTail = "";
   /** M1: current state machine position. */
   state: McpConnState = "connecting";
   /** M1: status/state sink (AgentEvent mcp_status). */
@@ -62,10 +254,25 @@ export class McpConnection {
   constructor(
     readonly name: string,
     private cfg: McpServerConfig,
-  ) {}
+  ) {
+    // M3: url → HTTP transport; ngược lại stdio (default).
+    const kind = cfg.type ?? (cfg.url ? "http" : "stdio");
+    if (kind === "http" && !cfg.url) throw new Error(`MCP server "${name}": type "http" nhưng thiếu url`);
+    if (kind === "stdio" && !cfg.command) throw new Error(`MCP server "${name}": thiếu command`);
+    this.transport = kind === "http" ? new HttpTransport(cfg) : new StdioTransport(cfg);
+  }
+
+  /** stdio process (null với HTTP) — dùng trong tests. */
+  get proc(): ChildProcess | null {
+    return this.transport.kind === "stdio" ? (this.transport as StdioTransport).proc : null;
+  }
+
+  get stderrTail(): string {
+    return this.transport.kind === "stdio" ? (this.transport as StdioTransport).stderrTail : "";
+  }
 
   get alive(): boolean {
-    return this.proc !== null && this.proc.exitCode === null;
+    return this.transport.alive;
   }
 
   private setState(s: McpConnState, detail: string): void {
@@ -75,40 +282,44 @@ export class McpConnection {
 
   async connect(timeoutMs = 15_000): Promise<void> {
     this.manuallyClosed = false;
-    await this.spawnAndHandshake(timeoutMs);
+    await this.startAndHandshake(timeoutMs);
   }
 
-  private async spawnAndHandshake(timeoutMs: number): Promise<void> {
-    const p = spawn(this.cfg.command, this.cfg.args ?? [], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...expandEnv(this.cfg.env) },
-    });
-    this.proc = p;
-    p.stderr?.on("data", (c: Buffer) => {
-      // Keep the tail for diagnostics (server logs/help output on crash);
-      // otherwise stderr is intentionally ignored.
-      this.stderrTail = (this.stderrTail + c.toString("utf8")).slice(-4096);
-    });
-
-    p.on("error", (e) => this.drain(new Error(`spawn: ${e.message}`)));
-    // M1: exit → reconnect với exponential backoff (tối đa 5 lần), trừ khi
-    // kill() chủ đích. Pending calls reject rõ ràng ngay lập tức.
-    p.on("exit", (code) => {
-      this.drain(new Error(`MCP server "${this.name}" process exited (code ${code ?? "?"})`));
-      if (this.manuallyClosed) return;
-      void this.scheduleReconnect();
-    });
-
-    p.stdout?.on("data", (c: Buffer) => this.onChunk(c));
-
+  private async startAndHandshake(timeoutMs: number): Promise<void> {
+    await this.transport.start();
+    this.wireTransport();
     // MCP handshake: initialize + notifications/initialized
     await this.rpc("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: CLIENT_NAME, version: getVersion() },
     }, timeoutMs);
-    this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    void this.transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }).catch(() => {
+      // notification — không có pending để reject; lỗi sẽ lộ ở call sau.
+    });
     this.setState("ready", "connected");
+  }
+
+  /** Wire inbound messages + channel-death → reconnect (stdio only). */
+  private wireTransport(): void {
+    this.transport.onMessage((msg) => {
+      if (msg.id === undefined) return; // notification — nothing pending
+      const pending = this.pending.get(msg.id as number);
+      if (!pending) return;
+      this.pending.delete(msg.id as number);
+      const err = msg.error as { code: number; message: string } | undefined;
+      if (err) pending.reject(new Error(`${err.code}: ${err.message}`));
+      else pending.resolve((msg.result ?? {}) as Record<string, unknown>);
+    });
+    if (this.transport.kind === "stdio") {
+      this.transport.onDown((err) => {
+        // M1: exit → drain pending (reject rõ ràng) → reconnect, trừ khi
+        // kill() chủ đích.
+        this.drain(new Error(`MCP server "${this.name}" ${err.message}`));
+        if (this.manuallyClosed) return;
+        void this.scheduleReconnect();
+      });
+    }
   }
 
   /** M1: exponential backoff reconnect — tools/list refresh do Manager lo. */
@@ -123,7 +334,7 @@ export class McpConnection {
     await new Promise((r) => setTimeout(r, delay));
     if (this.manuallyClosed) return;
     try {
-      await this.spawnAndHandshake(15_000);
+      await this.startAndHandshake(15_000);
       this.reconnectAttempt = 0;
       this.setState("ready", "reconnected");
     } catch (e) {
@@ -166,18 +377,10 @@ export class McpConnection {
     this.manuallyClosed = true;
     this.setState("dead", "closed by client");
     this.drain(new Error("disconnected"));
-    if (this.proc) {
-      try { this.proc.kill(); } catch { /* already dead */ }
-      this.proc = null;
-    }
+    this.transport.close();
   }
 
   // ── internals ─────────────────────────────────────────────────────────────
-
-  private send(msg: object): void {
-    if (!this.proc?.stdin?.writable) return;
-    try { this.proc.stdin.write(JSON.stringify(msg) + "\n"); } catch { /* ignore */ }
-  }
 
   private async rpc(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
     if (!this.alive) throw new Error(`MCP server "${this.name}" not connected`);
@@ -191,26 +394,14 @@ export class McpConnection {
         resolve: (v) => { clearTimeout(timer); resolve(v); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
-      this.send({ jsonrpc: "2.0", id, method, params });
+      void Promise.resolve(this.transport.send({ jsonrpc: "2.0", id, method, params })).catch((e) => {
+        const p = this.pending.get(id);
+        if (p) {
+          this.pending.delete(id);
+          p.reject(e as Error);
+        }
+      });
     });
-  }
-
-  private onChunk(chunk: Buffer): void {
-    this.buf += chunk.toString("utf8");
-    let i: number;
-    while ((i = this.buf.indexOf("\n")) !== -1) {
-      const line = this.buf.slice(0, i).trim();
-      this.buf = this.buf.slice(i + 1);
-      if (!line) continue;
-      let msg: { id?: number; result?: Record<string, unknown>; error?: { code: number; message: string } };
-      try { msg = JSON.parse(line) as typeof msg; } catch { continue; }
-      if (msg.id === undefined) continue;
-      const pending = this.pending.get(msg.id);
-      if (!pending) continue;
-      this.pending.delete(msg.id);
-      if (msg.error) pending.reject(new Error(`${msg.error.code}: ${msg.error.message}`));
-      else pending.resolve(msg.result ?? {});
-    }
   }
 
   private drain(err: Error): void {
