@@ -6,3 +6,4 @@ dist/
 .env
 .scoder/
 coverage/
+coverage/
