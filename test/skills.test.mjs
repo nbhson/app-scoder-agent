@@ -70,7 +70,7 @@ describe("skills", () => {
   it("truncates oversized skill bodies", () => {
     const big = join(root, "big");
     mkdirSync(big, { recursive: true });
-    writeFileSync(join(big, "SKILL.md"), "---\nname: big\n---\n" + "x".repeat(30_000));
+    writeFileSync(join(big, "SKILL.md"), "---\nname: big\ndescription: big skill\n---\n" + "x".repeat(30_000));
     const s = loadSkillFile(join(big, "SKILL.md"), "project");
     assert.ok((s?.body.length ?? 0) <= 21_000);
     assert.match(s?.body ?? "", /\[truncated\]$/);

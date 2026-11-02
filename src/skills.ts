@@ -33,10 +33,26 @@ export interface Skill {
   scope: "project" | "global";
   /** Markdown body (everything after the frontmatter). */
   body: string;
+  /** M5: comma-separated tool allowlist (Anthropic convention) — thông tin
+   *  hiển thị; enforcement qua permission rules. */
+  allowedTools?: string[];
+  /** M5: license identifier (e.g. MIT). */
+  license?: string;
+  /** M5: when-to-use hint dài hơn description (Anthropic convention). */
+  whenToUse?: string;
+}
+
+/** M5: cảnh báo validate skill (conflict, thiếu description) — không crash. */
+export interface SkillWarning {
+  path: string;
+  message: string;
 }
 
 const SKILL_FILE = "SKILL.md";
 const MAX_SKILL_BODY_CHARS = 20_000;
+
+/** M5: cảnh báo validate — consumer (Agent/TUI) hiển thị rồi clear. */
+export const skillWarnings: SkillWarning[] = [];
 
 /** Parse a minimal YAML-lite frontmatter (key: value lines). */
 export function parseFrontmatter(text: string): { meta: Record<string, string>; body: string } {
@@ -61,12 +77,23 @@ export function loadSkillFile(path: string, scope: Skill["scope"]): Skill | null
   const { meta, body } = parseFrontmatter(text);
   const name = (meta.name || "").trim() || null;
   if (!name) return null; // a skill without a usable name is not discoverable
+  // M5: thiếu description → skip + warn (Anthropic convention: description
+  // là bắt buộc — model dùng nó để quyết định khi nào load skill).
+  const description = (meta.description || "").trim();
+  if (!description) {
+    skillWarnings.push({ path, message: `skill "${name}" thiếu description — bỏ qua (thêm description vào frontmatter)` });
+    return null;
+  }
+  const allowedToolsRaw = (meta["allowed-tools"] || "").trim();
   return {
     name,
-    description: (meta.description || "").trim(),
+    description,
     path,
     scope,
     body: body.length > MAX_SKILL_BODY_CHARS ? body.slice(0, MAX_SKILL_BODY_CHARS) + "\n… [truncated]" : body,
+    ...(allowedToolsRaw ? { allowedTools: allowedToolsRaw.split(",").map((t) => t.trim()).filter(Boolean) } : {}),
+    ...(meta.license ? { license: meta.license } : {}),
+    ...(meta["when-to-use"] ? { whenToUse: meta["when-to-use"] } : {}),
   };
 }
 
@@ -94,7 +121,13 @@ export function discoverSkills(workdir: string): Skill[] {
   const global = scanRoot(globalSkillsRoot(), "global");
   const project = scanRoot(join(workdir, ".scoder", "skills"), "project");
   const byName = new Map<string, Skill>();
-  for (const s of [...global, ...project]) byName.set(s.name, s); // project wins
+  for (const s of [...global, ...project]) {
+    // M5: trùng name → warn (project wins per merge order).
+    if (byName.has(s.name)) {
+      skillWarnings.push({ path: s.path, message: `skill "${s.name}" trùng tên (${s.scope} overrides ${byName.get(s.name)?.scope})` });
+    }
+    byName.set(s.name, s); // project wins
+  }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
