@@ -55,21 +55,73 @@ const MONO: Theme = {
   border: "gray",
 };
 
-export const THEMES: Record<string, Theme> = { mission: MISSION, paper: PAPER, mono: MONO };
+// T8: theme pack mở rộng — light/high-contrast/solarized (16-color names,
+// degrade đúng trên terminal không đủ màu).
+const LIGHT: Theme = {
+  brand: "magentaBright",
+  accent: "cyanBright",
+  success: "greenBright",
+  error: "redBright",
+  warn: "yellowBright",
+  user: "blueBright",
+  dim: "blackBright",
+  border: "blackBright",
+};
 
-/** Resolve theme: .scoder/theme.json (name or inline colors) > builtin default. */
+const HIGH_CONTRAST: Theme = {
+  brand: "whiteBright",
+  accent: "cyanBright",
+  success: "greenBright",
+  error: "redBright",
+  warn: "yellowBright",
+  user: "whiteBright",
+  dim: "white",
+  border: "white",
+};
+
+const SOLARIZED: Theme = {
+  brand: "magentaBright", // magenta
+  accent: "cyanBright", // cyan
+  success: "greenBright", // green
+  error: "redBright", // red/orange
+  warn: "yellowBright", // yellow
+  user: "blueBright", // blue
+  dim: "gray", // base01
+  border: "gray",
+};
+
+export const THEMES: Record<string, Theme> = {
+  mission: MISSION,
+  paper: PAPER,
+  mono: MONO,
+  light: LIGHT,
+  "high-contrast": HIGH_CONTRAST,
+  solarized: SOLARIZED,
+};
+
+/**
+ * T8: theme mặc định theo terminal caps — terminal không hỗ trợ 256color
+ * (TERM=dumb, COLOR_COUNT thấp) dùng mono để degrade an toàn.
+ */
+export function defaultThemeName(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.TERM === "dumb" || !env.TERM) return "mono";
+  if (env.COLOR_COUNT && Number(env.COLOR_COUNT) < 16) return "mono";
+  return "mission";
+}
+
+/** Resolve theme: .scoder/theme.json (name or inline colors) > terminal-caps default. */
 export function getTheme(workdir: string): Theme {
   const p = join(workdir, ".scoder", "theme.json");
   if (existsSync(p)) {
     try {
       const raw = JSON.parse(readFileSync(p, "utf8")) as { name?: string } & Partial<Theme>;
-      const base = raw.name ? THEMES[raw.name] ?? MISSION : MISSION;
+      const base = raw.name ? THEMES[raw.name] ?? THEMES[defaultThemeName()] : THEMES[defaultThemeName()];
       return { ...base, ...Object.fromEntries(Object.entries(raw).filter(([k]) => k in base)) } as Theme;
     } catch {
       // malformed theme.json → default (never crash the TUI over a color)
     }
   }
-  return MISSION;
+  return THEMES[defaultThemeName()];
 }
 
 /** Current active theme — set at TUI mount (module-level for easy imports). */
@@ -81,6 +133,10 @@ export function setActiveTheme(t: Theme): void {
 
 /** Hot-swap theme name at runtime (/theme). Returns a notice. */
 export function useNamedTheme(name: string): string {
+  // T8: "/theme list" — liệt kê kèm mô tả ngắn.
+  if (name === "list") {
+    return `themes: ${Object.keys(THEMES).join(", ")} — /theme <name> để chuyển; project default qua .scoder/theme.json`;
+  }
   const t = THEMES[name];
   if (!t) return `ERROR: unknown theme "${name}" — available: ${Object.keys(THEMES).join(", ")}`;
   active = t;
