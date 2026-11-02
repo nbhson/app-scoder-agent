@@ -20,6 +20,7 @@ import { createRuntime, parseCustomProviders, resolveProvider, splitProviderMode
 import { loadRcFile } from "./config.js";
 import { McpManager } from "./mcp.js";
 import { validateSchema } from "./json-schema.js";
+import { watchWorkdir, type ReloadWatcher } from "./watch.js";
 import { discoverSkills, findSkill, type Skill } from "./skills.js";
 import { discoverAgents, findAgent } from "./agents.js";
 
@@ -127,6 +128,8 @@ export class Agent {
   private filesModified = false;
   /** Discovered skills (project + global). */
   private skills: Skill[] = [];
+  /** M4: hot-reload watcher (rc + skills dir). */
+  private watcher: ReloadWatcher | null = null;
   /** Content staged via /skill — injected before the next run/turn. */
   private pendingContext: string[] = [];
   /** Session plan (write_todos tool). */
@@ -244,6 +247,23 @@ export class Agent {
     }
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.skills = discoverSkills(config.workdir);
+    // M4: hot-reload — .scoderrc (MCP servers) + .scoder/skills/ đổi giữa
+    // session → reload ở turn sau (debounced, không watcher trong test).
+    if (config.noSave !== true && process.env.SCODER_NO_WATCH !== "1") {
+      this.watcher = watchWorkdir(config.workdir, (kind) => {
+        if (kind === "skills") {
+          this.skills = discoverSkills(config.workdir);
+          this.logger.log({ type: "hot_reload", kind, skills: this.skills.length });
+        } else if (kind === "config") {
+          // MCP servers mới: merge vào manager hiện tại (turn sau advertise).
+          const rc = loadRcFile(config.workdir);
+          const servers = rc.mcpServers ?? {};
+          if (this.mcp && Object.keys(servers).length > 0) {
+            void this.mcp.applyConfig(servers);
+          }
+        }
+      });
+    }
   }
 
   /**
@@ -694,6 +714,13 @@ export class Agent {
   private shutdownMcp(): void {
     this.mcp?.killAll();
     this.mcp = null;
+  }
+
+  /** M4: đóng hot-reload watcher (khi agent bị hủy vĩnh viễn). */
+  dispose(): void {
+    this.watcher?.close();
+    this.watcher = null;
+    this.shutdownMcp();
   }
 
   /**

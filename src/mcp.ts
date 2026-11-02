@@ -328,5 +328,40 @@ export class McpManager {
   killAll(): void {
     for (const c of this.conns.values()) c.kill();
     this.conns.clear();
+    this.tools.clear();
+  }
+
+  /** M4: config hot-reload — connect server mới, kill server đã bị xóa khỏi config. */
+  async applyConfig(configs: Record<string, McpServerConfig>): Promise<void> {
+    this.configs = configs;
+    // Server bị xóa → kill + unregister.
+    for (const [name, conn] of [...this.conns]) {
+      if (!configs[name]) {
+        conn.kill();
+        this.conns.delete(name);
+        for (const [key, t] of [...this.tools]) {
+          if (t.serverName === name) this.tools.delete(key);
+        }
+        const report = this.onStatus ?? ((line: string) => console.error(line));
+        report(`✘ MCP "${name}" removed (config changed)`);
+      }
+    }
+    // Server mới → connect.
+    for (const [name, cfg] of Object.entries(configs)) {
+      if (this.conns.has(name)) continue;
+      const conn = new McpConnection(name, cfg);
+      this.wireReconnect(name, conn);
+      try {
+        await conn.connect();
+        await this.registerTools(name, conn);
+        this.conns.set(name, conn);
+        const report = this.onStatus ?? ((line: string) => console.error(line));
+        const n = [...this.tools.values()].filter((t) => t.serverName === name).length;
+        report(`✓ MCP "${name}" connected — ${n} tool${n === 1 ? "" : "s"} (hot-reload)`);
+      } catch (e) {
+        const report = this.onStatus ?? ((line: string) => console.error(line));
+        report(`⚠  MCP server "${name}" unavailable: ${String((e as Error).message).slice(0, 160)}`);
+      }
+    }
   }
 }
