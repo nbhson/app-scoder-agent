@@ -19,6 +19,7 @@ import { JsonlLogger } from "./logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 import { loadRcFile } from "./config.js";
 import { McpManager } from "./mcp.js";
+import { validateSchema } from "./json-schema.js";
 import { discoverSkills, findSkill, type Skill } from "./skills.js";
 import { discoverAgents, findAgent } from "./agents.js";
 
@@ -529,6 +530,11 @@ export class Agent {
   private async invokeMcpTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     const reg = this.mcp?.getTool(name);
     if (!reg) return { ok: false, output: `ERROR: unknown tool "${name}"` };
+    // M2: validate args theo inputSchema — lỗi local, không gọi server.
+    const schemaErrors = validateSchema(args, reg.def.inputSchema);
+    if (schemaErrors.length > 0) {
+      return { ok: false, output: `ERROR: invalid arguments for ${name}:\n${schemaErrors.join("\n")}` };
+    }
     const r = await reg.conn.callTool(reg.toolName, args);
     return { ok: r.ok, output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output };
   }
