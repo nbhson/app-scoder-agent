@@ -195,10 +195,16 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
       // immediately visible at a glance, distinct from the agent's ◆ markdown.
       return (
         <Box marginTop={1} marginLeft={1}>
-          <Text>
-            <Text color={theme.user} bold>you ▸ </Text>
+          <Box
+            borderStyle="single"
+            borderColor={theme.user}
+            paddingX={1}
+            paddingTop={0}
+            flexDirection="column"
+          >
+            <Text color={theme.user} bold>you ▸</Text>
             <Text bold>{item.text}</Text>
-          </Text>
+          </Box>
         </Box>
       );
     case "assistant": {
