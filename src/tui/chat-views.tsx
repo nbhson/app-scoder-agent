@@ -202,6 +202,7 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
             borderRight={false}
             borderTop={false}
             borderBottom={false}
+            backgroundColor="gray"
             paddingX={1}
             paddingTop={0}
             flexDirection="column"
@@ -217,7 +218,7 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
       // Streaming: dim with pulsing cursor; finalized: markdown with agent mark.
       if (item.streaming || !item.text) {
         return (
-          <Box marginTop={item.text ? 1 : 0} paddingLeft={1}>
+          <Box marginTop={item.text ? 1 : 0} paddingLeft={2}>
             <AgentMark />
             <Text dimColor={item.streaming}>{item.text || (item.streaming ? "" : "(no text)")}</Text>
             {item.streaming && <Text color={theme.accent} bold>▋</Text>}
