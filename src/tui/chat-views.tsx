@@ -198,12 +198,21 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
           <Box
             borderStyle="single"
             borderColor={theme.user}
+            borderLeft={true}
+            borderRight={false}
+            borderTop={false}
+            borderBottom={false}
+            backgroundColor="gray"
+            width="100%"
             paddingX={1}
-            paddingTop={0}
+            paddingTop={1}
+            paddingBottom={1}
             flexDirection="column"
           >
-            <Text color={theme.user} bold>you ▸</Text>
-            <Text bold>{item.text}</Text>
+            <Text>
+              <Text color="white" bold>you ▸ </Text>
+              <Text color="white" bold>{item.text}</Text>
+            </Text>
           </Box>
         </Box>
       );
