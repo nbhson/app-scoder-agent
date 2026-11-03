@@ -62,9 +62,7 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
 
   return (
     <Box
-      borderStyle="bold"
-      borderColor={theme.border}
-      paddingX={1}
+      paddingX={0}
       justifyContent="space-between"
       alignItems="center"
       flexShrink={0}
@@ -167,9 +165,7 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
 
   return (
     <Box
-      borderStyle="bold"
-      borderColor={theme.border}
-      paddingX={1}
+      paddingX={0}
       justifyContent="space-between"
       alignItems="center"
       flexShrink={0}
