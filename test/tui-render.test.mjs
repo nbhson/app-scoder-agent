@@ -192,7 +192,7 @@ describe("tui sidebar — render sections", () => {
 // ── ChatItemView: todo không còn render trong chat (chuyển sidebar) ──────────
 
 describe("tui chat-views — todo chuyển sidebar", () => {
-  it("user message: full border + bold text + you ▸ label — nổi bật hơn agent", async () => {
+  it("user message: you ▸ label + text (simple, no border)", async () => {
     const out = await renderOnce(
       React.createElement(ChatItemView, { item: { kind: "user", text: "fix the bug" } }),
       100,
@@ -200,7 +200,7 @@ describe("tui chat-views — todo chuyển sidebar", () => {
     assert.match(out, /you ▸/);
     assert.match(out, /fix the bug/);
     // Full border visible — "│" appears as left/right border chars after stripAnsi
-    assert.ok(out.includes("│"), "user message có border đầy đủ (│ left/right border)");
+    assert.ok(out.includes("you ▸"), "user message render label you ▸");
   });
 
   it("todo item render rỗng (null) trong chat", async () => {
