@@ -203,13 +203,14 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
             borderTop={false}
             borderBottom={false}
             backgroundColor="gray"
+            width="100%"
             paddingX={1}
             paddingTop={0}
             flexDirection="column"
           >
             <Text>
-              <Text color={theme.user} bold>you ▸ </Text>
-              <Text bold>{item.text}</Text>
+              <Text color="white" bold>you ▸ </Text>
+              <Text color="white" bold>{item.text}</Text>
             </Text>
           </Box>
         </Box>
@@ -226,7 +227,7 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
         );
       }
       return (
-        <Box marginTop={1} paddingLeft={1}>
+        <Box marginTop={1} paddingLeft={2}>
           <AgentMark />
           <Markdown text={item.text} />
         </Box>
