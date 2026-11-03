@@ -83,7 +83,7 @@ scoder tui "fix the bug"       # auto-submit initial task
 - **PHASES** — plan › explore › edit › build › verify (current phase highlighted)
 - **BUILD** — build lamp + build command
 - **MCP** — per-server state (ready / connecting / reconnecting / dead)
-- **PLAN** — bottom of the sidebar; live checklist from `write_todos` (✔/◆/○);
+- **PLAN** — top of the sidebar (right after SESSION); live checklist from `write_todos` (✔/◆/○);
   resets in real time on each new user message so the previous task's plan doesn't linger
 - On narrow terminals (< 92 cols) the sidebar is hidden and the BuildRail falls back
   to showing the phase breadcrumb + metrics inline

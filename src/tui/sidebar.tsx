@@ -120,7 +120,7 @@ function MetricsSection({ state }: { state: TuiState }): React.JSX.Element {
       : null;
   // Live estimate based on accumulated streaming chars (chars / ~4 ≈ tokens).
   const liveTokPerSec =
-    state.streamingOutputChars > 0 && elapsedMs != null && elapsedMs > 500
+    state.streamingOutputChars > 0 && elapsedMs != null && elapsedMs > 250
       ? Math.round((state.streamingOutputChars / 4) / (elapsedMs / 1000))
       : null;
   const win = contextWindowFor(state.provider, state.model);
@@ -145,6 +145,9 @@ function MetricsSection({ state }: { state: TuiState }): React.JSX.Element {
           )}
           {hasUsage && (
             <SectionLine label="toks" value={`${fmt(state.usage.inputTokens)} → ${fmt(state.usage.outputTokens)}`} />
+          )}
+          {!hasUsage && state.streamingOutputChars > 0 && (
+            <SectionLine label="toks" value={`~${fmt(Math.round(state.streamingOutputChars / 4))} (streaming)`} color={theme.accent} />
           )}
           {/* Show one speed line: live ~N during streaming, then N once usage events fire. */}
           {tokPerSec != null && (
@@ -267,11 +270,11 @@ export function Sidebar({ state, config }: { state: TuiState; config: AgentConfi
       overflow="hidden"
     >
       <SessionSection state={state} config={config} />
+      <McpSection state={state} config={config} />
       <MetricsSection state={state} />
+      <PlanSection state={state} />
       <PhaseSection state={state} />
       <BuildSection state={state} config={config} />
-      <McpSection state={state} config={config} />
-      <PlanSection state={state} />
     </Box>
   );
 }
