@@ -265,6 +265,11 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
             <Text backgroundColor="gray" color="black">{value[cursor] ?? " "}</Text>
             <Text>{value.slice(cursor + 1)}</Text>
           </>
+        ) : value.length === 0 ? (
+          <>
+            <Text dimColor>type a message…</Text>
+            <Text dimColor>▌</Text>
+          </>
         ) : (
           <>
             <Text>{value}</Text>
