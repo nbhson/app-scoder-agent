@@ -202,8 +202,10 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
             paddingTop={0}
             flexDirection="column"
           >
-            <Text color={theme.user} bold>you ▸</Text>
-            <Text bold>{item.text}</Text>
+            <Text>
+              <Text color={theme.user} bold>you ▸ </Text>
+              <Text bold>{item.text}</Text>
+            </Text>
           </Box>
         </Box>
       );
