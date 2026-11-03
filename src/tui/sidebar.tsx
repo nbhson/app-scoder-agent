@@ -40,14 +40,11 @@ function SectionLine({ label, value, color }: { label: string; value: string; co
 // ── Session ──────────────────────────────────────────────────────────────────
 
 function SessionSection({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
-  const perm = state.permission || config.permissionMode;
-  const permColor = perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim;
   const model = state.model || config.model || "—";
   const dir = config.workdir.split("/").filter(Boolean).pop() ?? config.workdir;
   return (
     <Section title="SESSION">
       <SectionLine label="model" value={fit(model, INNER - 9)} />
-      <SectionLine label="perm" value={perm} color={permColor} />
       <SectionLine label="dir" value={fit(dir, INNER - 9)} />
     </Section>
   );
@@ -270,11 +267,11 @@ export function Sidebar({ state, config }: { state: TuiState; config: AgentConfi
       overflow="hidden"
     >
       <SessionSection state={state} config={config} />
-      <PlanSection state={state} />
       <MetricsSection state={state} />
       <PhaseSection state={state} />
       <BuildSection state={state} config={config} />
       <McpSection state={state} config={config} />
+      <PlanSection state={state} />
     </Box>
   );
 }

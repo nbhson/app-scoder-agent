@@ -272,7 +272,7 @@ The autonomous loop is wrapped by a configurable rule engine (`src/guardrails.ts
 | `chat-done` | Ends conversational turns (marker-based) without a build |
 | `completion-claim` | Never trusts "the task is complete" — forces an independent build verification |
 | `text-only-streak` | Ends the run after 2 consecutive tool-less steps with no file changes (the "chào" failure mode) |
-| `continue-nudge` | Nudges plain-text answers back to work |
+| `continue-nudge` | Nudges plain-text answers back to work (no build demand when no files changed — suggests the `<<CHAT_DONE>>` exit instead) |
 | `doom-loop` | Intervenes after 3× identical consecutive tool-call batches |
 | `build-stop` | Ends the run when the exact build command succeeds; re-verifies on failure |
 | `history-trim` | Char-budget history trimming with whole-turn drops + old-tool-result pruning |
@@ -371,9 +371,10 @@ scoder tui "fix the bug"       # auto-submit an initial task
 Features:
 
 - **Alternate screen buffer** (vim/htop style) — the app owns the full screen: the header stays pinned at the top, input + status bar at the bottom, the chat pane scrolls internally, and your terminal content is restored on exit. Terminals without alt-screen support (`TERM=dumb`, non-TTY) automatically render inline instead.
-- **Build Rail** (pinned top bar) — brand, build lamp (`● build ok` / `● build fail` / `no build yet`), permission mode, and a step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`) that fills as the agent burns through its step budget- **Phase breadcrumb + live metrics** (second header row, while running) — `plan › explore › edit › build › verify` (current phase highlighted) on the left; tokens in→out, **tok/s**, elapsed time, and guardrail count on the right
-- **Chat pane** — your messages, streaming assistant text with a live block cursor (`▋`), and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running, wall-clock duration per tool), prefixed with a flight-recorder step number (`03▸`)
-- **Header row 2** — phase breadcrumb (`plan › explore › edit › build › verify`), live metrics (tokens in→out, **tok/s**, elapsed, guardrail count), and a human-readable one-line notice of the latest guardrail intervention (e.g. `⚠ agent reminder: agent trả lời text mà không dùng tool — nhắc tiếp tục làm việc`)
+- **Build Rail** (pinned top bar, single row) — brand, build lamp (`✓ ok` / `✗ fail` / `no build yet`), permission mode, and a center region that shows either the phase breadcrumb (`plan › explore › edit › build › verify`) or the latest guardrail notice spanning the full available width (e.g. `⚠ trả lời text chưa dùng tool — nhắc tiếp tục`)
+- **Sidebar (≥92 cols)** — SESSION (model + workdir, no permission line), METRICS (step fuel gauge, tokens, tok/s, ctx input/limit, cost, elapsed, guardrail count), PHASES, BUILD, MCP, PLAN (live checklist at the bottom; resets on each new user message)
+- **Chat pane** — your messages with a full colored border + `you ▸` label, streaming assistant text with a live block cursor (`▋`), and every tool call with live stdout/stderr preview (`✔/✘` status, spinner while running, wall-clock duration per tool), prefixed with a flight-recorder step number (`03▸`)
+- **Header row 2** — (no longer present; phase breadcrumb + metrics moved into the sidebar / status bar to avoid duplication)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
 - **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
 - **Slash commands** — `/help`, `/clear`, `/cost`, `/model`, `/skills`, `/skill`, `/mcp`, `/review`, `/permission`, `/exit` (identical to the REPL)

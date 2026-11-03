@@ -57,11 +57,11 @@ function runningState() {
 // ── fuelGauge / gaugeColor (pure) ────────────────────────────────────────────
 
 describe("tui chrome — fuelGauge/gaugeColor", () => {
-  it("gauge: maxSteps=0 → null; scale 10 cells", () => {
+  it("gauge: maxSteps=0 → null; scale 12 cells", () => {
     assert.equal(fuelGauge(0, 0), null);
-    assert.equal(fuelGauge(4, 40).length, 10);
-    assert.match(fuelGauge(4, 40), /^▰{1}▱{9}$/);
-    assert.equal(fuelGauge(40, 40), "▰".repeat(10));
+    assert.equal(fuelGauge(4, 40).length, 12);
+    assert.match(fuelGauge(4, 40), /^▰{1}▱{11}$/);
+    assert.equal(fuelGauge(40, 40), "▰".repeat(12));
   });
 
   it("gaugeColor: headroom green → warn → red", () => {
@@ -75,43 +75,42 @@ describe("tui chrome — fuelGauge/gaugeColor", () => {
 // ── BuildRail: wide (sidebar) vs narrow (fallback) ───────────────────────────
 
 describe("tui chrome — BuildRail wide/narrow", () => {
-  it("wide: 1 hàng scoder | ⛨ perm · ● build lamp bên phải; KHÔNG model/gauge/breadcrumb", async () => {
+  it("wide: 1 hàng scoder | breadcrumb · [perm] · build lamp; KHÔNG model/gauge/step", async () => {
     const s = runningState();
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
     assert.match(out, /scoder/);
-    assert.match(out, /⛨ auto/);
-    assert.match(out, /● no build yet/);
+    assert.match(out, /\[auto\]/);
+    assert.match(out, /○ —/);
     assert.ok(!out.includes("m1"), "wide mode không hiện model (trùng bottom StatusBar)");
-    assert.ok(!out.includes("▰") && !out.includes("— idle"), "wide mode không hiện fuel gauge (trùng sidebar METRICS)");
-    assert.ok(!out.includes("› "), "wide mode không render breadcrumb (chuyển sang sidebar)");
-    assert.ok(!out.includes("starting…"), "wide mode không render metrics row");
+    assert.ok(!out.includes("▰"), "wide mode không hiện fuel gauge (trùng sidebar METRICS)");
+    assert.ok(!/\d+\/40/.test(out), "step count không còn trên header (sidebar + StatusBar đã hiển thị)");
   });
 
-  it("narrow: giữ hàng phụ breadcrumb + metrics (fallback khi sidebar ẩn)", async () => {
+  it("narrow: breadcrumb fallback khi sidebar ẩn; vẫn không có step count", async () => {
     const s = runningState();
     applyEvent(s, { type: "step", step: 1, maxSteps: 40 });
     applyEvent(s, { type: "tool_call", step: 1, id: "t1", name: "read_file", args: { path: "a.ts" } });
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 70);
-    assert.match(out, /plan › explore › edit › build › verify/);
-    assert.match(out, /0:00/); // startedAt đã set (run_start) → metrics row = elapsed
-    // fuel gauge đã bỏ khỏi header (trùng sidebar / StatusBar hiện step count)
+    assert.ok(out.includes("plan ·"), "narrow hiện phase trail");
     assert.ok(!out.includes("▰"), "header không còn fuel gauge");
+    assert.ok(!/\d+\/40/.test(out), "step count không còn trên header");
   });
 
-  it("running + usage: metrics row có tok/s + elapsed", async () => {
+  it("header không còn metrics row (tok/s, ctx, elapsed đã chuyển sidebar)", async () => {
     const s = runningState();
     applyEvent(s, { type: "step", step: 2, maxSteps: 40 });
     applyEvent(s, { type: "llm_usage", usage: { input_tokens: 1200, output_tokens: 340, cached_tokens: 0 } });
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 70);
-    assert.match(out, /tok 1\.2k→340/);
-    assert.match(out, /ctx 1%/); // 1200 tokens so với context window
+    assert.ok(!out.includes("tok "), "tok/s không còn ở header");
+    assert.ok(!out.includes("ctx "), "ctx không còn ở header");
   });
 
-  it("guardrail notice render ở header (row 2, căn giữa) — KHÔNG còn ở sidebar", async () => {
+  it("guardrail notice render ở header (căn giữa) — không bị cắt khi còn chỗ", async () => {
     const s = runningState();
-    applyEvent(s, { type: "guardrail", rule: "completion-claim", action: "inject", reason: "bắt build" });
+    applyEvent(s, { type: "guardrail", rule: "continue-nudge", action: "inject", reason: "plain text answer without tool calls (no files modified)" });
     const header = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
-    assert.match(header, /agent reminder:/);
+    assert.match(header, /trả lời text chưa dùng tool — nhắc tiếp tục/);
+    assert.ok(!header.includes("…"), "đủ chỗ thì không được truncate");
     const sidebar = await renderOnce(React.createElement(Sidebar, { state: s, config }), 120);
     assert.ok(!sidebar.includes("⚠"), "sidebar không còn guardrail notice ở cuối");
   });
@@ -120,10 +119,10 @@ describe("tui chrome — BuildRail wide/narrow", () => {
     const s = runningState();
     applyEvent(s, { type: "build", success: true, command: "npm run build" });
     const okOut = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
-    assert.match(okOut, /● build ok/);
+    assert.match(okOut, /✓ ok/);
     applyEvent(s, { type: "build", success: false, command: "npm run build" });
     const failOut = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
-    assert.match(failOut, /● build fail/);
+    assert.match(failOut, /✗ fail/);
   });
 });
 
@@ -166,7 +165,7 @@ describe("tui sidebar — render sections", () => {
     assert.match(out, /○ run build/);
     assert.match(out, /1\.5k → 700/);
     assert.match(out, /tok\/s/);
-    assert.match(out, /ctx \d+%/);
+    assert.match(out, /ctx \d+k\/\d+k \(\d+%\)/);
     assert.match(out, /\$/);
     assert.match(out, /● fs/);
     assert.match(out, /◐ gate/);
@@ -193,6 +192,17 @@ describe("tui sidebar — render sections", () => {
 // ── ChatItemView: todo không còn render trong chat (chuyển sidebar) ──────────
 
 describe("tui chat-views — todo chuyển sidebar", () => {
+  it("user message: full border + bold text + you ▸ label — nổi bật hơn agent", async () => {
+    const out = await renderOnce(
+      React.createElement(ChatItemView, { item: { kind: "user", text: "fix the bug" } }),
+      100,
+    );
+    assert.match(out, /you ▸/);
+    assert.match(out, /fix the bug/);
+    // Full border visible — "│" appears as left/right border chars after stripAnsi
+    assert.ok(out.includes("│"), "user message có border đầy đủ (│ left/right border)");
+  });
+
   it("todo item render rỗng (null) trong chat", async () => {
     const out = await renderOnce(
       React.createElement(ChatItemView, { item: { kind: "todo", items: [{ content: "a", status: "pending" }] } }),
@@ -216,13 +226,13 @@ describe("tui chrome — StatusBar", () => {
   it("idle: hiện keybinds, không spinner", async () => {
     const out = await renderOnce(React.createElement(StatusBar, { state: initialState(), scroll: null }), 120);
     assert.match(out, /idle/);
-    assert.match(out, /ctrl\+c quit/);
+    assert.match(out, /ctrl\+c/);
   });
 
-  it("running + scroll: hiện scrollback position", async () => {
+  it("running + scroll: hiện scroll position", async () => {
     const s = runningState();
     const out = await renderOnce(React.createElement(StatusBar, { state: s, scroll: "↑ 12/40" }), 120);
     assert.match(out, /running/);
-    assert.match(out, /scrollback/);
+    assert.match(out, /scroll ↑ 12\/40/);
   });
 });

@@ -80,4 +80,26 @@ describe("tui sidebar — latestPlan", () => {
     assert.equal(plan.items.length, 3);
     assert.equal(plan.items[1].status, "in_progress");
   });
+
+  it("reset realtime: user message mới xoá stale plan từ task trước", () => {
+    // Plan A từ task trước, sau đó user gửi message mới → plan reset
+    const items = [
+      { kind: "user", text: "task 1" },
+      { kind: "todo", items: [{ content: "old plan", status: "in_progress" }] },
+      { kind: "user", text: "task 2 — new request" },
+    ];
+    assert.equal(latestPlan(items), null, "plan từ task trước reset khi user gửi message mới");
+  });
+
+  it("reset realtime: todo sau user message hiện bình thường (plan mới)", () => {
+    const items = [
+      { kind: "user", text: "task 1" },
+      { kind: "todo", items: [{ content: "step 1", status: "completed" }] },
+      { kind: "user", text: "task 2" },
+      { kind: "todo", items: [{ content: "step A", status: "in_progress" }] },
+    ];
+    const plan = latestPlan(items);
+    assert.ok(plan, "plan mới hiện sau user message mới");
+    assert.equal(plan.items[0].content, "step A");
+  });
 });

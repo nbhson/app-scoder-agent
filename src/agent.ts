@@ -241,6 +241,9 @@ export class Agent {
           };
         } catch (err) {
           return { ok: false, output: `ERROR: subagent failed: ${(err as Error).message}` };
+        } finally {
+          // Child agents are ephemeral: close their MCP connections (if any).
+          child.dispose();
         }
       };
       this.ctx.taskRunner = runner;
@@ -717,7 +720,12 @@ export class Agent {
     }
   }
 
-  /** Disconnect MCP servers at the end of a run. */
+  /**
+   * Disconnect MCP servers when the agent is disposed — connections are kept
+   * alive for the whole agent/session lifetime (one "connected" line, no
+   * re-spawn per message). Ephemeral owners (server runs, one-shot CLI) call
+   * dispose() when their agent is done.
+   */
   private shutdownMcp(): void {
     this.mcp?.killAll();
     this.mcp = null;
@@ -787,12 +795,8 @@ export class Agent {
       permission: this.config.permissionMode,
     });
 
-    try {
-      await this.connectMcp();
-      return await this.runLoop(0, buildCmd, null);
-    } finally {
-      this.shutdownMcp();
-    }
+    await this.connectMcp();
+    return this.runLoop(0, buildCmd, null);
   }
 
   /**
@@ -840,12 +844,8 @@ export class Agent {
     for (const content of this.pendingContext) this.messages.push({ role: "user", content });
     this.pendingContext = [];
     this.messages.push({ role: "user", content: task });
-    try {
-      await this.connectMcp();
-      return await this.runLoop(0, buildCmd, null);
-    } finally {
-      this.shutdownMcp();
-    }
+    await this.connectMcp();
+    return this.runLoop(0, buildCmd, null);
   }
 
   /**
@@ -882,12 +882,8 @@ export class Agent {
     // v2: opening a resumed run stamps a fresh run.started (event log continuity).
     this.events.append({ type: "run.started", task: this.currentTask });
 
-    try {
-      await this.connectMcp();
-      return await this.runLoop(session.steps ?? 0, buildCmd, lastBuild);
-    } finally {
-      this.shutdownMcp();
-    }
+    await this.connectMcp();
+    return this.runLoop(session.steps ?? 0, buildCmd, lastBuild);
   }
 
   /**

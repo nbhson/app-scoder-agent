@@ -12,12 +12,13 @@ scoder tui "fix the bug"       # auto-submit initial task
 ## Layout
 
 ```
-┌─ Build Rail ───────────────────────────────────────────────────────────┐
-│ ⚑ scoder   ● build ok   auto   ▰▰▰▰▱▱▱▱▱▱  step 12/40                  │
-├─ Phase + Metrics ──────────────────────────────────────────────────────┤
-│ plan › explore › edit › build › verify    tok 4.2k→1.1k  ·  89 tok/s │
+┌─ Build Rail (single row) ──────────────────────────────────────────────┐
+│ ⚑ scoder   [auto] ✓ ok    ⚠ <guardrail notice, full width>            │
 ├─ Chat Pane ────────────────────────────────────────────────────────────┤
-│ you>  fix the null pointer                                            │
+│ ┌──────────────┐                                                      │
+│ │ you ▸        │                                                      │
+│ │ fix the bug  │                                                      │
+│ └──────────────┘                                                      │
 │                                                                    ▋  │
 │ 03▸ agent  Reading src/user.ts...                                     │
 │ 03▸ ✎ write_file  src/user.ts  +3 -1                                   │
@@ -27,18 +28,45 @@ scoder tui "fix the bug"       # auto-submit initial task
 ├─ Status Bar ───────────────────────────────────────────────────────────┤
 │ gpt-4o-mini  ·  step 12  ·  scroll: 40%                               │
 └───────────────────────────────────────────────────────────────────────┘
+                            ┌─ Sidebar (≥92 cols) ─┐
+                            │ ─ SESSION           │
+                            │   model …           │
+                            │   dir …             │
+                            │ ─ METRICS           │
+                            │   steps ▰▱▱… 3/40   │
+                            │   toks …            │
+                            │   speed …           │
+                            │   ctx …             │
+                            │   elapsed …         │
+                            │ ─ PHASES            │
+                            │   ◆ explore …       │
+                            │ ─ BUILD             │
+                            │   ● build ok        │
+                            │ ─ MCP               │
+                            │   ● fs ready        │
+                            │ ─ PLAN              │
+                            │   1/3 steps         │
+                            │   ✔ read lib.js     │
+                            │   ◆ fix add()       │
+                            │   ○ run build       │
+                            └─────────────────────┘
 ```
 
 ## Features
 
-### Build Rail (Top Bar)
+### Build Rail (Top Bar — single row)
 - **Brand** — ⚑ scoder logo
-- **Build Lamp** — ● build ok / ○ build fail / ◌ no build yet
-- **Permission Mode** — auto / ask / readonly
-- **Step Gauge** — ▰▰▰▱▱▱▱▱▱▱ (fills as budget burns)
+- **Permission Mode** — [auto] / [ask] / [readonly]
+- **Build Lamp** — ✓ ok / ✗ fail / ○ — (no build yet)
+- **Guardrail notice** — spans the full available header width inline when a
+  guardrail fires (e.g. `⚠ trả lời text chưa dùng tool — nhắc tiếp tục`);
+  otherwise the phase breadcrumb (`plan › explore › edit › build › verify`)
+- **Note:** step count (`x/40`) is NOT in the header — it lives in the sidebar
+  METRICS section and the bottom StatusBar (avoiding duplication)
 
 ### Chat Pane
-- User messages with timestamps
+- User messages with a full colored border + `you ▸` label (bold) so they stand
+  out from agent output at a glance
 - Streaming assistant text (live cursor ▋)
 - Tool calls with status (`✔`/`✘`, spinner while running)
 - Diff cards (`✎`) for file writes/edits
@@ -48,11 +76,17 @@ scoder tui "fix the bug"       # auto-submit initial task
 ### Phase Breadcrumb
 `plan › explore › edit › build › verify` — current phase highlighted
 
-### Live Metrics
-- Tokens in → out
-- tok/s (throughput)
-- Elapsed time
-- Guardrail interventions
+### Sidebar (≥92 columns)
+- **SESSION** — model + workdir (no permission line; permission stays in the header)
+- **METRICS** — step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`), tokens in→out, tok/s, ctx with
+  input/limit (pct%), cost, elapsed, guardrail count
+- **PHASES** — plan › explore › edit › build › verify (current phase highlighted)
+- **BUILD** — build lamp + build command
+- **MCP** — per-server state (ready / connecting / reconnecting / dead)
+- **PLAN** — bottom of the sidebar; live checklist from `write_todos` (✔/◆/○);
+  resets in real time on each new user message so the previous task's plan doesn't linger
+- On narrow terminals (< 92 cols) the sidebar is hidden and the BuildRail falls back
+  to showing the phase breadcrumb + metrics inline
 
 ### Status Bar
 - Model name

@@ -152,7 +152,10 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
         record.status = "error";
         record.finishedAt = new Date().toISOString();
         for (const sub of record.subscribers) sub();
-      });
+      })
+      // MCP connections live for the agent lifetime — each server run owns an
+      // ephemeral agent, so dispose it here (never leak child processes).
+      .finally(() => agent.dispose());
   };
 
   const handleEventsSSE = (req: IncomingMessage, res: ServerResponse, record: RunRecord): void => {

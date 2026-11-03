@@ -33,7 +33,7 @@ export function gaugeColor(step: number, maxSteps: number): string {
 /**
  * BuildRail — polished top bar (SINGLE row).
  *
- * Layout:  [⚑ scoder] ── [phase breadcrumb / guardrail warning] ── [perm] [build] [steps]
+ * Layout:  [⚑ scoder] ── [phase breadcrumb / guardrail warning] ── [perm] [build]
  *
  * Terminal ≥ SIDEBAR_MIN_COLS: sidebar handles METRICS + PHASES.
  * Terminal < SIDEBAR_MIN_COLS: phase breadcrumb + metrics move into this row.
@@ -49,13 +49,13 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
   const lampLabel = state.buildLamp === "ok" ? "✓" : state.buildLamp === "fail" ? "✗" : "○";
   const lampText = state.buildLamp === "ok" ? "ok" : state.buildLamp === "fail" ? "fail" : "—";
 
-  // Step badge
-  const stepLabel = state.step > 0
-    ? `${state.step}${state.maxSteps > 0 ? `/${state.maxSteps}` : ""}`
-    : "idle";
-
-  // Guardrail: shown inline if it fired (small warning before the phase breadcrumb)
+  // Guardrail: shown inline if it fired (small warning before the phase breadcrumb).
   const hasGuardrail = Boolean(state.lastGuardrail);
+
+  // Guardrail text gets the whole center region — no fixed 40-char cap that
+  // truncates while the header still has empty space. Reserve room for the
+  // brand on the left and permission/build lamps on the right.
+  const centerBudget = Math.max(24, (columns ?? 100) - 34);
 
   // Phase breadcrumb or narrow-terminal metrics (right of the center)
   const showNarrowMetrics = !wide && (state.status === "running" || state.phases.length > 0);
@@ -77,7 +77,7 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
       {/* Center: guardrail warning OR phase breadcrumb */}
       <Box flexGrow={1} justifyContent="center">
         {hasGuardrail ? (
-          <Text color={theme.warn} bold>⚠ {fit(state.lastGuardrail!, 40)}</Text>
+          <Text color={theme.warn} bold>⚠ {fit(state.lastGuardrail!, centerBudget)}</Text>
         ) : state.status === "running" ? (
           showNarrowMetrics ? (
             <PhaseBreadcrumb phases={state.phases} />
@@ -89,14 +89,13 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
         )}
       </Box>
 
-      {/* Right: permission · build · steps (compact) */}
+      {/* Right: permission · build lamp (step count lives in the sidebar +
+          bottom StatusBar — showing it here too was redundant). */}
       <Text>
         <Text color={permColor}>[{perm}]</Text>
         <Text> </Text>
         <Text color={lampColor}>{lampLabel}</Text>
         <Text dimColor> {lampText}</Text>
-        <Text> </Text>
-        <Text dimColor>{stepLabel}</Text>
       </Text>
     </Box>
   );

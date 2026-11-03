@@ -10,7 +10,7 @@ The Guardrail Engine wraps the autonomous loop with safety and progress rules. E
 | `chat-done` | End conversational turns (marker-based) without build |
 | `completion-claim` | Never trust "done" — force build verification |
 | `text-only-streak` | End after N consecutive tool-less steps |
-| `continue-nudge` | Nudge plain-text answers back to work |
+| `continue-nudge` | Nudge plain-text answers back to work — never demands a build when no files changed; instead suggests the `<<CHAT_DONE>>` exit for pure Q&A |
 | `doom-loop` | Intervene after N identical tool-call batches |
 | `error-loop` | Force strategy change after N same tool+error repeats |
 | `token-no-progress` | End run after N near-empty LLM responses |
@@ -35,6 +35,10 @@ Via `.scoderrc.json`:
 
 ## Rule Actions
 
+> **Note:** `continue-nudge` never forces a build when no files have been modified. For a
+> pure Q&A or explanation-only answer, it points the model at the `<<CHAT_DONE>>` marker
+> exit (see `chat-done`) instead of burning steps running an empty build.
+
 Each triggered rule returns an action:
 
 | Action | Behavior |
@@ -55,7 +59,7 @@ Every triggered decision is logged to JSONL and emitted as an `AgentEvent`:
 
 TUI renders a human-readable notice:
 ```
-⚠ agent reminder: agent trả lời text mà không dùng tool — nhắc tiếp tục làm việc
+⚠ trả lời text chưa dùng tool — nhắc tiếp tục
 ```
 
 ## Custom Rules

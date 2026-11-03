@@ -103,6 +103,16 @@ describe("guardrails — Guardrail Engine", () => {
     assert.ok(d.action.reminder.includes("Continue working"));
   });
 
+  it("continue-nudge: chưa sửa file → không ép build, chỉ đường thoát <<CHAT_DONE>>", async () => {
+    const eng = new GuardrailEngine();
+    const ds = await eng.evaluate(baseCtx({ text: "Đây là câu trả lời cho câu hỏi.", filesModified: false }));
+    const d = ds.find((x) => x.rule === "continue-nudge");
+    assert.ok(d);
+    assert.equal(d.action.kind, "inject");
+    assert.ok(d.action.reminder.includes(CHAT_DONE_MARKER));
+    assert.ok(!d.action.reminder.includes("Build must pass before you finish"));
+  });
+
   it("doom-loop: chuỗi tool call giống hệt lặp lại quá ngưỡng → inject can thiệp", async () => {
     const eng = new GuardrailEngine();
     const calls = { role: "assistant", content: null, tool_calls: [{ id: "1", name: "read_file", arguments: "{\"path\":\"a.ts\"}" }] };

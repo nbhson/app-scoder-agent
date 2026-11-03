@@ -26,7 +26,7 @@ describe("buildSkillsBlock (I3)", () => {
     const s = buildSkillsBlock([{ name: "rev", description: "review code", path: "/p", scope: "project", body: "" }]);
     assert.match(s, /AVAILABLE SKILLS/);
     assert.match(s, /- rev: review code/);
-    assert.match(s, /Dynamic selection/);
+    assert.match(s, /Do NOT load skills merely because they are listed/);
   });
 });
 

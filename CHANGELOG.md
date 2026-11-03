@@ -5,20 +5,36 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ## [0.8.0] — TBD
 
+### Agent
+- System prompt V4: no wasted builds — `run_command` only runs the build after file
+  edits; conversational input ends with `<<CHAT_DONE>>` instead of triggering tools
+- Restored the `<<CHAT_DONE>>` marker rule (V3 dropped it) so chat-done guardrail
+  fires and pure Q&A turns no longer burn steps running an empty build
+- MCP connections now live for the whole agent/session lifetime (one "connected"
+  line, no per-message server re-spawn); `dispose()` teardown wired into CLI, REPL,
+  TUI, serve, and subagents
+
+### Guardrails
+- `continue-nudge` is context-aware: when no files were modified it nudges toward
+  `<<CHAT_DONE>>` instead of demanding a build; build is only required once files
+  have been changed
+
 ### TUI
-- BuildRail single-row (no dual-header look)
-- Guardrail notice inline in BuildRail
+- BuildRail single-row (no dual-header look); step count `x/40` removed from the
+  header (already shown in sidebar + StatusBar)
+- Guardrail notice spans the full available header width (dynamic fit — no more
+  "…" truncation while space remains)
 - Full-item render + overflow clipping → scroll works correctly
 - Streaming green text auto-normalizes on new query (preSubmit helper)
 - Landing page: centered big SCoder logo, version, hints
 - Sidebar: live tok/s estimate (streaming chars) + ctx shows input/limit (pct%)
+- Sidebar: PLAN moved to the bottom (easier to focus); SESSION no longer shows
+  `perm auto`
+- Plan resets in real time on each new user message — stale plan from the previous
+  task clears instead of lingering
+- User messages get a full colored border + `you ▸` label so they stand out from
+  the agent's markdown output
 - Session switch: restores step/model/provider metadata from session file
-
-### Agent
-- System prompt V3: stricter scope rules, clarification-before-action, safety boundaries
-- Skills/MCP: passive listing only, no auto-load, explicit-only
-- load_skill tool: explicit description of when to use
-- buildMcpBlock: MCP servers listed as available, never auto-called
 
 ### Bug fixes
 - TypeScript: preSubmit hoisting — moved before submit declaration

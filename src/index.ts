@@ -247,6 +247,8 @@ async function runOnce(cfg: AgentConfig, task: string): Promise<number> {
   } catch (err) {
     ui.error((err as Error).message);
     return 2;
+  } finally {
+    agent.dispose();
   }
 }
 
@@ -366,11 +368,13 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
       config: cfg,
       replaceAgent: (next) => {
         agent.abort();
+        agent.dispose();
         agent = next ?? new Agent(cfg);
         first = true;
       },
       resumeAndRun: async (s) => {
         agent.abort();
+        agent.dispose();
         agent = new Agent(cfg);
         first = false;
         await agent.resume(s);
@@ -396,6 +400,7 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
     }
   }
 
+  agent.dispose();
   ui.info("bye");
   process.exit(0);
 }
@@ -463,8 +468,10 @@ async function main(): Promise<void> {
     });
     try {
       const result = await agent.resume(s, args.task ?? undefined);
+      agent.dispose();
       process.exit(result.success ? 0 : 1);
     } catch (err) {
+      agent.dispose();
       ui.error((err as Error).message);
       process.exit(2);
     }

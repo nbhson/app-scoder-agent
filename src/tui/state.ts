@@ -156,11 +156,20 @@ export function visibleWindow(
 /**
  * Plan mới nhất cho sidebar — todo items được append mỗi lần update nhưng
  * sidebar chỉ cần snapshot hiện tại (last-wins), null khi chưa có plan.
+ *
+ * Reset realtime: mỗi lần user gửi message mới, plan reset — chỉ hiện plan
+ * được viết SAU user message cuối cùng. Tránh stale plan từ task trước hiện
+ * trong task mới.
  */
 export function latestPlan(items: ChatItem[]): Extract<ChatItem, { kind: "todo" }> | null {
+  // Tìm user message cuối cùng — plan chỉ reset tại đây.
+  let lastUserIdx = -1;
   for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (it.kind === "todo") return it;
+    if (items[i].kind === "user") { lastUserIdx = i; break; }
+  }
+  // Chỉ tìm todo SAU user cuối.
+  for (let i = items.length - 1; i > lastUserIdx; i--) {
+    if (items[i].kind === "todo") return items[i] as Extract<ChatItem, { kind: "todo" }>;
   }
   return null;
 }
@@ -204,12 +213,11 @@ function applyGuardrail(state: TuiState, ev: { rule: string; action: string; rea
     "chat-done": "lượt chat thuần — kết thúc không cần build",
     "completion-claim": "agent báo hoàn thành — buộc chạy build xác minh",
     "text-only-streak": "agent chỉ nói không làm — dừng run",
-    "continue-nudge": "agent trả lời text mà không dùng tool — nhắc tiếp tục làm việc",
+    "continue-nudge": "trả lời text chưa dùng tool — nhắc tiếp tục",
     "doom-loop": "lặp lẫn lộn cùng tool call — yêu cầu đổi hướng",
     "build-stop": "build pass — kết thúc run",
   };
   state.lastGuardrail = HUMAN[ev.rule] ?? `${ev.rule}: ${ev.reason}`;
-  if (state.lastGuardrail.length > 72) state.lastGuardrail = state.lastGuardrail.slice(0, 69) + "…";
 }
 
 /**

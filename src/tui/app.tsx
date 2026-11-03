@@ -72,6 +72,13 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const runningRef = useRef(false);
   const agentRef = useRef<Agent | null>(null);
 
+  // MCP connections live for the session (one connect, no per-message re-spawn).
+  // Dispose on unmount so child server processes never outlive the TUI.
+  useEffect(() => () => {
+    agentRef.current?.dispose();
+    agentRef.current = null;
+  }, []);
+
   // ── Prompt-gate review flow (/review) ──────────────────────────────────────
   // State machine relaying the universal-prompt-gate-mcp text-fallback flow:
   // call → pending_level_selection → user picks level → pending_user_selection
@@ -244,6 +251,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     isRunning: () => runningRef.current,
     replaceAgent: (next) => {
       agentRef.current?.abort();
+      agentRef.current?.dispose();
       agentRef.current = next;
       if (!next) {
         runningRef.current = false;

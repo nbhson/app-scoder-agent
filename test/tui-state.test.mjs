@@ -150,7 +150,7 @@ describe("tui state — phase breadcrumb + guardrail tracking", () => {
     assert.deepEqual(s.phases, ["explore", "edit", "build", "verify"]);
   });
 
-  it("guardrail event: đếm + giữ message thân thiện gần nhất (rút gọn 72 ký tự)", async () => {
+  it("guardrail event: đếm + giữ message thân thiện gần nhất (tự fit độ rộng bởi header)", async () => {
     let s = initialState();
     s = applyEvent(s, { type: "guardrail", rule: "doom-loop", action: "inject", reason: "x".repeat(80) });
     assert.equal(s.guardrailCount, 1);
@@ -158,9 +158,9 @@ describe("tui state — phase breadcrumb + guardrail tracking", () => {
     assert.equal(s.lastGuardrail, "lặp lẫn lộn cùng tool call — yêu cầu đổi hướng");
     s = applyEvent(s, { type: "guardrail", rule: "unknown-rule", action: "inject", reason: "y".repeat(80) });
     assert.equal(s.guardrailCount, 2);
-    // Rule lạ → fallback "rule: reason" rút gọn 72.
+    // Rule lạ → fallback "rule: reason"; header tự fit (chrome) thay vì cắt cứng ở state.
     assert.ok(s.lastGuardrail.startsWith("unknown-rule: "));
-    assert.ok(s.lastGuardrail.length <= 72);
+    assert.ok(s.lastGuardrail.includes("y".repeat(80)), "không còn cắt cứng 72 ký tự trong state");
   });
 });
 

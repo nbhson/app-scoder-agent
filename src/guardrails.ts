@@ -278,6 +278,21 @@ const continueNudgeRule: GuardrailRule = {  name: "continue-nudge",
     if (ctx.hasToolCalls) return null;
     if (ctx.chatDone) return null;
     if (claimsCompletion(ctx.text)) return null; // completion-claim rule phụ trách
+    // No file changed yet → never demand a build for what may be a pure Q&A or
+    // an explanation-only answer. Give the model the explicit conversational
+    // exit instead; text-only-streak still ends the run if it keeps stalling.
+    if (!ctx.filesModified) {
+      return {
+        action: {
+          kind: "inject",
+          reminder:
+            `Continue working on the task. Use tools only if code changes are needed. ` +
+            `If the user only asked a question and no code change is needed, do NOT run the build — ` +
+            `end your reply with ${CHAT_DONE_MARKER} on its own last line instead.`,
+        },
+        reason: "plain text answer without tool calls (no files modified)",
+      };
+    }
     return {
       action: {
         kind: "inject",

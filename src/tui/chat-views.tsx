@@ -191,11 +191,20 @@ function TodoItemView(): null {
 export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
   switch (item.kind) {
     case "user":
-      // Clean user bubble: accent arrow + bold text
+      // User messages stand out with a full colored border + bold label so they're
+      // immediately visible at a glance, distinct from the agent's ◆ markdown.
       return (
-        <Box marginTop={1} paddingLeft={1}>
-          <Text color={theme.user} bold>❯ </Text>
-          <Text bold>{item.text}</Text>
+        <Box marginTop={1} marginLeft={1}>
+          <Box
+            borderStyle="single"
+            borderColor={theme.user}
+            paddingX={1}
+            paddingTop={0}
+            flexDirection="column"
+          >
+            <Text color={theme.user} bold>you ▸</Text>
+            <Text bold>{item.text}</Text>
+          </Box>
         </Box>
       );
     case "assistant": {
