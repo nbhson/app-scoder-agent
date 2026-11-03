@@ -2,49 +2,39 @@
 
 [![CI](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![node](https://img.shields.io/node/v/app-scoder-agent)](https://www.npmjs.com/package/app-scoder-agent)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+[![npm](https://img.shields.io/badge/npm-s--app--scoder--agent-orange)](https://www.npmjs.com/package/s-app-scoder-agent)
 
-**scoder** is a command-line coding agent that autonomously writes, edits, and builds code until your project compiles without errors. It mirrors the workflow of opencode, cline, and Claude Code, but runs as a single standalone CLI tool.
+**scoder** is a command-line coding agent that autonomously writes, edits, and builds code until your project compiles without errors. Inspired by *Cline*, *Claude Code*, and *OpenCode*, but runs as a single standalone CLI tool.
 
 ## Installation
 
-**Requirements:** Node.js ≥ 20.19 (eslint 10 in devDependencies requires it; runtime itself works on 18+)
+**Requirements:** Node.js ≥ 20
 
-### Install from GitHub (current method)
-
-The package is not yet on the npm registry — install straight from this repo:
+### Install from npm (Recommended)
 
 ```bash
-# Clones, builds (via the prepare script), and installs the `scoder` command globally
+npm install -g s-app-scoder-agent
+```
+
+### Install from GitHub
+
+```bash
 npm install -g github:nbhson/app-scoder-agent
 ```
 
-Or manually from a local clone:
+### From local clone
 
 ```bash
 git clone https://github.com/nbhson/app-scoder-agent.git
 cd app-scoder-agent
-npm install
-npm run build
-npm install -g .        # or: npm link
+npm install && npm run build && npm install -g .
 ```
-
-> Upgrading: pull the latest code and re-run `npm install -g .` (or point the global install at the repo again).
 
 ### Try without installing
 
 ```bash
-npx github:nbhson/app-scoder-agent "your task here"
-```
-
-### From npm (planned)
-
-Once published to the npm registry, installation will be a one-liner:
-
-```bash
-npm install -g app-scoder-agent
-# or run ad-hoc:
-npx app-scoder-agent "your task"
+npx s-app-scoder-agent "your task here"
 ```
 
 ## Quick Start
@@ -585,6 +575,24 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 | `0` | Task completed — build passed |
 | `1` | Build failed after max steps |
 | `2` | Fatal error (no API key, network error, etc.) |
+
+## Documentation
+
+See [docs/](docs/) for detailed guides:
+
+| Doc | Description |
+|-----|-------------|
+| [Installation](docs/installation.md) | Install from npm, GitHub, or local clone |
+| [Configuration](docs/configuration.md) | Environment variables, config file, permissions |
+| [Commands](docs/commands.md) | CLI commands & flags reference |
+| [Architecture](docs/architecture.md) | System design & module overview |
+| [TUI Guide](docs/tui.md) | Full-screen terminal UI |
+| [Guardrails](docs/guardrails.md) | Safety & progress engine |
+| [MCP Integration](docs/mcp.md) | Model Context Protocol servers |
+| [HTTP API](docs/api.md) | Server mode & SSE API |
+| [Sessions](docs/sessions.md) | Session persistence & resume |
+| [Skills](docs/skills.md) | SKILL.md instruction packs |
+| [Testing](docs/testing.md) | Test suites & coverage |
 
 ## License
 

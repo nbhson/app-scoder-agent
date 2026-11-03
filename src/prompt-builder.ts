@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { formatSkillIndex, type Skill } from "./skills.js";
 import type { AgentDef } from "./agents.js";
+import type { AgentConfig } from "./config.js";
 
 /** One-line environment snapshot for the system prompt (cache-stable per run). */
 export function buildEnvInfo(workdir: string): string {
@@ -19,12 +20,12 @@ export function buildEnvInfo(workdir: string): string {
   return `Environment: ${process.platform} · node ${process.version}${git} · today ${new Date().toISOString().slice(0, 10)}`;
 }
 
-/** Skills advertised trong system prompt (dynamic selection hint). */
+/** Skills advertised in system prompt (passive listing only — agent does NOT auto-load). */
 export function buildSkillsBlock(skills: Skill[]): string {
   if (skills.length === 0) return "";
   return (
-    `\n\nAVAILABLE SKILLS (project + global .scoder/skills/<name>/SKILL.md):\n${formatSkillIndex(skills)}\n` +
-    "Dynamic selection: BEFORE planning, scan this index against the task. If any skill's description matches the task's domain or workflow, call load_skill with its name FIRST and follow the returned instructions — the skill may change how you approach the whole task. Do not load a skill merely because it is listed; only when it genuinely matches. If two skills match, prefer the more specific one."
+    `\n\nAVAILABLE SKILLS (load with /skill <name> or when the task clearly matches a skill domain):\n${formatSkillIndex(skills)}\n` +
+    "Only load a skill when the user explicitly requests it with /skill, or when the task description clearly matches a skill's domain. Do NOT load skills merely because they are listed."
   );
 }
 
@@ -36,6 +37,17 @@ export function buildAgentsBlock(agents: AgentDef[], allowSubagents: boolean): s
     `\n\nSUBAGENTS (via the task tool — delegate focused sub-work):\n` +
     usable.map((a) => `  ${a.name.padEnd(12)} ${a.description}`).join("\n") +
     "\nDelegate exploration or planning when it keeps the main loop focused."
+  );
+}
+
+/** MCP servers advertised in system prompt (passive listing only — never auto-used). */
+export function buildMcpBlock(config: AgentConfig): string {
+  const servers = Object.keys(config.mcpServers ?? {});
+  if (servers.length === 0) return "";
+  return (
+    `\n\nMCP SERVERS (available tools — use mcp__<server>__<tool> ONLY when the task explicitly requires external integration):\n` +
+    servers.map((n) => `- ${n}`).join("\n") +
+    "\nDo NOT call MCP tools unless the user explicitly asks for external integration or the task requires it."
   );
 }
 

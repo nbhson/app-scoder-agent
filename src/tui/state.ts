@@ -73,6 +73,8 @@ export interface TuiState {
   phases: string[];
   /** Sidebar: trạng thái kết nối từng MCP server (từ event mcp_status structured). */
   mcpServers: Record<string, string>;
+  /** Live: accumulated streaming output chars during current run (chars / ~4 ≈ tokens). */
+  streamingOutputChars: number;
 }
 
 export function initialState(): TuiState {
@@ -96,6 +98,7 @@ export function initialState(): TuiState {
     thinkingVisible: false,
     phases: [],
     mcpServers: {},
+    streamingOutputChars: 0,
   };
 }
 
@@ -237,6 +240,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.guardrailCount = 0;
       state.lastGuardrail = null;
       state.phases = [];
+      state.streamingOutputChars = 0;
       // The TUI pushes the user's message itself when submitting; avoid a
       // duplicate when run_start carries the same task.
       const last = lastItem(state);
@@ -268,6 +272,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       break;
     }
     case "llm_delta": {
+      state.streamingOutputChars += ev.delta.length;
       const last = lastItem(state);
       if (last && last.kind === "assistant" && last.streaming) {
         last.text += ev.delta;

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Development
+src/
+test/
+scripts/
+.scoder/
+coverage/
+
+# Config & Docs
+.github/
+plan/
+*.test.mjs
+*.config.mjs
+*.config.js
+tsconfig*.json
+eslint.config.mjs
+
+# Docs
+README_NEW.md
+example_config.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary
+*.tmp
+*.temp
+.tmp/

@@ -17,18 +17,21 @@ import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
-import { applyEvent, initialState, markAborted, visibleWindow, type ChatItem, type TuiState } from "./state.js";
+import { resolveSessionId } from "../session.js";
+import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
 import { parseSlashCommand } from "./commands.js";
 import { dispatchCommand, type CommandHost } from "./command-registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar, SIDEBAR_MIN_COLS } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
+import { SessionPicker } from "./session-picker.js"; // session picker modal
 import { fileIndex } from "./at-complete.js";
 import { parseWheel, MOUSE_ENABLE, MOUSE_DISABLE } from "./mouse.js"; // T5
 import { getTheme, setActiveTheme, theme, THEMES, useNamedTheme } from "./theme.js";
 import { reviewFromResponse, reviewAnswerToCall, type ReviewState } from "./review.js"; // T2
 import { PermissionModal } from "./permission-modal.js"; // T2
 import { Sidebar } from "./sidebar.js"; // sidebar opencode
+import { getVersion } from "../version.js";
 
 
 export interface TuiAppProps {
@@ -55,6 +58,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const [permPrompt, setPermPrompt] = useState<Extract<AgentEvent, { type: "permission_request" }> | null>(null);
   const permPromptRef = useRef(permPrompt);
   permPromptRef.current = permPrompt;
+  // Session picker modal state (open via Ctrl+S)
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {
@@ -188,6 +193,50 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     [update],
   );
 
+  /** Session picker: when a session is selected, resume it. */
+  const handleSessionSelect = useCallback(
+    async (session: import("../session.js").SessionSummary) => {
+      setSessionPickerOpen(false);
+      if (runningRef.current) {
+        pushNotice("agent is running — wait or Esc first", "warn");
+        return;
+      }
+      const s = resolveSessionId(config.workdir, session.id);
+      if (!s) {
+        pushNotice(`session not found: ${session.id}`, "error");
+        return;
+      }
+      // Restore full TUI state from the session (items + step count + model info).
+      update(() => ({
+        ...initialState(),
+        items: s.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m): ChatItem =>
+            m.role === "user"
+              ? { kind: "user" as const, text: typeof m.content === "string" ? m.content : "" }
+              : { kind: "assistant" as const, text: typeof m.content === "string" ? m.content : "", streaming: false },
+          ),
+        step: s.steps ?? 0,
+        maxSteps: s.maxSteps ?? config.maxSteps,
+        model: s.model || config.model,
+        provider: s.provider || config.provider,
+        status: "idle",
+        summary: null,
+      }));
+      runningRef.current = true;
+      setScrollOffset(0);
+      const agent = createAgent();
+      try {
+        await agent.resume(s);
+        runningRef.current = false;
+      } catch (err) {
+        runningRef.current = false;
+        pushNotice(`resume failed: ${(err as Error).message}`, "error");
+      }
+    },
+    [config, createAgent, pushNotice, update],
+  );
+
   /** T1: CommandHost cho registry dùng chung với REPL. */
   const tuiHost = useCallback((): CommandHost => ({
     agent: () => agentRef.current,
@@ -257,6 +306,37 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       return true;
     },
     [reviewStep, pushNotice],
+  );
+
+  // Close any lingering streaming messages when the user sends a new query —
+  // prevents green/dim text from the previous response appearing stale.
+  const closeStreamingItems = useCallback(() => {
+    update((s) => {
+      let changed = false;
+      for (const it of s.items) {
+        if (it.kind === "assistant" && it.streaming) {
+          it.streaming = false;
+          changed = true;
+        }
+      }
+      return changed ? { ...s, items: [...s.items] } : s;
+    });
+  }, [update]);
+
+  /**
+   * Shared entry point for every task submission:
+   *   1. Close any still-streaming assistant message from the previous response.
+   *   2. Record the query in history.
+   *   3. Clear the input field.
+   * Then the caller handles steer vs. new-run separately.
+   */
+  const preSubmit = useCallback(
+    (task: string) => {
+      closeStreamingItems();
+      historyRef.current = [...historyRef.current, task].slice(-100);
+      writeInput("");
+    },
+    [closeStreamingItems, writeInput],
   );
 
   const submit = useCallback(
@@ -399,14 +479,12 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       if (runningRef.current) {
         // Steer: user input while the agent runs — deliver at next step
         // boundary (H-08, "steer by default" — pattern from opencode).
-        writeInput("");
-        historyRef.current = [...historyRef.current, task].slice(-100);
+        preSubmit(task);
         agentRef.current?.steer(task);
         update((s) => ({ ...s, items: [...s.items, { kind: "user", text: `${task}  (steered)` }] }));
         return;
       }
-      writeInput("");
-      historyRef.current = [...historyRef.current, task].slice(-100);
+      preSubmit(task);
       runningRef.current = true;
       setScrollOffset(0);
       // isFirst must be computed BEFORE pushing the user item below.
@@ -434,7 +512,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         update((s) => ({ ...s, items: [...s.items, { kind: "notice", text: (err as Error).message, level: "error" }] }));
       }
     },
-    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep, tuiHost],
+    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep, tuiHost, preSubmit],
   );
 
   /** Create (or return) the session agent — permission mode always current. */
@@ -468,6 +546,15 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // T-01/T-02: scroll + abort keybinds.
   useInput((_input, key) => {
     if (permPromptRef.current) return; // modal owns the keyboard
+
+    // ── Ctrl+S: open session picker (when not running, not already open) ──
+    if (key.ctrl && _input === "s") {
+      if (!runningRef.current && !sessionPickerOpen) {
+        setSessionPickerOpen(true);
+      }
+      return;
+    }
+
     // T-10: ctrl+t toggles the thinking stream visibility.
     if (key.ctrl && _input === "t") {
       update((s) => ({ ...s, thinkingVisible: !s.thinkingVisible }));
@@ -521,7 +608,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     return state.summary;
   }, [state.status, state.summary]);
 
-  // When the run ends, jump back to the bottom so the final summary is always
+      // When the run ends, jump back to the bottom so the final summary is always
   // visible — a user scrolled up would otherwise never see the conclusion.
   const prevStatusRef = useRef(state.status);
   useEffect(() => {
@@ -529,18 +616,10 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     prevStatusRef.current = state.status;
   }, [state.status]);
 
-  // The viewport renders items around the visible window (T4 virtualization):
-  // chỉ render item có thể hiện ra viewport (+margin) — state giữ full, không
-  // còn cap cứng 200. maxScroll vẫn tính trên content thật (useBoxMetrics).
-  const viewportRows = viewport.clientHeight || 24;
-  const total = state.items.length;
-  const visible = useMemo(
-    () => visibleWindow(state.items, viewportRows),
-    [state.items, viewportRows],
-  );
+  // The viewport renders items at full height so scroll math (content.height) is
+  // always correct. Ink clips with overflow="hidden"; contentOffsetY shifts the
+  // content column upward to reveal items above the current bottom.
   const { rows, columns } = useWindowSize();
-  // Sidebar phải (pattern opencode): chỉ khi terminal đủ rộng — hẹp thì
-  // BuildRail tự fallback sang header đầy đủ.
   const showSidebar = (columns ?? 100) >= SIDEBAR_MIN_COLS;
 
   return (
@@ -562,26 +641,21 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           contentOffsetY={scrollTop}
         >
         <Box ref={contentRef} flexDirection="column" paddingX={1} flexShrink={0}>
-          {total === 0 ? (
-            <Box flexDirection="column" alignItems="center" gap={1} paddingTop={2}>
-              <Text>
-                <Text color={theme.brand} bold>◆ scoder</Text>
-                <Text dimColor> · autonomous coding agent</Text>
-              </Text>
-              <Text dimColor>type a task — the agent plans, edits, and builds until it passes</Text>
-              <Text>
-                <Text dimColor>tab </Text>
-                <Text dimColor>complete commands · </Text>
-                <Text dimColor>/help </Text>
-                <Text dimColor>all commands · </Text>
-                <Text dimColor>/skills </Text>
-                <Text dimColor>skill packs</Text>
+          {state.items.length === 0 ? (
+            <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
+              {/* Big logo */}
+              <Text bold color={theme.brand}>⚑ SCoder</Text>
+              <Text dimColor>{`autonomous coding agent · v${getVersion()}`}</Text>
+              <Text></Text>
+              <Text dimColor>type a task to start — agent plans, edits, and builds</Text>
+              <Text></Text>
+              <Text dimColor>
+                ⏎ send · <Text bold>ctrl+s</Text> sessions · tab complete · /help · /skills
               </Text>
             </Box>
-          ) : null}
-          {visible.map((item, i) => (
-            <ChatItemView key={i} item={item} />
-          ))}
+          ) : (
+            state.items.map((item, i) => <ChatItemView key={i} item={item} />)
+          )}
           {lastSummary && (
             <Box marginTop={1}>
               {state.status === "success" ? (
@@ -604,6 +678,14 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         {/* Sidebar phải: plan live · tok/s · phases · build · MCP (narrow → ẩn). */}
         {showSidebar && <Sidebar state={state} config={config} />}
       </Box>
+      {/* Session picker modal — Ctrl+S or bare "/" opens it. */}
+      {sessionPickerOpen && (
+        <SessionPicker
+          workdir={config.workdir}
+          onSelect={handleSessionSelect}
+          onClose={() => setSessionPickerOpen(false)}
+        />
+      )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}
       <Box paddingX={1} flexShrink={0}>

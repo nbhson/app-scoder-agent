@@ -5,6 +5,7 @@
  * Tách khỏi chat transcript để chat sạch và trạng thái luôn nhìn thấy mà
  * không cần scroll. Ẩn hoàn toàn trên terminal hẹp (< SIDEBAR_MIN_COLS) —
  * khi đó BuildRail fallback sang header đầy đủ (chrome.tsx).
+ * (Guardrail notice trước đây nằm cuối sidebar — đã chuyển lên header, căn giữa.)
  */
 import React from "react";
 import { Box, Text } from "ink";
@@ -120,8 +121,18 @@ function MetricsSection({ state }: { state: TuiState }): React.JSX.Element {
     hasUsage && elapsedMs != null && elapsedMs > 500
       ? Math.round(state.usage.outputTokens / (elapsedMs / 1000))
       : null;
+  // Live estimate based on accumulated streaming chars (chars / ~4 ≈ tokens).
+  const liveTokPerSec =
+    state.streamingOutputChars > 0 && elapsedMs != null && elapsedMs > 500
+      ? Math.round((state.streamingOutputChars / 4) / (elapsedMs / 1000))
+      : null;
   const win = contextWindowFor(state.provider, state.model);
   const ctxPct = hasUsage && win > 0 ? Math.round((state.usage.inputTokens / win) * 100) : null;
+  // ctx giờ hiển thị đủ số: `input/ctxWin (pct%)`.
+  const ctxFmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
+  const ctxDisplay = ctxPct != null
+    ? `${ctxFmt(state.usage.inputTokens)}/${ctxFmt(win)} (${ctxPct}%)`
+    : null;
   return (
     <Section title="METRICS">
       {!hasUsage && elapsedSec == null ? (
@@ -138,10 +149,14 @@ function MetricsSection({ state }: { state: TuiState }): React.JSX.Element {
           {hasUsage && (
             <SectionLine label="toks" value={`${fmt(state.usage.inputTokens)} → ${fmt(state.usage.outputTokens)}`} />
           )}
+          {/* Show one speed line: live ~N during streaming, then N once usage events fire. */}
           {tokPerSec != null && (
             <SectionLine label="speed" value={`${fmt(tokPerSec)} tok/s`} color={theme.accent} />
           )}
-          {ctxPct != null && <SectionLine label="ctx" value={`${ctxPct}%`} />}
+          {liveTokPerSec != null && tokPerSec == null && (
+            <SectionLine label="speed" value={`~${fmt(liveTokPerSec)} tok/s`} color={theme.accent} />
+          )}
+          {ctxDisplay != null && <SectionLine label="ctx" value={ctxDisplay} />}
           {cost > 0 && <SectionLine label="cost" value={`$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`} />}
           {elapsedSec != null && (
             <SectionLine label="elapsed" value={`${Math.floor(elapsedSec / 60)}:${String(elapsedSec % 60).padStart(2, "0")}`} />
@@ -260,9 +275,6 @@ export function Sidebar({ state, config }: { state: TuiState; config: AgentConfi
       <PhaseSection state={state} />
       <BuildSection state={state} config={config} />
       <McpSection state={state} config={config} />
-      {state.lastGuardrail && (
-        <Text color={theme.warn} wrap="truncate">⚠ {fit(state.lastGuardrail, INNER - 2)}</Text>
-      )}
     </Box>
   );
 }

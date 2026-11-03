@@ -5,7 +5,6 @@
  * link text. ponytail: 40px width cố định, không đo cell size thật — nâng
  * cấp khi cần aspect ratio chuẩn.
  */
-import { readFileSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 export interface TermImageCaps {
   /** truecolor (COLORTERM=truecolor/24bit) — bắt buộc cho halfblock. */

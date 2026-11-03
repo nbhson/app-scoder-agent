@@ -5,6 +5,7 @@
 
 /** `\x1b[<64;x;yM` = wheel up, `\x1b[<65;...` = wheel down (SGR mode). */
 export function parseWheel(chunk: string): "up" | "down" | null {
+  // eslint-disable-next-line no-control-regex -- matching the ESC control sequence is the whole point here
   const m = /\x1b\[<(\d+);\d+;\d+[Mm]/.exec(chunk);
   if (!m) return null;
   const btn = Number(m[1]);

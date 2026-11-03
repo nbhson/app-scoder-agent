@@ -254,9 +254,10 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
           <Text dimColor>  ↑/↓ select · tab/enter accept · esc close</Text>
         </Box>
       )}
+      {/* Input row — styled prompt + typed text + ghost + block cursor */}
       <Box>
-        <Text color="magenta" bold>
-          {vimMode === "normal" ? "❯" : "❯ "}
+        <Text color={theme.brand} bold>
+          ❯{" "}
         </Text>
         {vimMode === "normal" && cursor !== null ? (
           <>

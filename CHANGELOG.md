@@ -3,6 +3,71 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.8.0] — TBD
+
+### TUI
+- BuildRail single-row (no dual-header look)
+- Guardrail notice inline in BuildRail
+- Full-item render + overflow clipping → scroll works correctly
+- Streaming green text auto-normalizes on new query (preSubmit helper)
+- Landing page: centered big SCoder logo, version, hints
+- Sidebar: live tok/s estimate (streaming chars) + ctx shows input/limit (pct%)
+- Session switch: restores step/model/provider metadata from session file
+
+### Agent
+- System prompt V3: stricter scope rules, clarification-before-action, safety boundaries
+- Skills/MCP: passive listing only, no auto-load, explicit-only
+- load_skill tool: explicit description of when to use
+- buildMcpBlock: MCP servers listed as available, never auto-called
+
+### Bug fixes
+- TypeScript: preSubmit hoisting — moved before submit declaration
+- Lint: unused LiveMetrics, contextWindowFor, resolveModelPricing in chrome.tsx
+
+### Docs
+- Skills format documented in system prompt + prompt-builder
+- MCP servers documented as available (not auto-used)
+
+## [0.7.0] - 2026-11-03 — TUI Mission Control v2, MCP HTTP, Model Catalog, Steering
+
+### Added
+- **TUI Session Picker Modal** — keyboard-navigable list of saved sessions; open via `Ctrl+S` or type `/sessions` (when agent is idle). Navigate with `↑/↓` or `j/k`, press `Enter` to resume, `Esc` to close. Quick-jump via number keys `1-9`.
+- **TUI Visual Refresh** — polished "Mission Control" chrome:
+  - **BuildRail**: bold border, `⚑ scoder` brand, center phase breadcrumb, right-aligned `[perm] ✓/○/✗ build + steps` badge
+  - **StatusBar**: bold border, spinner + status + elapsed + model, compact key hint on right
+  - **ToolItem**: step prefix + tool name (bold) + key arg + elapsed, ✓/✗ inline icons
+  - **DiffCard**: rounded border, step badge, color-coded ± stats, path header
+  - **PermissionModal**: bold border, warning header, scrollable diff, compact key legend
+  - **PhaseBreadcrumb**: `●/◆` visited/current dots with spacing
+  - **BuildNotice**: checkmark/x icons (`✓`/`✗`), spacing after command
+- **TUI Sidebar** — live session sidebar with plan tracking, tok/s, phases, build status, MCP server state
+- **TUI Themes** — 3 built-in themes (dark/light/mono) + terminal capability detection; `/theme` command
+- **Image Preview in TUI** — `read_file` renders image files as halfblock preview directly in the terminal
+- **Tool Progress** — callId correlation + live elapsed time per tool card
+- **Vim Keybindings** — normal/insert mode + mouse wheel scroll in TUI
+- **Virtual Scrolling** — render window estimated by rows for smooth scrolling on long runs
+- **Permission Modal** — full diff preview + scroll + checker-level timeout in TUI
+- **Model Catalog** — `scoder models` command lists context windows & pricing from models.dev; 24h cache + `--refresh`
+- **Steering Inbox** — user input delivered at safe step boundaries (pattern from opencode)
+- **LLM Compaction** — history summarization when approaching context window limit
+- **MCP HTTP Transport** — Streamable HTTP (SSE responses) alongside stdio; `{env:VAR}` in headers
+- **MCP Schema Validation** — inputSchema validated locally before calling tools
+- **MCP Reconnect** — state machine + exponential backoff (max 5 attempts) + tool list refresh
+- **Hot Reload** — watch `.scoderrc` + `.scoder/skills/` with 500ms debounce
+- **Config Limits** — runtime thresholds via `limits.{requestTimeoutMs, maxOutputChars, toolConcurrency, renderCap}`
+- **Tool Concurrency** — parallel read-only tool calls (bounded concurrency, default 4)
+
+### Changed
+- **`prepublishOnly`** — simplified to `npm run lint && npm run typecheck` (faster publish, no full test suite)
+- **`engines`** — bumped to `>=20` (was `>=18`)
+- **TUI Render Cap** — capped at 200 items for smooth scrolling
+- **Idle Timeout** — LLM requests use per-chunk idle timeout (reset on each data received) instead of fixed request timeout
+
+### Fixed
+- **Stream interruption** — incomplete streams with complete tool calls now continue (not fail)
+- **LLM stream mid-generation** — idle timeout resets on each chunk, stream only dies on true silence
+- **@file mentions** — directory listings, path escape, no email false positives
+
 ## [0.6.0] - 2026-10-30 — Mission Control TUI, unified diffs in the event stream, slash commands & `scoder init`
 
 ### Added

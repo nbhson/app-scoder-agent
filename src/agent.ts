@@ -9,7 +9,7 @@ import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { PROMPT_VERSION } from "./prompt.js";
-import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock } from "./prompt-builder.js";
+import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "./prompt-builder.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
@@ -767,6 +767,7 @@ export class Agent {
           buildCmd,
           envInfo: buildEnvInfo(this.config.workdir),
           skillsBlock,
+          mcpBlock: buildMcpBlock(this.config),
         }) + buildAgentsBlock(discoverAgents(this.config.workdir), this.config.allowSubagents !== false),
       },
       ...this.pendingContext.map((content) => ({ role: "user" as const, content })),

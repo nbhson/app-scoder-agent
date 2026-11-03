@@ -42,8 +42,20 @@ describe("safePath — path traversal", () => {
   });
 });
 
+// Windows chỉ tạo được symlink khi có quyền (admin hoặc Developer Mode) — dò trước, thiếu quyền thì skip.
+const canSymlink = (() => {
+  try {
+    const probe = join(TMP, "symlink-probe");
+    writeFileSync(probe, "x");
+    symlinkSync(probe, join(TMP, `symlink-probe-link-${process.pid}`));
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 describe("safePath — symlink escape", () => {
-  it("deny: ghi qua symlink trỏ ra ngoài workdir", async () => {
+  it("deny: ghi qua symlink trỏ ra ngoài workdir", { skip: !canSymlink && "Windows: cần admin/Developer Mode để tạo symlink" }, async () => {
     // Tạo file ngoài workdir + symlink bên trong trỏ ra đó
     const outside = join(TMP, "outside.txt");
     writeFileSync(outside, "original");
@@ -171,7 +183,9 @@ describe("toolRunCommand (async spawn)", () => {
       toolRunCommand(workdir, { command: "sleep 1" }),
     ]);
     const elapsed = Date.now() - t0;
-    assert.ok(elapsed < 1900, `2 lệnh sleep 1s song song phải xong ~1s (thực tế ${elapsed}ms)`);
+    // win32: spawn Git Bash cold-start ~0.5–1.5s nên bound rộng hơn; POSIX giữ 1900ms (phân biệt song song vs tuần tự).
+    const limit = process.platform === "win32" ? 4500 : 1900;
+    assert.ok(elapsed < limit, `2 lệnh sleep 1s song song phải xong ~1s (thực tế ${elapsed}ms)`);
   }, 10_000);
 
   describe("toolRunCommand — live output streaming (onOutput)", () => {

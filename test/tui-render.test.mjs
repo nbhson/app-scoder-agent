@@ -75,13 +75,14 @@ describe("tui chrome — fuelGauge/gaugeColor", () => {
 // ── BuildRail: wide (sidebar) vs narrow (fallback) ───────────────────────────
 
 describe("tui chrome — BuildRail wide/narrow", () => {
-  it("wide: 1 hàng scoder·model | ⛨ perm | lamp | gauge; KHÔNG breadcrumb/metrics", async () => {
+  it("wide: 1 hàng scoder | ⛨ perm · ● build lamp bên phải; KHÔNG model/gauge/breadcrumb", async () => {
     const s = runningState();
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
-    assert.match(out, /scoder · m1/);
+    assert.match(out, /scoder/);
     assert.match(out, /⛨ auto/);
     assert.match(out, /● no build yet/);
-    assert.match(out, /— idle/); // chưa có step → idle gauge
+    assert.ok(!out.includes("m1"), "wide mode không hiện model (trùng bottom StatusBar)");
+    assert.ok(!out.includes("▰") && !out.includes("— idle"), "wide mode không hiện fuel gauge (trùng sidebar METRICS)");
     assert.ok(!out.includes("› "), "wide mode không render breadcrumb (chuyển sang sidebar)");
     assert.ok(!out.includes("starting…"), "wide mode không render metrics row");
   });
@@ -93,8 +94,8 @@ describe("tui chrome — BuildRail wide/narrow", () => {
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 70);
     assert.match(out, /plan › explore › edit › build › verify/);
     assert.match(out, /0:00/); // startedAt đã set (run_start) → metrics row = elapsed
-    // gauge có step
-    assert.match(out, /1\/40/);
+    // fuel gauge đã bỏ khỏi header (trùng sidebar / StatusBar hiện step count)
+    assert.ok(!out.includes("▰"), "header không còn fuel gauge");
   });
 
   it("running + usage: metrics row có tok/s + elapsed", async () => {
@@ -104,6 +105,15 @@ describe("tui chrome — BuildRail wide/narrow", () => {
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 70);
     assert.match(out, /tok 1\.2k→340/);
     assert.match(out, /ctx 1%/); // 1200 tokens so với context window
+  });
+
+  it("guardrail notice render ở header (row 2, căn giữa) — KHÔNG còn ở sidebar", async () => {
+    const s = runningState();
+    applyEvent(s, { type: "guardrail", rule: "completion-claim", action: "inject", reason: "bắt build" });
+    const header = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
+    assert.match(header, /agent reminder:/);
+    const sidebar = await renderOnce(React.createElement(Sidebar, { state: s, config }), 120);
+    assert.ok(!sidebar.includes("⚠"), "sidebar không còn guardrail notice ở cuối");
   });
 
   it("build lamp ok/fail đổi màu nhãn theo state", async () => {
@@ -162,7 +172,7 @@ describe("tui sidebar — render sections", () => {
     assert.match(out, /◐ gate/);
     assert.match(out, /reconnecting/);
     assert.match(out, /● build fail/);
-    assert.match(out, /⚠/); // guardrail notice
+    assert.ok(!out.includes("⚠"), "guardrail notice đã chuyển lên header");
   });
 
   it("config không có mcpServers → 'none configured'", async () => {
@@ -175,6 +185,7 @@ describe("tui sidebar — render sections", () => {
 
   it("SIDEBAR_WIDTH/MIN_COLS export đúng kiểu", () => {
     assert.equal(typeof SIDEBAR_WIDTH, "number");
+    assert.ok(SIDEBAR_WIDTH >= 34, "sidebar rộng hơn bản cũ 30 một chút");
     assert.ok(SIDEBAR_MIN_COLS >= 80);
   });
 });

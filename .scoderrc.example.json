@@ -1,15 +1,97 @@
 {
   "model": "gpt-4o-mini",
+  "provider": "openai",
   "baseUrl": "https://api.openai.com/v1",
+
   "buildCmd": null,
   "maxSteps": 40,
-  "stream": true,
+
+  "guardrails": {
+    "textOnlyStreakLimit": 2,
+    "doomLoopRepeats": 2,
+    "wrapUpStepsBeforeEnd": 2
+  },
+
+  "compaction": {
+    "trigger": 0.8,
+    "keep": 0.15,
+    "buffer": 0.15,
+    "contextWindow": 128000
+  },
+
+  "formatter": true,
+  "snapshots": true,
+  "reasoning": "off",
+
+  "sandbox": { "mode": "off" },
+
+  "limits": {
+    "requestTimeoutMs": 120000,
+    "maxOutputChars": 20000,
+    "toolConcurrency": 4,
+    "renderCap": 200
+  },
+
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "{env:GITHUB_TOKEN}" }
+    },
+    "remote": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "authorization": "Bearer {env:MCP_TOKEN}" }
+    }
+  },
+
   "permissions": {
     "mode": "auto",
-    "allowCommands": ["npm ", "git ", "npx ", "pnpm ", "make ", "cargo "],
-    "denyCommands": ["curl ", "wget "]
+    "allowCommands": [
+      "npm ",
+      "git ",
+      "npx ",
+      "pnpm ",
+      "yarn ",
+      "node ",
+      "tsc ",
+      "make ",
+      "cargo ",
+      "dotnet "
+    ],
+    "denyCommands": [
+      "curl ",
+      "wget ",
+      "pip install ",
+      "gem install "
+    ],
+    "rules": [
+      { "action": "shell", "resource": "npm *", "effect": "allow" },
+      { "action": "shell", "resource": "git push --force*", "effect": "ask" },
+      { "action": "shell", "resource": "rm *", "effect": "ask" }
+    ]
   },
+
+  "shellEnvAllow": [
+    "GITHUB_TOKEN",
+    "SCODER_API_KEY",
+    "OPENAI_API_KEY"
+  ],
+
+  "providers": {
+    "my-llm": {
+      "baseUrl": "https://llm.example.com/v1",
+      "apiKeyEnv": "MY_LLM_KEY",
+      "kind": "openai",
+      "supportCache": false,
+      "supportReasoning": false
+    }
+  },
+
   "modelPricing": {
-    "gpt-4o-mini": { "input": 0.15, "output": 0.6 }
+    "gpt-4.1-nano": { "input": 0.075, "output": 0.15 }
   }
 }

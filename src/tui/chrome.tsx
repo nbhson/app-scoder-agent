@@ -5,19 +5,17 @@
 import React from "react";
 import { Box, Text, useWindowSize } from "ink";
 import type { AgentConfig } from "../config.js";
-import { contextWindowFor } from "../model-catalog.js";
-import { resolveModelPricing } from "../constants.js";
 import type { TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
 import { Spinner } from "./chat-views.js";
 
 /** Fuel gauge is scaled to this many cells regardless of maxSteps. */
-const GAUGE_CELLS = 10;
+export const GAUGE_CELLS = 12;
 
 /** Sidebar phải: tổng rộng (kể cả border + padding) — pattern opencode. */
-export const SIDEBAR_WIDTH = 30;
+export const SIDEBAR_WIDTH = 40;
 /** Dưới ngưỡng cột này ẩn sidebar — BuildRail fallback sang header đầy đủ. */
-export const SIDEBAR_MIN_COLS = 88;
+export const SIDEBAR_MIN_COLS = 92;
 
 /** Scaled step fuel gauge: ▰ filled / ▱ remaining, e.g. ▰▰▰▰▱▱▱▱ 4/40. */
 export function fuelGauge(step: number, maxSteps: number): string | null {
@@ -33,56 +31,73 @@ export function gaugeColor(step: number, maxSteps: number): string {
 }
 
 /**
- * Build Rail — top bar. Một hàng duy nhất: `scoder · model | ⛨ perm · ● lamp |
- * gauge` (không còn mcp×N — sidebar có section MCP riêng). Terminal rộng
- * (≥ SIDEBAR_MIN_COLS, sidebar hiển thị): hàng phụ breadcrumb+metrics cũng
- * chuyển hết sang sidebar; terminal hẹp (sidebar ẩn) giữ hàng phụ như cũ.
+ * BuildRail — polished top bar (SINGLE row).
+ *
+ * Layout:  [⚑ scoder] ── [phase breadcrumb / guardrail warning] ── [perm] [build] [steps]
+ *
+ * Terminal ≥ SIDEBAR_MIN_COLS: sidebar handles METRICS + PHASES.
+ * Terminal < SIDEBAR_MIN_COLS: phase breadcrumb + metrics move into this row.
  */
 export function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
   const { columns } = useWindowSize();
   const wide = (columns ?? 100) >= SIDEBAR_MIN_COLS;
-  const width = Math.max(40, (columns ?? 100) - 6); // usable inner width
-  const lampColor = state.buildLamp === "ok" ? theme.success : state.buildLamp === "fail" ? theme.error : theme.dim;
-  const lampLabel = state.buildLamp === "ok" ? "build ok" : state.buildLamp === "fail" ? "build fail" : "no build yet";
-  const gauge = fuelGauge(state.step, state.maxSteps);
-  const gColor = gaugeColor(state.step, state.maxSteps);
   const perm = state.permission || config.permissionMode;
-  const model = state.model || config.model || "—";
+  const permColor = perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim;
 
-  const right = gauge ? `${gauge} ${state.step}/${state.maxSteps}` : "— idle";
-  const lamp = `● ${lampLabel}`;
-  const leftBudget = Math.max(8, width - right.length - lamp.length - 12);
-  // Hàng phụ chỉ khi terminal hẹp (không có sidebar) và run đang hoạt động.
-  const showSecondRow = !wide && (state.status === "running" || state.phases.length > 0);
+  // Build lamp
+  const lampColor = state.buildLamp === "ok" ? theme.success : state.buildLamp === "fail" ? theme.error : theme.dim;
+  const lampLabel = state.buildLamp === "ok" ? "✓" : state.buildLamp === "fail" ? "✗" : "○";
+  const lampText = state.buildLamp === "ok" ? "ok" : state.buildLamp === "fail" ? "fail" : "—";
+
+  // Step badge
+  const stepLabel = state.step > 0
+    ? `${state.step}${state.maxSteps > 0 ? `/${state.maxSteps}` : ""}`
+    : "idle";
+
+  // Guardrail: shown inline if it fired (small warning before the phase breadcrumb)
+  const hasGuardrail = Boolean(state.lastGuardrail);
+
+  // Phase breadcrumb or narrow-terminal metrics (right of the center)
+  const showNarrowMetrics = !wide && (state.status === "running" || state.phases.length > 0);
+
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={theme.border} paddingX={1} flexShrink={0}>
-      <Box justifyContent="space-between">
-        <Text>
-          <Text bold color={theme.brand}>scoder</Text>
-          <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length))}</Text>
-        </Text>
-        <Text>
-          <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
-          <Text> </Text>
-          <Text color={lampColor}>{lamp}</Text>
-        </Text>
-        <Text>
-          {gauge && (
-            <>
-              <Text color={gColor}>{gauge}</Text>
-              <Text dimColor> {state.step}/{state.maxSteps}</Text>
-            </>
-          )}
-          {!gauge && <Text dimColor>— idle</Text>}
-        </Text>
+    <Box
+      borderStyle="bold"
+      borderColor={theme.border}
+      paddingX={1}
+      justifyContent="space-between"
+      alignItems="center"
+      flexShrink={0}
+    >
+      {/* Left: brand logo */}
+      <Text bold color={theme.brand}>
+        ⚑ <Text bold>scoder</Text>
+      </Text>
+
+      {/* Center: guardrail warning OR phase breadcrumb */}
+      <Box flexGrow={1} justifyContent="center">
+        {hasGuardrail ? (
+          <Text color={theme.warn} bold>⚠ {fit(state.lastGuardrail!, 40)}</Text>
+        ) : state.status === "running" ? (
+          showNarrowMetrics ? (
+            <PhaseBreadcrumb phases={state.phases} />
+          ) : (
+            <Text dimColor>plan › explore › edit › build › verify</Text>
+          )
+        ) : (
+          <Text dimColor>ready</Text>
+        )}
       </Box>
-      {showSecondRow && (
-        <Box justifyContent="space-between">
-          <PhaseBreadcrumb phases={state.phases} />
-          <LiveMetrics state={state} />
-        </Box>
-      )}
-      {showSecondRow && state.lastGuardrail && <GuardrailNotice text={state.lastGuardrail} />}
+
+      {/* Right: permission · build · steps (compact) */}
+      <Text>
+        <Text color={permColor}>[{perm}]</Text>
+        <Text> </Text>
+        <Text color={lampColor}>{lampLabel}</Text>
+        <Text dimColor> {lampText}</Text>
+        <Text> </Text>
+        <Text dimColor>{stepLabel}</Text>
+      </Text>
     </Box>
   );
 }
@@ -90,6 +105,7 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
 /** Breadcrumb tiến trình: plan › explore › edit › build › verify. */
 const PHASE_SEQUENCE = ["plan", "explore", "edit", "build", "verify"] as const;
 
+/** Clean horizontal phase trail with separator dots (● visited, ○ pending, ◆ current). */
 function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
   const current = phases[phases.length - 1] ?? null;
   return (
@@ -97,11 +113,12 @@ function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
       {PHASE_SEQUENCE.map((p, i) => {
         const visited = phases.includes(p);
         const isCurrent = p === current;
+        const dot = isCurrent ? "◆" : visited ? "●" : "○";
         return (
           <Text key={p}>
-            {i > 0 && <Text dimColor> › </Text>}
+            {i > 0 && <Text dimColor> · </Text>}
             <Text color={isCurrent ? theme.accent : visited ? theme.success : theme.dim} bold={isCurrent}>
-              {p}
+              {dot} {p}
             </Text>
           </Text>
         );
@@ -110,70 +127,62 @@ function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
   );
 }
 
-/** Metrics sống bên phải breadcrumb: tokens (in/out · tok/s) · elapsed · guardrails. */
-function LiveMetrics({ state }: { state: TuiState }): React.JSX.Element {
-  const parts: string[] = [];
-  if (state.usage.calls > 0) {
-    const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-    let tok = `tok ${fmt(state.usage.inputTokens)}→${fmt(state.usage.outputTokens)}`;
-    // tok/s: output tokens / elapsed seconds của run.
-    if (state.startedAt) {
-      const s = ((state.endedAt ?? Date.now()) - state.startedAt) / 1000;
-      if (s > 0.5) tok += ` · ${fmt(Math.round(state.usage.outputTokens / s))} tok/s`;
-    }
-    // T-11: context % — input tokens so với model context window (catalog).
-    const win = contextWindowFor(state.provider, state.model);
-    if (win > 0) {
-      const pct = Math.round((state.usage.inputTokens / win) * 100);
-      tok += ` · ctx ${pct}%`;
-    }
-    // T-11: cost estimate live (pricing từ models.dev bảng builtin).
-    const cost =
-      (state.usage.inputTokens / 1_000_000) * resolveModelPricing(state.model).input +
-      (state.usage.outputTokens / 1_000_000) * resolveModelPricing(state.model).output;
-    if (cost > 0) tok += ` · $${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`;
-    parts.push(tok);
-  }
-  if (state.startedAt) {
-    const s = Math.floor(((state.endedAt ?? Date.now()) - state.startedAt) / 1000);
-    parts.push(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
-  }
-  if (state.guardrailCount > 0) {
-    parts.push(`guardrails ${state.guardrailCount}`);
-  }
-  if (parts.length === 0) return <Text dimColor>starting…</Text>;
-  return <Text dimColor>{parts.join(" · ")}</Text>;
-}
+/** Metrics cho narrow-terminal — không còn dùng (sidebar đã thay thế), giữ để tham khảo. */
 
-/** Guardrail can thiệp gần nhất — hàng riêng, văn bản tự giải thích, không nhồi vào hàng metrics. */
-function GuardrailNotice({ text }: { text: string }): React.JSX.Element | null {
-  return <Text color={theme.warn}>⚠ agent reminder: {text}</Text>;
-}
-
+/**
+ * Status bar — bottom row. Left: spinner · status · elapsed · model.
+ * Right: scroll position OR keyboard hints.
+ */
 export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null }): React.JSX.Element {
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
-  const statusColor = state.status === "running" ? theme.accent : state.status === "success" ? theme.success : state.status === "failed" ? theme.error : theme.dim;
+
+  const statusColor =
+    state.status === "running" ? theme.accent :
+    state.status === "success" ? theme.success :
+    state.status === "failed" ? theme.error : theme.dim;
+
   const statusLabel =
-    state.status === "running" ? `running ${state.step}/${state.maxSteps}` : state.status === "idle" ? "idle" : state.status;
+    state.status === "running"
+      ? `running ${state.step}${state.maxSteps > 0 ? `/${state.maxSteps}` : ""}`
+      : state.status === "idle" ? "idle" : state.status;
+
   const model = state.model || "—";
-  // Left: status · elapsed · model. Right: scroll position or keybinds.
-  // (Tokens/plan/MCP live in the right sidebar — no duplicated display here.)
-  const keybinds = scroll ? `↑ scrollback ${scroll} · ⏎ send · ctrl+c quit` : `⏎ send · pgup history · ctrl+t thinking ${state.thinkingVisible ? "on" : "off"} · ctrl+c quit`;
-  const leftBudget = Math.max(20, width - keybinds.length - 2);
-  const elapsed = state.startedAt ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}` : null;
-  let left = statusLabel + (state.status === "running" && elapsed ? ` · ${elapsed}` : "");
-  const modelPart = ` · ${model}`;
-  if (left.length + modelPart.length <= leftBudget) left += modelPart;
-  else left = fit(left, leftBudget);
+  const elapsed = state.startedAt
+    ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}`
+    : null;
+
+  // Right side: scroll position OR helpful keybinds
+  const rightText = scroll
+    ? `scroll ${scroll} · esc→tail`
+    : `⏎ send · ctrl+s sessions · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
+
+  const leftBudget = Math.max(24, width - rightText.length - 3);
+  let left = statusLabel;
+  if (elapsed && state.status === "running") left += ` · ${elapsed}`;
+  if (model && model !== "—") {
+    const part = ` · ${model}`;
+    if (left.length + part.length <= leftBudget) left += part;
+    else left = fit(left, leftBudget);
+  }
+
   return (
-    <Box borderStyle="single" borderColor={theme.border} paddingX={1} justifyContent="space-between" flexShrink={0}>
+    <Box
+      borderStyle="bold"
+      borderColor={theme.border}
+      paddingX={1}
+      justifyContent="space-between"
+      alignItems="center"
+      flexShrink={0}
+    >
+      {/* Left: live spinner + status */}
       <Text>
         {state.status === "running" && <Spinner active />}
-        {state.status === "running" ? " " : ""}
-        <Text color={statusColor}>{left}</Text>
+        {state.status === "running" ? "  " : "   "}
+        <Text color={statusColor} bold>{left}</Text>
       </Text>
-      <Text dimColor>{keybinds}</Text>
+      {/* Right: hints */}
+      <Text dimColor>{fit(rightText, Math.floor(width * 0.5))}</Text>
     </Box>
   );
 }

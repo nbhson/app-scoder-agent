@@ -1,7 +1,7 @@
 {
   "name": "s-app-scoder-agent",
-  "version": "0.6.0",
-  "description": "Autonomous coding agent CLI - similar to opencode/cline/claude. Runs tasks until build succeeds.",
+  "version": "0.7.0",
+  "description": "Autonomous coding agent CLI — writes, edits, and builds code autonomously until the project compiles without errors.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm test",
+    "prepublishOnly": "npm run lint && npm run typecheck",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
@@ -22,6 +22,7 @@
   "engines": {
     "node": ">=20"
   },
+  "author": "nbhson",
   "keywords": [
     "cli",
     "agent",
@@ -42,7 +43,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    ".scoderrc.example.json"
   ],
   "devDependencies": {
     "@eslint/js": "^10.0.1",

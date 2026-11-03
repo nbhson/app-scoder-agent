@@ -3,9 +3,10 @@
  * diff có màu (DiffLine), scroll được (pageUp/pageDown do TuiApp điều phối
  * qua useInput chung), không cắt cứng 12 dòng.
  */
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { DiffLine } from "./chat-views.js";
+import { theme } from "./theme.js";
 
 export interface PermissionModalProps {
   prompt: {
@@ -18,6 +19,10 @@ export interface PermissionModalProps {
 
 const MODAL_DIFF_WINDOW = 20; // rows hiển thị cùng lúc; scroll bằng pgup/pgdn
 
+/**
+ * Permission request modal — elevated visual with a bold colored header
+ * bar, the command preview, a scrollable diff (if any), and the key legend.
+ */
 export function PermissionModal({ prompt }: PermissionModalProps): React.JSX.Element {
   const [offset, setOffset] = useState(0);
   const lines = prompt.diff ? prompt.diff.split("\n") : [];
@@ -29,25 +34,39 @@ export function PermissionModal({ prompt }: PermissionModalProps): React.JSX.Ele
   });
   const start = Math.max(0, Math.min(offset, Math.max(0, lines.length - MODAL_DIFF_WINDOW)));
   const shown = lines.slice(start, start + MODAL_DIFF_WINDOW);
-  const hidden = lines.length - shown.length;
+  const hasMoreAbove = start > 0;
+  const hasMoreBelow = start + MODAL_DIFF_WINDOW < lines.length;
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
-      <Text color="yellow" bold>
-        ⚠ permission required — {prompt.kind}
-      </Text>
-      <Text>{prompt.label}</Text>
+    <Box flexDirection="column" borderStyle="bold" borderColor={theme.warn} paddingX={1} paddingY={1}>
+      {/* Header bar */}
+      <Box justifyContent="space-between" marginBottom={1}>
+        <Text color={theme.warn} bold>⚠ permission — {prompt.kind}</Text>
+        <Text dimColor>timeout {prompt.timeoutSecs}s → deny</Text>
+      </Box>
+
+      {/* Command description */}
+      <Text bold>{prompt.label}</Text>
+
+      {/* Diff (if any) */}
       {prompt.diff && (
         <Box flexDirection="column" marginTop={1}>
+          {hasMoreAbove && <Text dimColor>↑ {start} earlier lines</Text>}
           {shown.map((l, i) => (
             <DiffLine key={start + i} line={l.length > 160 ? l.slice(0, 160) + "…" : l} />
           ))}
-          {start > 0 && <Text dimColor>… ↑ {start} earlier lines (pgup/pgdn scroll)</Text>}
-          {start + MODAL_DIFF_WINDOW < lines.length && <Text dimColor>… ↓ {lines.length - start - MODAL_DIFF_WINDOW} more lines (pgup/pgdn scroll)</Text>}
+          {hasMoreBelow && (
+            <Text dimColor>↓ {lines.length - start - MODAL_DIFF_WINDOW} more lines</Text>
+          )}
         </Box>
       )}
-      <Text dimColor>
-        [y] yes/once · [a] always/session · [n] no · [q] quit · pgup/pgdn diff — timeout {prompt.timeoutSecs}s ⇒ deny
-      </Text>
+
+      {/* Key legend */}
+      <Box marginTop={1} flexDirection="column">
+        <Text dimColor>{"─".repeat(28)}</Text>
+        <Text dimColor>  y · a · n · q  to answer</Text>
+        {prompt.diff && <Text dimColor>  pgup · pgdn · home · end  scroll diff</Text>}
+      </Box>
     </Box>
   );
 }

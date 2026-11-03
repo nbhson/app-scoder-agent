@@ -89,9 +89,13 @@ export class StdioTransport implements McpTransport {
   }
 
   async start(): Promise<void> {
-    const p = spawn(this.cfg.command!, this.cfg.args ?? [], {
+    const command = this.cfg.command;
+    if (!command) throw new Error("MCP stdio transport requires \"command\" in the server config");
+    const p = spawn(command, this.cfg.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...expandEnv(this.cfg.env) },
+      // Windows: npx/foo.cmd chỉ spawn được qua shell (libuv không tự tìm .cmd).
+      shell: process.platform === "win32",
     });
     this.proc = p;
     p.stderr?.on("data", (c: Buffer) => {
@@ -178,6 +182,8 @@ export class HttpTransport implements McpTransport {
   }
 
   private async post(msg: object, sessionId: string | null): Promise<Response> {
+    const url = this.cfg.url;
+    if (!url) throw new Error("MCP HTTP transport requires \"url\" in the server config");
     // M3: headers hỗ trợ {env:VAR} substitution như env — không hardcode secrets.
     const headers: Record<string, string> = {
       "content-type": "application/json",
@@ -186,14 +192,14 @@ export class HttpTransport implements McpTransport {
     };
     if (sessionId) headers["mcp-session-id"] = sessionId;
     try {
-      return await fetch(this.cfg.url!, {
+      return await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(msg),
         signal: AbortSignal.timeout(120_000),
       });
     } catch (e) {
-      throw new Error(`MCP HTTP "${this.cfg.url}": ${(e as Error).message}`);
+      throw new Error(`MCP HTTP "${url}": ${(e as Error).message}`, { cause: e });
     }
   }
 

@@ -108,7 +108,8 @@ export async function resolveSandbox(
 ): Promise<{ argv: string[]; wrapper: SandboxWrapper } | { argv: null; wrapper: null; reason: string }> {
   const plan = planSandbox(cfg, workdir, command);
   if (!plan) return { argv: null, wrapper: null, reason: "sandbox off" };
-  const check = spawnSync("which", [plan.wrapper], { encoding: "utf8" });
+  // `which` không có trên Windows — dùng `where`.
+  const check = spawnSync(process.platform === "win32" ? "where" : "which", [plan.wrapper], { encoding: "utf8" });
   if (check.status !== 0) {
     return { argv: null, wrapper: null, reason: `${plan.wrapper} not found — running unsandboxed` };
   }

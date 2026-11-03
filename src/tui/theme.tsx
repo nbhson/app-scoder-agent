@@ -20,96 +20,60 @@ export interface Theme {
   user: string;
   dim: string;
   border: string;
+  // ── T-15: display enhancement tokens ──────────────────────────────────────
+  mermaid: string;  // mermaid diagram accent (purple)
+  thinking: string; // reasoning/thinking blocks
+  code: string;     // inline code + syntax highlight base
+  table: string;    // table header accent
 }
 
 const MISSION: Theme = {
-  brand: "magenta",
-  accent: "cyan",
-  success: "green",
-  error: "red",
-  warn: "yellow",
-  user: "blue",
-  dim: "gray",
-  border: "gray",
+  brand: "magenta", accent: "cyan", success: "green", error: "red", warn: "yellow",
+  user: "blue", dim: "gray", border: "gray",
+  mermaid: "magentaBright", thinking: "gray", code: "green", table: "cyan",
 };
 
 const PAPER: Theme = {
-  brand: "blue",
-  accent: "blue",
-  success: "green",
-  error: "red",
-  warn: "yellow",
-  user: "black",
-  dim: "gray",
-  border: "gray",
+  brand: "blue", accent: "blue", success: "green", error: "red", warn: "yellow",
+  user: "black", dim: "gray", border: "gray",
+  mermaid: "magentaBright", thinking: "gray", code: "green", table: "cyan",
 };
 
 const MONO: Theme = {
-  brand: "white",
-  accent: "white",
-  success: "white",
-  error: "white",
-  warn: "white",
-  user: "white",
-  dim: "gray",
-  border: "gray",
+  brand: "white", accent: "white", success: "white", error: "white", warn: "white",
+  user: "white", dim: "gray", border: "gray",
+  mermaid: "whiteBright", thinking: "white", code: "whiteBright", table: "whiteBright",
 };
 
-// T8: theme pack mở rộng — light/high-contrast/solarized (16-color names,
-// degrade đúng trên terminal không đủ màu).
 const LIGHT: Theme = {
-  brand: "magentaBright",
-  accent: "cyanBright",
-  success: "greenBright",
-  error: "redBright",
-  warn: "yellowBright",
-  user: "blueBright",
-  dim: "blackBright",
-  border: "blackBright",
+  brand: "magentaBright", accent: "cyanBright", success: "greenBright", error: "redBright",
+  warn: "yellowBright", user: "blueBright", dim: "blackBright", border: "blackBright",
+  mermaid: "magentaBright", thinking: "gray", code: "greenBright", table: "cyanBright",
 };
 
 const HIGH_CONTRAST: Theme = {
-  brand: "whiteBright",
-  accent: "cyanBright",
-  success: "greenBright",
-  error: "redBright",
-  warn: "yellowBright",
-  user: "whiteBright",
-  dim: "white",
-  border: "white",
+  brand: "whiteBright", accent: "cyanBright", success: "greenBright", error: "redBright",
+  warn: "yellowBright", user: "whiteBright", dim: "white", border: "whiteBright",
+  mermaid: "magentaBright", thinking: "whiteBright", code: "greenBright", table: "cyanBright",
 };
 
 const SOLARIZED: Theme = {
-  brand: "magentaBright", // magenta
-  accent: "cyanBright", // cyan
-  success: "greenBright", // green
-  error: "redBright", // red/orange
-  warn: "yellowBright", // yellow
-  user: "blueBright", // blue
-  dim: "gray", // base01
-  border: "gray",
+  brand: "magentaBright", accent: "cyanBright", success: "greenBright", error: "redBright",
+  warn: "yellowBright", user: "blueBright", dim: "gray", border: "gray",
+  mermaid: "magentaBright", thinking: "gray", code: "greenBright", table: "cyanBright",
 };
 
 export const THEMES: Record<string, Theme> = {
-  mission: MISSION,
-  paper: PAPER,
-  mono: MONO,
-  light: LIGHT,
-  "high-contrast": HIGH_CONTRAST,
-  solarized: SOLARIZED,
+  mission: MISSION, paper: PAPER, mono: MONO,
+  light: LIGHT, "high-contrast": HIGH_CONTRAST, solarized: SOLARIZED,
 };
 
-/**
- * T8: theme mặc định theo terminal caps — terminal không hỗ trợ 256color
- * (TERM=dumb, COLOR_COUNT thấp) dùng mono để degrade an toàn.
- */
 export function defaultThemeName(env: NodeJS.ProcessEnv = process.env): string {
   if (env.TERM === "dumb" || !env.TERM) return "mono";
   if (env.COLOR_COUNT && Number(env.COLOR_COUNT) < 16) return "mono";
   return "mission";
 }
 
-/** Resolve theme: .scoder/theme.json (name or inline colors) > terminal-caps default. */
 export function getTheme(workdir: string): Theme {
   const p = join(workdir, ".scoder", "theme.json");
   if (existsSync(p)) {
@@ -117,26 +81,16 @@ export function getTheme(workdir: string): Theme {
       const raw = JSON.parse(readFileSync(p, "utf8")) as { name?: string } & Partial<Theme>;
       const base = raw.name ? THEMES[raw.name] ?? THEMES[defaultThemeName()] : THEMES[defaultThemeName()];
       return { ...base, ...Object.fromEntries(Object.entries(raw).filter(([k]) => k in base)) } as Theme;
-    } catch {
-      // malformed theme.json → default (never crash the TUI over a color)
-    }
+    } catch { /* malformed → default */ }
   }
   return THEMES[defaultThemeName()];
 }
 
-/** Current active theme — set at TUI mount (module-level for easy imports). */
 let active: Theme = MISSION;
+export function setActiveTheme(t: Theme): void { active = t; }
 
-export function setActiveTheme(t: Theme): void {
-  active = t;
-}
-
-/** Hot-swap theme name at runtime (/theme). Returns a notice. */
 export function useNamedTheme(name: string): string {
-  // T8: "/theme list" — liệt kê kèm mô tả ngắn.
-  if (name === "list") {
-    return `themes: ${Object.keys(THEMES).join(", ")} — /theme <name> để chuyển; project default qua .scoder/theme.json`;
-  }
+  if (name === "list") return `themes: ${Object.keys(THEMES).join(", ")} — /theme <name>`;
   const t = THEMES[name];
   if (!t) return `ERROR: unknown theme "${name}" — available: ${Object.keys(THEMES).join(", ")}`;
   active = t;
@@ -144,20 +98,13 @@ export function useNamedTheme(name: string): string {
 }
 
 export const theme = new Proxy({} as Theme, {
-  get(_t, prop: string) {
-    return (active as unknown as Record<string, unknown>)[prop];
-  },
+  get(_t, prop: string) { return (active as unknown as Record<string, unknown>)[prop]; },
 });
 
 /** Icon per tool name — compact visual vocabulary for the flight recorder. */
 const TOOL_ICONS: Record<string, string> = {
-  list_files: "🗂",
-  read_file: "📖",
-  write_file: "📝",
-  edit_file: "✏️",
-  run_command: "⚡",
-  web_fetch: "🌐",
-  write_todos: "☑",
+  list_files: "🗂", read_file: "📖", write_file: "📝", edit_file: "✏️",
+  run_command: "⚡", web_fetch: "🌐", write_todos: "☑",
 };
 
 export function toolIcon(name: string): string {
@@ -166,7 +113,6 @@ export function toolIcon(name: string): string {
   return "🔧";
 }
 
-/** Truncate to max chars (suffix ellipsis), keeping a single line. */
 export function fit(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + "…";
 }
