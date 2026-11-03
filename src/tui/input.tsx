@@ -261,18 +261,18 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
         </Text>
         {vimMode === "normal" && cursor !== null ? (
           <>
-            <Text>{value.slice(0, cursor)}</Text>
+            <Text color="black">{value.slice(0, cursor)}</Text>
             <Text backgroundColor="gray" color="black">{value[cursor] ?? " "}</Text>
             <Text>{value.slice(cursor + 1)}</Text>
           </>
         ) : value.length === 0 ? (
           <>
-            <Text dimColor>type a message…</Text>
+            <Text color="black" dimColor>type a message…</Text>
             <Text dimColor>▌</Text>
           </>
         ) : (
           <>
-            <Text>{value}</Text>
+            <Text color="black">{value}</Text>
             {ghost && <Text dimColor>{ghost.rest}</Text>}
             <Text dimColor>▌</Text>
           </>
