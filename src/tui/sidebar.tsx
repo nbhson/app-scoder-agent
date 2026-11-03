@@ -272,8 +272,8 @@ export function Sidebar({ state, config }: { state: TuiState; config: AgentConfi
       <SessionSection state={state} config={config} />
       <McpSection state={state} config={config} />
       <MetricsSection state={state} />
-      <PlanSection state={state} />
       <PhaseSection state={state} />
+      <PlanSection state={state} />
       <BuildSection state={state} config={config} />
     </Box>
   );
