@@ -696,7 +696,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}
-      <Box backgroundColor="gray" paddingX={1} paddingTop={1} paddingBottom={1} flexShrink={0} width="100%">
+      <Box backgroundColor="gray" paddingX={1} paddingTop={1} paddingBottom={1} flexShrink={0} alignSelf="stretch">
         <Input
           valueRef={inputRef}
           value={input}
