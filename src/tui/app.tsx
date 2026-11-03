@@ -20,14 +20,15 @@ import { discoverAgents } from "../agents.js";
 import { applyEvent, initialState, markAborted, visibleWindow, type ChatItem, type TuiState } from "./state.js";
 import { parseSlashCommand } from "./commands.js";
 import { dispatchCommand, type CommandHost } from "./command-registry.js";
-import { ChatItemView, Spinner } from "./chat-views.js"; // T2
-import { BuildRail, StatusBar } from "./chrome.js"; // T2
+import { ChatItemView } from "./chat-views.js"; // T2
+import { BuildRail, StatusBar, SIDEBAR_MIN_COLS } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
 import { fileIndex } from "./at-complete.js";
 import { parseWheel, MOUSE_ENABLE, MOUSE_DISABLE } from "./mouse.js"; // T5
 import { getTheme, setActiveTheme, theme, THEMES, useNamedTheme } from "./theme.js";
 import { reviewFromResponse, reviewAnswerToCall, type ReviewState } from "./review.js"; // T2
 import { PermissionModal } from "./permission-modal.js"; // T2
+import { Sidebar } from "./sidebar.js"; // sidebar opencode
 
 
 export interface TuiAppProps {
@@ -537,7 +538,10 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     () => visibleWindow(state.items, viewportRows),
     [state.items, viewportRows],
   );
-  const { rows } = useWindowSize();
+  const { rows, columns } = useWindowSize();
+  // Sidebar phải (pattern opencode): chỉ khi terminal đủ rộng — hẹp thì
+  // BuildRail tự fallback sang header đầy đủ.
+  const showSidebar = (columns ?? 100) >= SIDEBAR_MIN_COLS;
 
   return (
     // flexShrink={0}: pinned chrome must never be squeezed when the chat
@@ -545,17 +549,18 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     // shrank the input bar to zero rows once the log outgrew the terminal.
     <Box flexDirection="column" height={rows || 24} flexShrink={0}>
       <BuildRail state={state} config={config} />
-      {/* Scrollable chat pane — clips overflow so the BuildRail above and the
-          input + StatusBar below stay pinned no matter how long the history. */}
-      <Box
-        ref={viewportRef}
-        flexDirection="column"
-        flexGrow={1}
-        flexShrink={1}
-        minHeight={0}
-        overflow="hidden"
-        contentOffsetY={scrollTop}
-      >
+      {/* Hàng chính: chat bên trái (flexGrow) + Sidebar phải (cố định rộng).
+          Clip overflow để BuildRail trên và Input + StatusBar dưới luôn pinned. */}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
+        <Box
+          ref={viewportRef}
+          flexDirection="column"
+          flexGrow={1}
+          flexShrink={1}
+          minHeight={0}
+          overflow="hidden"
+          contentOffsetY={scrollTop}
+        >
         <Box ref={contentRef} flexDirection="column" paddingX={1} flexShrink={0}>
           {total === 0 ? (
             <Box flexDirection="column" alignItems="center" gap={1} paddingTop={2}>
@@ -577,11 +582,6 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           {visible.map((item, i) => (
             <ChatItemView key={i} item={item} />
           ))}
-          {state.status === "running" && state.step > 0 && (
-            <Text dimColor>
-              <Spinner active /> step {state.step}/{state.maxSteps} — thinking…
-            </Text>
-          )}
           {lastSummary && (
             <Box marginTop={1}>
               {state.status === "success" ? (
@@ -600,6 +600,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
             </Box>
           )}
         </Box>
+        </Box>
+        {/* Sidebar phải: plan live · tok/s · phases · build · MCP (narrow → ẩn). */}
+        {showSidebar && <Sidebar state={state} config={config} />}
       </Box>
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}

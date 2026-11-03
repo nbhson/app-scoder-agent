@@ -14,6 +14,11 @@ import { Spinner } from "./chat-views.js";
 /** Fuel gauge is scaled to this many cells regardless of maxSteps. */
 const GAUGE_CELLS = 10;
 
+/** Sidebar phải: tổng rộng (kể cả border + padding) — pattern opencode. */
+export const SIDEBAR_WIDTH = 30;
+/** Dưới ngưỡng cột này ẩn sidebar — BuildRail fallback sang header đầy đủ. */
+export const SIDEBAR_MIN_COLS = 88;
+
 /** Scaled step fuel gauge: ▰ filled / ▱ remaining, e.g. ▰▰▰▰▱▱▱▱ 4/40. */
 export function fuelGauge(step: number, maxSteps: number): string | null {
   if (maxSteps <= 0) return null;
@@ -22,14 +27,20 @@ export function fuelGauge(step: number, maxSteps: number): string | null {
 }
 
 /** T-11: gauge segment color — green (headroom) → yellow → red (nearly spent). */
-function gaugeColor(step: number, maxSteps: number): string {
+export function gaugeColor(step: number, maxSteps: number): string {
   const ratio = maxSteps > 0 ? Math.min(step, maxSteps) / maxSteps : 0;
   return ratio < 0.6 ? theme.success : ratio < 0.85 ? theme.warn : theme.error;
 }
 
-/** Build Rail — scoder's signature top bar: badges + lamp + fuel gauge. */
+/**
+ * Build Rail — top bar. Một hàng duy nhất: `scoder · model | ⛨ perm · ● lamp |
+ * gauge` (không còn mcp×N — sidebar có section MCP riêng). Terminal rộng
+ * (≥ SIDEBAR_MIN_COLS, sidebar hiển thị): hàng phụ breadcrumb+metrics cũng
+ * chuyển hết sang sidebar; terminal hẹp (sidebar ẩn) giữ hàng phụ như cũ.
+ */
 export function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
   const { columns } = useWindowSize();
+  const wide = (columns ?? 100) >= SIDEBAR_MIN_COLS;
   const width = Math.max(40, (columns ?? 100) - 6); // usable inner width
   const lampColor = state.buildLamp === "ok" ? theme.success : state.buildLamp === "fail" ? theme.error : theme.dim;
   const lampLabel = state.buildLamp === "ok" ? "build ok" : state.buildLamp === "fail" ? "build fail" : "no build yet";
@@ -40,19 +51,15 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
 
   const right = gauge ? `${gauge} ${state.step}/${state.maxSteps}` : "— idle";
   const lamp = `● ${lampLabel}`;
-  // Hàng 1: brand · model | ⛨ perm · ● lamp | gauge. MCP chỉ đếm số (tên xem qua /mcp).
-  const mcpNames = Object.keys(config.mcpServers ?? {});
-  const mcpLabel = mcpNames.length > 0 ? ` · mcp×${mcpNames.length}` : "";
   const leftBudget = Math.max(8, width - right.length - lamp.length - 12);
-  // Hàng phụ chỉ hiện khi run đang hoạt động — idle giữ nguyên một hàng (minimalism).
-  const showSecondRow = state.status === "running" || state.phases.length > 0;
+  // Hàng phụ chỉ khi terminal hẹp (không có sidebar) và run đang hoạt động.
+  const showSecondRow = !wide && (state.status === "running" || state.phases.length > 0);
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={theme.border} paddingX={1} flexShrink={0}>
       <Box justifyContent="space-between">
         <Text>
           <Text bold color={theme.brand}>scoder</Text>
           <Text dimColor> · {fit(model, Math.max(4, leftBudget - "scoder · ".length))}</Text>
-          {mcpLabel && <Text color={theme.accent}>{mcpLabel}</Text>}
         </Text>
         <Text>
           <Text color={perm === "readonly" ? theme.warn : perm === "ask" ? theme.accent : theme.dim}>⛨ {perm}</Text>
@@ -151,7 +158,7 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
     state.status === "running" ? `running ${state.step}/${state.maxSteps}` : state.status === "idle" ? "idle" : state.status;
   const model = state.model || "—";
   // Left: status · elapsed · model. Right: scroll position or keybinds.
-  // (Tokens live in the header metrics row only — no duplicated display here.)
+  // (Tokens/plan/MCP live in the right sidebar — no duplicated display here.)
   const keybinds = scroll ? `↑ scrollback ${scroll} · ⏎ send · ctrl+c quit` : `⏎ send · pgup history · ctrl+t thinking ${state.thinkingVisible ? "on" : "off"} · ctrl+c quit`;
   const leftBudget = Math.max(20, width - keybinds.length - 2);
   const elapsed = state.startedAt ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}` : null;

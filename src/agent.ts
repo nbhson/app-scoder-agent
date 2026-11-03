@@ -76,7 +76,7 @@ export type AgentEvent =
   /** Steering batch delivered into the conversation at a step boundary. */
   | { type: "steer_delivered"; count: number }
   /** MCP connect/status line (routed through the event stream, not stderr). */
-  | { type: "mcp_status"; line: string }
+  | { type: "mcp_status"; line: string; server?: string; state?: string }
   /** Guardrail Engine kích hoạt một rule (dùng cho metrics/debug frontend). */
   | { type: "guardrail"; rule: string; action: string; reason: string }
   /** T-03: permission prompt — frontend renders a modal, answers via resolvePermission(). */
@@ -702,6 +702,13 @@ export class Agent {
       this.logger.log({ type: "mcp_status", line });
       this.emit({ type: "mcp_status", line });
       ui.info(line); // setQuiet suppresses this in the TUI — alt-screen stays clean
+    };
+    // Sidebar TUI: trạng thái máy trạng thái per-server (M1) — event structured
+    // (server/state) để reducer giữ map, không append thêm notice vào chat.
+    this.mcp.onServerState = (name, st, detail) => {
+      const line = `MCP "${name}" ${st}${detail ? ` — ${detail}` : ""}`;
+      this.logger.log({ type: "mcp_status", line, server: name, state: st });
+      this.emit({ type: "mcp_status", line, server: name, state: st });
     };
     await this.mcp.connectAll();
     const mcpSpecs = this.mcp.toToolSpecs();

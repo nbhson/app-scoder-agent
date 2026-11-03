@@ -155,39 +155,13 @@ function DiffItemView({ item }: { item: Extract<ChatItem, { kind: "diff" }> }): 
   );
 }
 
-/** Live plan — checkbox list with per-status colors. */
-function TodoItemView({ item }: { item: Extract<ChatItem, { kind: "todo" }> }): React.JSX.Element {
-  const done = item.items.filter((t) => t.status === "completed").length;
-  return (
-    <Box flexDirection="column" paddingLeft={1} marginTop={1}>
-      <Text>
-        <AgentMark />
-        <Text bold>plan </Text>
-        <Text dimColor>{done}/{item.items.length}</Text>
-      </Text>
-      {item.items.map((t, i) => (
-        <Text key={i}>
-          <Text> </Text>
-          {t.status === "completed" ? (
-            <>
-              <Text color={theme.success}>✔ </Text>
-              <Text color={theme.success} dimColor>{fit(t.content, 80)}</Text>
-            </>
-          ) : t.status === "in_progress" ? (
-            <>
-              <Text color={theme.accent}>◆ </Text>
-              <Text color={theme.accent} bold>{fit(t.content, 80)}</Text>
-            </>
-          ) : (
-            <>
-              <Text dimColor>○ </Text>
-              <Text dimColor>{fit(t.content, 80)}</Text>
-            </>
-          )}
-        </Text>
-      ))}
-    </Box>
-  );
+/**
+ * Plan KHÔNG còn render trong chat — checklist live hiển thị ở Sidebar bên
+ * phải (sidebar.tsx, PlanSection) để transcript sạch; todo items vẫn được
+ * giữ trong state (latestPlan) làm nguồn dữ liệu cho sidebar.
+ */
+function TodoItemView(): null {
+  return null;
 }
 
 export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
@@ -234,7 +208,7 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
     case "diff":
       return <DiffItemView item={item} />;
     case "todo":
-      return <TodoItemView item={item} />;
+      return <TodoItemView />;
     case "build":
       return (
         <Box paddingLeft={1}>

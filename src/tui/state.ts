@@ -71,6 +71,8 @@ export interface TuiState {
   thinkingVisible: boolean;
   /** Các giai đoạn đã đi qua trong run (breadcrumb): plan/explore/edit/build/verify. */
   phases: string[];
+  /** Sidebar: trạng thái kết nối từng MCP server (từ event mcp_status structured). */
+  mcpServers: Record<string, string>;
 }
 
 export function initialState(): TuiState {
@@ -93,6 +95,7 @@ export function initialState(): TuiState {
     lastGuardrail: null,
     thinkingVisible: false,
     phases: [],
+    mcpServers: {},
   };
 }
 
@@ -145,6 +148,18 @@ export function visibleWindow(
     acc += estimateItemRows(items[start]);
   }
   return start === 0 ? items : items.slice(start);
+}
+
+/**
+ * Plan mới nhất cho sidebar — todo items được append mỗi lần update nhưng
+ * sidebar chỉ cần snapshot hiện tại (last-wins), null khi chưa có plan.
+ */
+export function latestPlan(items: ChatItem[]): Extract<ChatItem, { kind: "todo" }> | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "todo") return it;
+  }
+  return null;
 }
 
 function appendItem(state: TuiState, item: ChatItem): void {
@@ -350,7 +365,12 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       break;
     }
     case "mcp_status": {
-      // MCP connect lines render as notices so they scroll with the chat.
+      // Sidebar: structured event (server+state) → cập nhật map, không spam chat.
+      // onStatus riêng vẫn đẩy notice text đầy đủ cho transcript.
+      if (ev.server && ev.state) {
+        state.mcpServers = { ...state.mcpServers, [ev.server]: ev.state };
+        break;
+      }
       appendItem(state, { kind: "notice", text: ev.line, level: ev.line.includes("unavailable") ? "warn" : "info" });
       break;
     }

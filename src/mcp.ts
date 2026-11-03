@@ -424,6 +424,8 @@ export class McpManager {
   private tools = new Map<string, RegisteredMcpTool>();
   /** Status sink (default console.error; the TUI routes it to a notice). */
   onStatus: ((line: string) => void) | null = null;
+  /** Sidebar TUI: máy trạng thái per-server (connecting/ready/reconnecting/dead). */
+  onServerState: ((name: string, state: McpConnState, detail: string) => void) | null = null;
 
   constructor(private configs: Record<string, McpServerConfig>) {}
 
@@ -442,6 +444,7 @@ export class McpManager {
       results.forEach((r, i) => {
         const name = Object.keys(this.configs)[i];
         if (r.status === "rejected") {
+          this.onServerState?.(name, "dead", "connect failed");
           report(`⚠  MCP server "${name}" unavailable: ${String((r.reason as Error)?.message).slice(0, 160)}`);
         } else {
           const n = [...this.tools.values()].filter((t) => t.serverName === name).length;
@@ -455,6 +458,9 @@ export class McpManager {
   /** M1: surface connection state machine + refresh tools sau reconnect. */
   private wireReconnect(name: string, conn: McpConnection): void {
     conn.onState = (state, detail) => {
+      // Sidebar TUI: structured state trước — mọi transition đều thú vị với
+      // map mcpServers, còn chat notice chỉ với reconnect/dead/ready (dưới).
+      this.onServerState?.(name, state, detail);
       const report = this.onStatus ?? ((line: string) => console.error(line));
       if (state === "reconnecting") report(`⚠  MCP "${name}" ${detail}`);
       if (state === "dead") report(`✘ MCP "${name}" dead: ${detail}`);

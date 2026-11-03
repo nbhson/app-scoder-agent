@@ -97,8 +97,11 @@ describe("scoder tui — Ink full-screen UI", () => {
         "test/pty-run.py",
         "--timeout", "30",
         "--send-after", "All done:/help\\r",
-        "--send-after", "(scoder tui):/cost\\r",
-        "--send-after", "2:(scoder tui):exit\\r",
+        // Trigger /cost bằng dòng CUỐI của listing — luôn nằm đáy viewport
+        // (chat hẹp đi 30 cột sidebar nên tiêu đề listing có thể bị clip khỏi
+        // vùng render; dòng cuối luôn thấy).
+        "--send-after", "Anything else is sent to the agent:/cost\\r",
+        "--send-after", "session usage|no LLM calls:exit\\r",
         "--out", outFile,
         "--",
         "node", "dist/index.js",
@@ -121,7 +124,7 @@ describe("scoder tui — Ink full-screen UI", () => {
     const exitCode = await new Promise((resolve) => proc.on("exit", (c) => resolve(c ?? 0)));
     const clean = stripAnsi(readFileSync(outFile, "utf8"));
 
-    assert.ok(/Commands \(scoder tui\)/.test(clean), `phải render /help listing (tail: ${clean.slice(-400)})`);
+    assert.ok(/Anything else is sent to the agent/.test(clean), `phải render /help listing (tail: ${clean.slice(-400)})`);
     assert.ok(clean.includes("/clear") && clean.includes("/cost"), "/help phải liệt kê /clear, /cost");
     assert.ok(/no LLM calls yet|session usage/.test(clean), "/cost phải báo usage");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode})`);
