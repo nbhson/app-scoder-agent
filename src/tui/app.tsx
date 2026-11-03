@@ -696,7 +696,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}
-      <Box borderStyle="bold" borderColor={theme.border} paddingX={1} paddingTop={1} paddingBottom={1} flexShrink={0} flexDirection="column">
+      <Box backgroundColor="gray" paddingX={1} paddingTop={1} paddingBottom={1} flexShrink={0} width="100%">
         <Input
           valueRef={inputRef}
           value={input}
@@ -709,8 +709,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           atSources={atSources}
           modalRef={permPromptRef}
         />
-        <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
       </Box>
+      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
     </Box>
   );
 }
