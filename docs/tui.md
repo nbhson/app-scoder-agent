@@ -61,8 +61,8 @@ scoder tui "fix the bug"       # auto-submit initial task
 - **Guardrail notice** — spans the full available header width inline when a
   guardrail fires (e.g. `⚠ trả lời text chưa dùng tool — nhắc tiếp tục`);
   otherwise the phase breadcrumb (`plan › explore › edit › build › verify`)
-- **Note:** step count (`x/40`) is NOT in the header — it lives in the sidebar
-  METRICS section and the bottom StatusBar (avoiding duplication)
+- **Note:** step count (`x/40`) and elapsed time are NOT in the header/footer —
+  they live in the sidebar METRICS section only (avoiding duplication)
 
 ### Chat Pane
 - User messages with a full colored border + `you ▸` label (bold) so they stand
@@ -89,6 +89,7 @@ scoder tui "fix the bug"       # auto-submit initial task
   to showing the phase breadcrumb + metrics inline
 
 ### Status Bar
+- Status icon + status (running / success / failed / aborted / idle) — no step count or elapsed time (those live in the sidebar)
 - Model name
 - Scroll position
 - Keybind hints

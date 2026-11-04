@@ -139,17 +139,22 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
   const statusColor =
     state.status === "running" ? theme.accent :
     state.status === "success" ? theme.success :
-    state.status === "failed" ? theme.error : theme.dim;
+    state.status === "failed" ? theme.error :
+    state.status === "aborted" ? theme.warn : theme.dim;
 
-  const statusLabel =
-    state.status === "running"
-      ? `running ${state.step}${state.maxSteps > 0 ? `/${state.maxSteps}` : ""}`
-      : state.status === "idle" ? "idle" : state.status;
+  // Status label only — step count (x/40) and elapsed time live in the
+  // sidebar METRICS section, so they are intentionally NOT duplicated here.
+  const statusLabel = state.status === "idle" ? "idle" : state.status;
+
+  // Icon per status — fills the gap before the label (running keeps the
+  // animated spinner; other states get a static, status-appropriate glyph).
+  const statusIcon =
+    state.status === "success" ? "✓" :
+    state.status === "failed" ? "✗" :
+    state.status === "aborted" ? "⚠" :
+    state.status === "idle" ? "○" : null;
 
   const model = state.model || "—";
-  const elapsed = state.startedAt
-    ? `${Math.floor((Date.now() - state.startedAt) / 60000)}:${String(Math.floor((Date.now() - state.startedAt) / 1000) % 60).padStart(2, "0")}`
-    : null;
 
   // Right side: scroll position OR helpful keybinds
   const rightText = scroll
@@ -158,7 +163,6 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
 
   const leftBudget = Math.max(24, width - rightText.length - 3);
   let left = statusLabel;
-  if (elapsed && state.status === "running") left += ` · ${elapsed}`;
   if (model && model !== "—") {
     const part = ` · ${model}`;
     if (left.length + part.length <= leftBudget) left += part;
@@ -174,10 +178,10 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
       alignItems="center"
       flexShrink={0}
     >
-      {/* Left: live spinner + status */}
+      {/* Left: status icon (spinner when running) + status label */}
       <Text>
         {state.status === "running" && <Spinner active />}
-        {state.status === "running" ? "  " : "   "}
+        {state.status === "running" ? "  " : statusIcon ? `${statusIcon} ` : "   "}
         <Text color={statusColor} bold>{left}</Text>
       </Text>
       {/* Right: hints */}
