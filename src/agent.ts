@@ -6,13 +6,13 @@ import { AnthropicClient } from "./provider-anthropic.js";
 import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
 import { invalidateFileIndex } from "./tui/at-complete.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
-import { trimHistory, summariseOutput, expandMentions } from "./context.js";
+import { trimHistory, summariseOutput, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "./prompt-builder.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
-import { DEFAULT_COMPACTION, shouldCompact, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
+import { DEFAULT_COMPACTION, shouldCompact, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { SnapshotManager } from "./snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
@@ -887,6 +887,21 @@ export class Agent {
   }
 
   /**
+   * Resolve compaction settings from config + model catalog (H-10/I-02).
+   * Also used by `/compact`: manual compaction is an explicit user action and
+   * stays available even when auto-compaction is disabled.
+   */
+  private compactionSettings(): CompactionConfig {
+    const catalogWindow = contextWindowFor(this.config.provider, this.config.model);
+    const overrides = this.config.compaction;
+    return {
+      ...DEFAULT_COMPACTION,
+      contextWindow: this.config.contextWindow ?? catalogWindow,
+      ...(overrides && typeof overrides === "object" ? overrides : {}),
+    };
+  }
+
+  /**
    * The shared autonomous loop:
    * LLM plans -> tool calls -> build -> on failure: read error, patch, retry.
    */
@@ -903,14 +918,17 @@ export class Agent {
     // H-10 compaction config (false = disabled → mechanical trim only).
     // I-02: contextWindow từ model catalog (lookup sync, cache/fallback) thay
     // vì default 128k cứng — compaction trigger chính xác theo model.
-    const catalogWindow = contextWindowFor(this.config.provider, this.config.model);
-    const compactionCfg: CompactionConfig | null = this.config.compaction === false
-      ? null
-      : {
-          ...DEFAULT_COMPACTION,
-          contextWindow: this.config.contextWindow ?? catalogWindow,
-          ...(this.config.compaction ?? {}),
-        };
+    const compactionCfg: CompactionConfig | null =
+      this.config.compaction === false ? null : this.compactionSettings();
+    // Compaction-aware trim: mechanical trim scales with the model window and
+    // starts AFTER compaction (95% vs 80% trigger). Disabled compaction keeps
+    // the legacy conservative 90k cap.
+    const trimBudget = compactionCfg
+      ? historyTokenBudget(compactionCfg.contextWindow)
+      : MAX_HISTORY_TOKENS;
+    // When a run ends early (guardrail finish/build verification) compaction is
+    // skipped, so never leave a near-full window for the next turn.
+    const safeTrimBudget = Math.min(trimBudget, MAX_HISTORY_TOKENS);
 
     while (steps < this.config.maxSteps && !this.aborted) {
       // ── Safe step boundary: deliver steered user input (H-08) ────────────
@@ -1081,7 +1099,7 @@ export class Agent {
           // Xác minh độc lập với lời của model (async — loop tự chạy build).
           lastBuild = await this.checkBuild(buildCmd);
           if (lastBuild.success) {
-            if (doTrim) this.messages = trimHistory(this.messages);
+            if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
             return this.finish(true, steps, buildCmd, a.successSummary);
           }
           reminders.push(`${a.failReminder}\n${summariseOutput(lastBuild.output)}\nFix and continue.`);
@@ -1091,17 +1109,19 @@ export class Agent {
           // Giữ nguyên thứ tự tin nhắn như bản inline cũ: reminder (wrap-up)
           // đã đẩy trước khi kết thúc.
           for (const r of reminders) this.messages.push({ role: "user", content: r });
-          if (doTrim) this.messages = trimHistory(this.messages);
+          if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
           return this.finish(a.success, steps, buildCmd, a.summary, a.chatOnly ?? false);
         }
       }
       for (const r of reminders) this.messages.push({ role: "user", content: r });
-      if (doTrim) this.messages = trimHistory(this.messages);
 
       // H-10: LLM compaction when history approaches the context window.
+      // Runs BEFORE mechanical trim: trim drops whole turns, which could push
+      // the history below the trigger before compaction ever sees it.
       if (compactionCfg && shouldCompact(this.messages, compactionCfg)) {
         try {
           ui.info("compaction: summarizing older history…");
+          const tokensBefore = estimateTokens(this.messages);
           const summaryInput = extractSummaryInput(this.currentTask, this.messages);
           const summaryRes = await this.client.chat(
             [
@@ -1111,15 +1131,25 @@ export class Agent {
             [], // no tools for the summarizer call
             { signal: this.runSignal.signal },
           );
+          this.recordLlmUsage(summaryRes.usage);
           this.messages = applyCompaction(this.messages, redactSecrets(summaryRes.message.content ?? "History summarized."), compactionCfg);
-          this.events.append({ type: "compaction.ran", tokensBefore: 0, summary: (summaryRes.message.content ?? "").slice(0, 2000) });
-          ui.info(`compaction: done (history now ${this.messages.length} messages)`);
+          const tokensAfter = estimateTokens(this.messages);
+          this.events.append({
+            type: "compaction.ran",
+            tokensBefore,
+            tokensAfter,
+            summary: (summaryRes.message.content ?? "").slice(0, 2000),
+          });
+          ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${this.messages.length} messages)`);
         } catch (err) {
           // Compaction is best-effort — mechanical trim stays as fallback.
           ui.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
-          this.messages = trimHistory(this.messages);
+          // Fallback uses the legacy conservative cap: the next LLM call must
+          // not leave a near-full window if summarization failed.
+          this.messages = trimHistory(this.messages, safeTrimBudget);
         }
       }
+      if (doTrim) this.messages = trimHistory(this.messages, trimBudget);
 
       // Persist session state after every step (enables resume after crash/SIGINT)
       this.saveSession(steps, buildCmd, lastBuild);
@@ -1187,6 +1217,58 @@ export class Agent {
   }
 
   // ── Frontend-facing APIs (REPL/TUI slash commands) ─────────────────────────
+
+  /**
+   * Manual compaction (`/compact`): summarize older history now, keeping the
+   * system prompt + the most recent turns. Explicit user action — available
+   * even when auto-compaction is disabled via `"compaction": false`.
+   */
+  async compactHistory(): Promise<{ ok: boolean; message: string }> {
+    if (this.messages.length === 0) {
+      return { ok: false, message: "nothing to compact — no conversation yet" };
+    }
+    const cfg = this.compactionSettings();
+    const firstContent = this.messages[0]?.role === "system" ? 1 : 0;
+    if (findCutIndex(this.messages, cfg) <= firstContent) {
+      return { ok: false, message: "nothing to compact — conversation is already short" };
+    }
+    const tokensBefore = estimateTokens(this.messages);
+    const messagesBefore = this.messages.length;
+    const summaryInput = extractSummaryInput(this.currentTask, this.messages);
+    ui.info("compaction: summarizing older history…");
+    try {
+      // A previous run interrupted with Esc leaves the shared signal aborted.
+      if (this.runSignal.signal.aborted) this.resetRunSignal();
+      const summaryRes = await this.client.chat(
+        [
+          ...this.messages,
+          { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}` },
+        ],
+        [], // no tools for the summarizer call
+        { signal: this.runSignal.signal },
+      );
+      this.recordLlmUsage(summaryRes.usage);
+      const summary = redactSecrets(summaryRes.message.content ?? "History summarized.");
+      this.messages = applyCompaction(this.messages, summary, cfg);
+      const tokensAfter = estimateTokens(this.messages);
+      this.events.append({
+        type: "compaction.ran",
+        tokensBefore,
+        tokensAfter,
+        manual: true,
+        summary: summary.slice(0, 2000),
+      });
+      ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens)`);
+      return {
+        ok: true,
+        message: `compaction done: ${messagesBefore} → ${this.messages.length} messages · ~${tokensBefore} → ~${tokensAfter} tokens`,
+      };
+    } catch (err) {
+      const msg = (err as Error).message.slice(0, 200);
+      ui.warn(`compaction failed (${msg})`);
+      return { ok: false, message: `compaction failed: ${msg}` };
+    }
+  }
 
   /** Skills visible to this project (for /skills). */
   getSkills(): Skill[] {

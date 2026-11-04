@@ -50,7 +50,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoin
 # Run a task
 scoder "add a ping function to src/network.ts"
 
-# Interactive REPL (supports /help, /clear, /cost, /model, /skills, /skill, /mcp, /review, /permission)
+# Interactive REPL (supports /help, /clear, /compact, /cost, /model, /skills, /skill, /mcp, /review, /permission)
 scoder
 ```
 
@@ -234,6 +234,7 @@ Read the current diff. Check for: null derefs, injection risks, ...
 |---|---|
 | `/help` | command list |
 | `/clear` | reset conversation + agent context |
+| `/compact` | summarize older history now (manual compaction) |
 | `/cost` | session token usage |
 | `/model` | active model/provider/build |
 | `/skills` | list discovered skills |
@@ -244,6 +245,23 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | `/exit` | quit |
 
 In the TUI, **Tab** completes commands (and `/skill` names, `/mcp <server> <tool>` arguments), **↑/↓** recall sent-message history.
+
+### Context compaction
+
+Long runs are summarized automatically when history reaches `contextWindow × trigger` (default **80%**). Mechanical trimming only starts later, at **95%** of the window, so compaction gets the first chance to preserve task state. `/compact` runs the same summarization immediately (useful mid-session or when auto-compaction is disabled).
+
+```jsonc
+// .scoderrc.json — all fields optional
+"compaction": {
+  "trigger": 0.8,      // fraction of the model window that triggers compaction
+  "keep": 0.15,        // recent-history fraction kept verbatim
+  "buffer": 0.15,      // extra recent-history fraction never summarized
+  "contextWindow": 128000 // override the model-catalog window
+}
+// "compaction": false disables automatic compaction (mechanical trim only)
+```
+
+`/compact` remains available even when automatic compaction is disabled.
 
 ### @file mentions
 
@@ -377,7 +395,7 @@ Features:
 - **Header row 2** — (no longer present; phase breadcrumb + metrics moved into the sidebar / status bar to avoid duplication)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
 - **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
-- **Slash commands** — `/help`, `/clear`, `/cost`, `/model`, `/skills`, `/skill`, `/mcp`, `/review`, `/permission`, `/exit` (identical to the REPL)
+- **Slash commands** — `/help`, `/clear`, `/compact`, `/cost`, `/model`, `/skills`, `/skill`, `/mcp`, `/review`, `/permission`, `/exit` (identical to the REPL)
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
 - **Scrollback** — `PgUp`/`PgDn` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
 - **Keybinds** — `Enter` send · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+C` quit

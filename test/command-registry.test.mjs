@@ -96,6 +96,43 @@ describe("dispatchCommand (T1)", () => {
     assert.match(s.lines[0].text, /no LLM calls yet/);
   });
 
+  it("/compact → gọi agent.compactHistory và hiển thị kết quả", async () => {
+    const s = sink();
+    let calls = 0;
+    const host = fakeHost({
+      agent: () => ({
+        compactHistory: async () => {
+          calls++;
+          return { ok: true, message: "compaction done: 20 → 4 messages" };
+        },
+      }),
+    });
+    const r = await dispatchCommand("/compact", host, s.fn);
+    assert.equal(r.handled, true);
+    assert.equal(calls, 1);
+    assert.match(s.lines[0].text, /compaction done/);
+  });
+
+  it("/compact khi agent đang chạy → warn, không gọi compactHistory", async () => {
+    const s = sink();
+    let calls = 0;
+    const host = fakeHost({
+      isRunning: () => true,
+      agent: () => ({ compactHistory: async () => { calls++; return { ok: true, message: "x" }; } }),
+    });
+    await dispatchCommand("/compact", host, s.fn);
+    assert.equal(calls, 0);
+    assert.equal(s.lines[0].level, "warn");
+    assert.match(s.lines[0].text, /running/);
+  });
+
+  it("/compact khi chưa có agent → warn", async () => {
+    const s = sink();
+    await dispatchCommand("/compact", fakeHost(), s.fn);
+    assert.equal(s.lines[0].level, "warn");
+    assert.match(s.lines[0].text, /agent not ready/);
+  });
+
   it("extra command được nhận trước core (frontend-specific override)", async () => {
     const s = sink();
     const r = await dispatchCommand("/cost", fakeHost(), s.fn, [
@@ -114,6 +151,7 @@ describe("dispatchCommand (T1)", () => {
     }
     assert.ok(coreCommands().some((c) => c.name === "/mcp"));
     assert.ok(coreCommands().some((c) => c.name === "/sessions"));
+    assert.ok(coreCommands().some((c) => c.name === "/compact"));
   });
 });
 

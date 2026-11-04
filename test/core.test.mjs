@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unifiedDiff, diffCounts } from "../dist/diff.js";
 import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/retry.js";
-import { trimHistory, summariseOutput, claimsCompletion, expandMentions } from "../dist/context.js";
+import { trimHistory, summariseOutput, claimsCompletion, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "../dist/context.js";
 
 // ── diff ────────────────────────────────────────────────────────────────────
 
@@ -215,6 +215,23 @@ describe("trimHistory", () => {
       }
     }
     assert.equal(out[out.length - 1].content, "final question");
+  });
+  it("custom token budget (compaction-aware trim) is respected", async () => {
+    const msgs = [
+      { role: "system", content: "sys" },
+      ...Array.from({ length: 40 }, (_, i) => ({ role: "user", content: `u${i}-` + "word ".repeat(80) })),
+    ];
+    const out = trimHistory(msgs, 2_000);
+    const { estimateTokens } = await import("../dist/compaction.js");
+    assert.ok(out.length < msgs.length, "phải cắt bớt");
+    assert.ok(estimateTokens(out) < 2_500, `custom budget respected (tokens=${estimateTokens(out)})`);
+    assert.equal(out[out.length - 1].content, msgs[msgs.length - 1].content, "message cuối giữ nguyên");
+  });
+  it("historyTokenBudget scales with the context window (95%) và giữ legacy cap", () => {
+    assert.equal(MAX_HISTORY_TOKENS, 90_000);
+    assert.equal(historyTokenBudget(128_000), 121_600);
+    assert.ok(historyTokenBudget(128_000) > 128_000 * 0.8, "trim phải chạy sau compaction (80%)");
+    assert.equal(historyTokenBudget(1_000), 2_000, "floor 2k");
   });
   it("prune tool result cũ giữ nội dung gần đây", () => {
     const msgs = [

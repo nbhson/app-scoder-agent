@@ -121,6 +121,17 @@ export function coreCommands(): CommandEntry[] {
       },
     },
     {
+      name: "/compact",
+      description: "summarize older history now (manual compaction)",
+      async run(_slash, host, notice) {
+        const agent = host.agent();
+        if (!agent) return notice("agent not ready — start a task first", "warn");
+        if (host.isRunning?.()) return notice("agent is running — wait or Esc first", "warn");
+        const r = await agent.compactHistory();
+        notice(r.message, r.ok ? "info" : "warn");
+      },
+    },
+    {
       name: "/skills",
       description: "list discovered skills (SKILL.md)",
       run(_slash, host, notice) {

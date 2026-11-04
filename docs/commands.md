@@ -78,6 +78,7 @@ scoder --no-save -y "run the migration"
 |---------|-------------|
 | `/help` | Show command list |
 | `/clear` | Reset conversation + agent context |
+| `/compact` | Summarize older history now (manual compaction) |
 | `/cost` | Session token usage |
 | `/model` | Active model/provider/build |
 | `/skills` | List discovered skills |

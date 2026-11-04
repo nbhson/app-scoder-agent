@@ -17,6 +17,7 @@ export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
   { cmd: "/diff", desc: "show diffs: /diff turn | session | branch" },
   { cmd: "/theme", desc: "switch palette: /theme <name> — /theme list (mission|paper|mono|light|high-contrast|solarized)" },
   { cmd: "/clear", desc: "clear the conversation and reset agent context" },
+  { cmd: "/compact", desc: "summarize older history now (manual compaction)" },
   { cmd: "/cost", desc: "token usage of the current session" },
   { cmd: "/model", desc: "show the active model & provider" },
   { cmd: "/skills", desc: "list discovered skills (SKILL.md)" },

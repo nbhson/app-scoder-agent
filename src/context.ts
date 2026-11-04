@@ -5,11 +5,22 @@ import { resolve } from "node:path";
 
 const MAX_MESSAGES = 120; // keep history under control for long runs
 /**
- * Total history token budget (I-10: token-accurate via gpt-tokenizer, thay
- * char heuristic 100k chars ≈ 25k tokens). Conservative: system prompt +
- * tool defs + reply buffer chiếm phần còn lại của contextWindow.
+ * Default history token budget when compaction is disabled (I-10:
+ * token-accurate via gpt-tokenizer, thay char heuristic 100k chars ≈ 25k
+ * tokens). Conservative: system prompt + tool defs + reply buffer chiếm phần
+ * còn lại của contextWindow.
  */
-const MAX_HISTORY_TOKENS = 90_000;
+export const MAX_HISTORY_TOKENS = 90_000;
+/**
+ * Fraction of the model context window where mechanical trim starts when
+ * compaction is enabled. Must stay ABOVE the compaction trigger (default
+ * 0.8) so semantic compaction gets a chance to run first.
+ */
+export const HISTORY_TRIM_FRACTION = 0.95;
+/** Mechanical trim budget for a given context window (floor 2k). */
+export function historyTokenBudget(contextWindow: number): number {
+  return Math.max(2_000, Math.floor(contextWindow * HISTORY_TRIM_FRACTION));
+}
 /** Tool results older than this many recent tool messages get pruned. */
 const KEEP_RECENT_TOOL_RESULTS = 20;
 
@@ -27,16 +38,19 @@ function messageTokens(m: ChatMessage): number {
 const historyTokens = (msgs: ChatMessage[]) => msgs.reduce((n, m) => n + messageTokens(m), 0);
 
 /**
- * Trim message history to stay within token budget. Layered strategy
+ * Trim message history to stay within a token budget. Layered strategy
  * (context engineering — inspired by compaction patterns, from scratch):
  *   1. Message-count cap: keep system + newest MAX_MESSAGES-1.
  *   2. Token budget: drop the OLDEST WHOLE TURNS (from a user message up to
- *      the next user message) until under MAX_HISTORY_TOKENS — dropping whole
+ *      the next user message) until under `maxTokens` — dropping whole
  *      turns never orphans an assistant tool_calls / tool result pair.
  *   3. Old tool results (outside the recent window) are pruned in place to a
  *      short placeholder — their content dominated the budget anyway.
+ *
+ * `maxTokens` defaults to the legacy 90k cap; callers with compaction enabled
+ * pass `historyTokenBudget(contextWindow)` so trim runs *after* compaction.
  */
-export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
+export function trimHistory(messages: ChatMessage[], maxTokens = MAX_HISTORY_TOKENS): ChatMessage[] {
   let out = messages;
 
   // 1) Message-count cap
@@ -47,7 +61,7 @@ export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
   }
 
   // 2) Token budget — drop oldest whole turns, never the system message
-  while (out.length > 2 && historyTokens(out) > MAX_HISTORY_TOKENS) {
+  while (out.length > 2 && historyTokens(out) > maxTokens) {
     const firstIdx = out[0].role === "system" ? 1 : 0;
     if (out[firstIdx]?.role !== "user") break; // no clean turn boundary — stop
     let next = firstIdx + 1;

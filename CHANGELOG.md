@@ -3,6 +3,24 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Agent
+- Context compaction now actually fires: mechanical trim only starts at 95% of the
+  model window, above the 80% compaction trigger, so history is summarized
+  instead of silently dropped before compaction runs
+- `trimHistory()` accepts a configurable token budget (context-window aware via
+  `historyTokenBudget()`)
+- Added `/compact` manual command (REPL + TUI) to summarize older history on
+  demand; works even when automatic compaction is disabled (`"compaction": false`)
+
+### TUI
+- `/compact` added to slash command list + tab completion + `/help`
+
+### Bug fixes
+- Auto-compaction was unreachable because `trimHistory` hard-capped history at
+  90k tokens, below the 80% trigger for every model with a >=113k window
+
 ## [0.8.0] — TBD
 
 ### Agent

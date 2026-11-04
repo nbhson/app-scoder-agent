@@ -81,7 +81,7 @@ describe("skills", () => {
 
 describe("slash command completion", () => {
   it("completes a unique prefix with trailing space", () => {
-    const r = completeSlashCommand("/co");
+    const r = completeSlashCommand("/cos");
     assert.equal(r?.completed, "/cost ");
     assert.equal(r?.candidates.length, 1);
   });
