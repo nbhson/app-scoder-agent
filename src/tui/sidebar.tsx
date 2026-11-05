@@ -124,12 +124,22 @@ function MetricsSection({ state }: { state: TuiState }): React.JSX.Element {
       ? Math.round((state.streamingOutputChars / 4) / (elapsedMs / 1000))
       : null;
   const win = contextWindowFor(state.provider, state.model);
-  const ctxPct = hasUsage && win > 0 ? Math.round((state.usage.inputTokens / win) * 100) : null;
-  // ctx giờ hiển thị đủ số: `input/ctxWin (pct%)`.
+  // `ctx` should reflect the CURRENT context window pressure (estimateTokens of
+  // the live message history), NOT the cumulative input tokens spent across the
+  // whole session (state.usage.inputTokens grows forever and can exceed 100%).
+  // state.context is emitted by the agent after every LLM turn; fall back to the
+  // cumulative counter only before the first turn has reported.
+  const ctxTokens = state.context?.tokens ?? (hasUsage ? state.usage.inputTokens : null);
+  const ctxWindow = state.context?.window ?? win;
+  const ctxPct =
+    state.context?.pct ??
+    (ctxTokens != null && ctxWindow > 0 ? Math.min(100, Math.round((ctxTokens / ctxWindow) * 100)) : null);
+  // ctx giờ hiển thị đủ số: `current/ctxWin (pct%)`.
   const ctxFmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
-  const ctxDisplay = ctxPct != null
-    ? `${ctxFmt(state.usage.inputTokens)}/${ctxFmt(win)} (${ctxPct}%)`
-    : null;
+  const ctxDisplay =
+    ctxTokens != null && ctxPct != null
+      ? `${ctxFmt(ctxTokens)}/${ctxFmt(ctxWindow)} (${ctxPct}%)`
+      : null;
   return (
     <Section title="METRICS">
       {!hasUsage && elapsedSec == null ? (
