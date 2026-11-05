@@ -497,7 +497,7 @@ Việc làm:
   - [ ] Command palette / help overlay / diff nav / subagent tree (deferred — scope trimmed)
   - [ ] Permission queue / ask_user modal / risk level (deferred)
   - [ ] NO_COLOR / --no-motion / --plain / high-contrast (deferred)
-- [ ] Phase 8 — Hardening
-  - [ ] Docs + CHANGELOG
-  - [ ] Migration/backward-compat test
-  - [ ] Release 0.9.0
+- [x] Phase 8 — Hardening
+  - [x] Docs + CHANGELOG [0.9.0] section
+  - [x] Migration/backward-compat test (9 tests: config + event + skill)
+  - [x] Release 0.9.0 (package.json version bump)

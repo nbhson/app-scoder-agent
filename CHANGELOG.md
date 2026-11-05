@@ -3,6 +3,62 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.0] — TBD
+
+Scoder 0.9→1.0 upgrade milestone. Agent C, MCP A/B, custom commands,
+TUI transcript features, backward-compat guarantees. __No breaking config
+changes__: 0.8.x `.scoderrc.json`, event streams and skill files keep loading.
+
+### Agent
+- Event schema v2 (`EVENT_SCHEMA_VERSION = 2`): `run_start` carries
+  `schemaVersion` + `agent`; `run_finish` carries `usage`/`verification`;
+  new `queue_size`/`context_used`/`compaction`/`agent_start`/`agent_end`
+  events. Reducer drops unknown additive fields (old consumers unaffected).
+- `resolvePrimaryConfig()` — rc/CLI routing per primary agent (plan/build/
+  review) applied before client/tools are built; agent def tool filters
+  (permission/model/temperature/steps/reasoning) applied at spec level.
+- Agent C: diagnostics parser + verify commands, self-review + completion
+  gate, `ask_user` tool contract with timeout + `<<QUESTION>>` protocol.
+- `read_file` offset/limit ranges; `grep`/diagnostics precedence fixes.
+
+### MCP
+- Protocol version + capabilities + instructions (from `initialize`);
+  `tools/list_changed` notification → live tool re-registration.
+- HTTP SSE incremental streaming (`consumeSseStream`, no body buffering)
+  + AbortSignal cancellation.
+- Per-server tool filters (`tools.include`/`exclude` + glob) approved on the
+  announcement line.
+- `applyConfig` hot-restart when transport-effective config changes; stdio
+  `taskkill`-based kill-tree on shutdown.
+- Per-server `enabled`/`trust` (auto/ask/readonly/deny); readonly trust
+  disables spawn. `scoder mcp` CLI to list/inspect servers + tool namespaces.
+
+### Custom commands
+- `.scoder/commands/*.js` custom slash commands discovered at startup
+  (`scoder.commands(dir, meta)` export contract), listed in `/commands`,
+  weight = low for built-in priority.
+- Unified command registry (`BUILTIN_COMMANDS` + `commandCatalog()`) shared
+  between REPL and TUI completion.
+
+### TUI
+- `/export [md|json]` — writes the session transcript to workdir/
+  `scoder-export.{md|json}`; `/search <query>` — case-insensitive keyword
+  search with snippets and scroll-to-result.
+- Subagent sidebar section (running/ok/failed + summary + steps).
+- `toolPhase` polish: `mcp__*`→"mcp", `repo_map`→"explore",
+  `ask_user`→"clear", `task`→"delegate".
+- `CommandHost.transcriptItems()`/`selectTranscriptItem()` — shared host
+  contract for REPL-safe commands.
+
+### Skills
+- Anthropic-style convention: `skills/<name>/SKILL.md` subdirectories;
+  `name`+`description` frontmatter required (missing → skip + warning);
+  duplicate-name dedup with scope override.
+
+### Migration & tests
+- `test/migration.test.mjs` — 0.8.x config/event/skill backward-compat suite.
+- Test suite grew 149 → 178 tests across 14 files; eval stays 10/10.
+
 ## [0.8.21] — TBD
 
 ### Agent
