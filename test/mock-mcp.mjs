@@ -16,10 +16,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       id: msg.id,
       result: {
         protocolVersion: "2024-11-05",
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, ping: true },
         serverInfo: { name: "mock-mcp", version: "0.1.0" },
       },
     });
+    return;
+  }
+  if (msg.method === "ping") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {} });
     return;
   }
   if (msg.method === "tools/list") {

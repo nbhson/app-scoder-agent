@@ -5,6 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { McpConnection } from "../dist/mcp.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,8 +31,15 @@ describe("M1 — McpConnection reconnect", () => {
     await c.connect();
     assert.equal(c.state, "ready");
 
-    // Giết process — exit handler phải trigger reconnect (backoff 500ms).
-    c.proc.kill("SIGKILL");
+    // Giết process tree — taskkill /T kill cả cmd.exe + node child (Windows fix
+    // cho shell:true spawn orphaning).  SIGKILL only kills the shell, leaving
+    // the real node child alive and holding stdout, so the test hangs.
+    const pid = c.proc?.pid;
+    if (pid && process.platform === "win32") {
+      spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } else {
+      c.proc?.kill("SIGKILL");
+    }
     await new Promise((r) => setTimeout(r, 1500));
     // Pending trong lúc chết đã reject (drain) — callTool bây giờ phải ok sau reconnect.
     assert.equal(c.state, "ready", `sau reconnect: ${states.join(" | ")}`);
@@ -52,7 +60,12 @@ describe("M1 — McpConnection reconnect", () => {
   it("healthy(): server chết → false (không treo)", async () => {
     const c = new McpConnection("m", cfg);
     await c.connect();
-    c.proc.kill("SIGKILL");
+    const pid = c.proc?.pid;
+    if (pid && process.platform === "win32") {
+      spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } else {
+      c.proc?.kill("SIGKILL");
+    }
     // Chờ reconnect bắt đầu rồi đo healthy ngay (đang reconnect = alive false lúc đó)
     await new Promise((r) => setTimeout(r, 30));
     c.kill();

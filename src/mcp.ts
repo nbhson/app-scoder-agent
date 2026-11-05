@@ -7,7 +7,7 @@
  * lại → stdio. Exposes discovered tools as `mcp__<server>__<tool>` prefixed
  * names in the agent's tool registry.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { CLIENT_NAME, getVersion } from "./version.js";
 import { redactSecrets } from "./llm.js";
 
@@ -23,6 +23,10 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
   /** M3: override loại transport; mặc định suy ra từ url/command. */
   type?: "stdio" | "http";
+  /** MCP A: per-server tool governance — include/exclude filters. */
+  tools?: { include?: string[]; exclude?: string[] };
+  /** MCP A: request timeout (ms) — override default 120s. */
+  timeoutMs?: number;
 }
 
 export interface McpTool {
@@ -115,9 +119,20 @@ export class StdioTransport implements McpTransport {
   }
 
   close(): void {
-    if (this.proc) {
-      try { this.proc.kill(); } catch { /* already dead */ }
-      this.proc = null;
+    const p = this.proc;
+    this.proc = null;
+    if (!p) return;
+    // Release pipe handles so the parent process can exit immediately.
+    // On Windows shell:true (cmd.exe wrapper), p.kill() only kills cmd.exe —
+    // the real node child is orphaned and keeps stdout open. Use taskkill /T
+    // to kill the whole process tree; this also works for the plain node case.
+    try { p.stdin?.end(); } catch { /* ignore */ }
+    try { p.stdout?.destroy(); } catch { /* ignore */ }
+    try { p.stderr?.destroy(); } catch { /* ignore */ }
+    try { p.kill(); } catch { /* ignore */ }
+    if (process.platform === "win32" && p.pid) {
+      // Fire-and-forget; ignore errors — process may already be gone.
+      spawnSync("taskkill", ["/pid", String(p.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     }
   }
 
@@ -166,11 +181,11 @@ export class HttpTransport implements McpTransport {
 
   async send(msg: object): Promise<void> {
     if (this.closed) throw new Error(`MCP HTTP transport "${this.cfg.url}" closed`);
-    const res = await this.post(msg, this.sessionId);
+    const res = await this.post(msg, this.sessionId, undefined);
     // Session expired (server restart) → thử lại một lần không session.
     if ((res.status === 404 || res.status === 400) && this.sessionId) {
       this.sessionId = null;
-      const retry = await this.post(msg, null);
+      const retry = await this.post(msg, null, undefined);
       return this.consume(retry);
     }
     return this.consume(res);
@@ -181,10 +196,13 @@ export class HttpTransport implements McpTransport {
     this.sessionId = null;
   }
 
-  private async post(msg: object, sessionId: string | null): Promise<Response> {
+  private defaultTimeout(): number {
+    return this.cfg.timeoutMs ?? 120_000;
+  }
+
+  private async post(msg: object, sessionId: string | null, signal?: AbortSignal): Promise<Response> {
     const url = this.cfg.url;
     if (!url) throw new Error("MCP HTTP transport requires \"url\" in the server config");
-    // M3: headers hỗ trợ {env:VAR} substitution như env — không hardcode secrets.
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
@@ -192,11 +210,16 @@ export class HttpTransport implements McpTransport {
     };
     if (sessionId) headers["mcp-session-id"] = sessionId;
     try {
+      // Combine the caller's abort signal (MCP A cancellation) with an idle
+      // timeout into one AbortSignal. AbortSignal.any needs ≥1 real signal.
+      const signals: AbortSignal[] = [AbortSignal.timeout(this.defaultTimeout())];
+      if (signal) signals.push(signal);
+      const combined = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
       return await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(msg),
-        signal: AbortSignal.timeout(120_000),
+        signal: combined,
       });
     } catch (e) {
       throw new Error(`MCP HTTP "${url}": ${(e as Error).message}`, { cause: e });
@@ -211,29 +234,72 @@ export class HttpTransport implements McpTransport {
       throw new Error(`MCP HTTP ${res.status} ${res.statusText}`);
     }
     const ct = res.headers.get("content-type") ?? "";
-    if (ct.includes("text/event-stream")) {
-      const text = await res.text();
-      for (const m of parseSseMessages(text)) this.msgCb?.(m);
-    } else if (ct.includes("application/json")) {
+    if (ct.includes("application/json")) {
       const body = (await res.text()).trim();
       if (body) {
         try { this.msgCb?.(JSON.parse(body) as Record<string, unknown>); } catch { /* skip malformed */ }
       }
-    } // 202/no-content (notifications) — nothing to parse
+      return;
+    }
+    if (ct.includes("text/event-stream")) {
+      // MCP A: incremental SSE — stream body, emit each JSON-RPC message as
+      // its `data:` event completes, instead of buffering the entire response.
+      await this.consumeSseStream(res.body);
+      return;
+    }
+    // 202/no-content (notifications) — nothing to parse
+  }
+
+  /** Incremental SSE: read the body as a stream and emit each JSON-RPC message
+   *  as its SSE block (blank-line-separated) completes — no full-body buffer. */
+  private async consumeSseStream(body: ReadableStream<Uint8Array> | null): Promise<void> {
+    if (!body) return;
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        let sep: number;
+        while ((sep = buf.indexOf("\n\n")) !== -1) {
+          const block = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          const msg = parseSseEvent(block);
+          if (msg) this.msgCb?.(msg);
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    // Flush any trailing partial SSE block at EOF (no trailing \n\n).
+    if (buf.trim()) {
+      const msg = parseSseEvent(buf);
+      if (msg) this.msgCb?.(msg);
+    }
   }
 }
 
-/** Parse SSE text thành JSON-RPC messages (concat các dòng `data:` liên tiếp). */
+/** Parse a single SSE block (blank-line-separated events) into one JSON-RPC message.
+ *  Normalizes CRLF → LF before splitting on the event separator. */
+export function parseSseEvent(block: string): Record<string, unknown> | null {
+  const data = block
+    .replace(/\r\n/g, "\n")
+    .split(/\n/)
+    .filter((l) => l.startsWith("data:"))
+    .map((l) => l.slice(5).trim())
+    .join("\n");
+  if (!data) return null;
+  try { return JSON.parse(data) as Record<string, unknown>; } catch { return null; }
+}
+
+/** Parse SSE text (legacy buffer-based) thành JSON-RPC messages. */
 export function parseSseMessages(text: string): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const block of text.split(/\r?\n\r?\n/)) {
-    const data = block
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith("data:"))
-      .map((l) => l.slice(5).trim())
-      .join("\n");
-    if (!data) continue;
-    try { out.push(JSON.parse(data) as Record<string, unknown>); } catch { /* skip malformed */ }
+    const m = parseSseEvent(block);
+    if (m) out.push(m);
   }
   return out;
 }
@@ -254,6 +320,14 @@ export class McpConnection {
   state: McpConnState = "connecting";
   /** M1: status/state sink (AgentEvent mcp_status). */
   onState: ((state: McpConnState, detail: string) => void) | null = null;
+  /** MCP A: inbound server notifications (tools/list_changed, progress…). */
+  onNotification: ((msg: Record<string, unknown>) => void) | null = null;
+  /** Server-reported metadata from `initialize` (surfaced on /mcp). */
+  serverInfo: { name?: string; version?: string } = {};
+  capabilities: Record<string, unknown> = {};
+  instructions: string | null = null;
+  /** Protocol version negotiated with the server. */
+  protocolVersion = "2024-11-05";
   private manuallyClosed = false;
   private reconnectAttempt = 0;
 
@@ -294,12 +368,22 @@ export class McpConnection {
   private async startAndHandshake(timeoutMs: number): Promise<void> {
     await this.transport.start();
     this.wireTransport();
-    // MCP handshake: initialize + notifications/initialized
-    await this.rpc("initialize", {
+    // MCP handshake: initialize + notifications/initialized. Negotiate the
+    // highest protocol version we support that the server accepts.
+    const initRes = await this.rpc("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: CLIENT_NAME, version: getVersion() },
-    }, timeoutMs);
+    }, timeoutMs) as {
+      protocolVersion?: string;
+      capabilities?: Record<string, unknown>;
+      serverInfo?: { name?: string; version?: string };
+      instructions?: string;
+    };
+    this.protocolVersion = initRes.protocolVersion ?? "2024-11-05";
+    this.capabilities = initRes.capabilities ?? {};
+    this.serverInfo = initRes.serverInfo ?? {};
+    this.instructions = initRes.instructions ?? null;
     void this.transport.send({ jsonrpc: "2.0", method: "notifications/initialized" }).catch(() => {
       // notification — không có pending để reject; lỗi sẽ lộ ở call sau.
     });
@@ -309,7 +393,12 @@ export class McpConnection {
   /** Wire inbound messages + channel-death → reconnect (stdio only). */
   private wireTransport(): void {
     this.transport.onMessage((msg) => {
-      if (msg.id === undefined) return; // notification — nothing pending
+      if (msg.id === undefined) {
+        // Server notifications (tools/list_changed, progress, message) —
+        // route them to the manager so it can react (re-register tools etc.).
+        this.onNotification?.(msg);
+        return;
+      }
       const pending = this.pending.get(msg.id as number);
       if (!pending) return;
       this.pending.delete(msg.id as number);
@@ -349,16 +438,25 @@ export class McpConnection {
     }
   }
 
-  /** M1: health check — ping không có response trong MCP spec stdio → dùng
-   *  tools/list với timeout ngắn làm liveness probe. */
+  /** MCP A: liveness probe — prefer ping (official MCP spec), fallback tools/list. */
   async healthy(timeoutMs = 5_000): Promise<boolean> {
     if (!this.alive) return false;
     try {
-      await this.rpc("tools/list", {}, timeoutMs);
+      // ping was added in MCP 2025-03; fall back to tools/list for older servers.
+      if (this.capabilities.ping === true) {
+        await this.rpc("ping", {}, timeoutMs);
+      } else {
+        await this.rpc("tools/list", {}, timeoutMs);
+      }
       return true;
     } catch {
       return false;
     }
+  }
+
+  /** MCP A: explicit ping. */
+  async ping(timeoutMs = 5_000): Promise<void> {
+    await this.rpc("ping", {}, timeoutMs);
   }
 
   async listTools(timeoutMs = 120_000): Promise<McpTool[]> {
@@ -461,7 +559,7 @@ export class McpManager {
     return this.tools.size;
   }
 
-  /** M1: surface connection state machine + refresh tools sau reconnect. */
+  /** M1: surface connection state machine + refresh tools sau reconnect + wire notifications. */
   private wireReconnect(name: string, conn: McpConnection): void {
     conn.onState = (state, detail) => {
       // Sidebar TUI: structured state trước — mọi transition đều thú vị với
@@ -479,6 +577,25 @@ export class McpManager {
           .catch(() => {});
       }
     };
+    // MCP A: react to server notifications — tools/list_changed re-registers
+    // the tool set (no full reconnect needed); progress/message are surfaced
+    // as status lines but don't disrupt anything.
+    conn.onNotification = (msg) => {
+      const method = String(msg.method ?? "");
+      if (method === "notifications/tools/list_changed" || method === "tools/list_changed") {
+        conn
+          .listTools()
+          .then((defs) => {
+            this.reregisterTools(name, conn, defs);
+            const report = this.onStatus ?? ((line: string) => console.error(line));
+            report(`↻ MCP "${name}" tools changed — re-registered ${defs.length}`);
+          })
+          .catch(() => {});
+      } else if (method === "notifications/message" || method === "message") {
+        const report = this.onStatus ?? ((line: string) => console.error(line));
+        report(`ℹ MCP "${name}": ${String((msg.params as { message?: unknown })?.message ?? "message")}`);
+      }
+    };
   }
 
   private async registerTools(name: string, conn: McpConnection): Promise<void> {
@@ -486,12 +603,31 @@ export class McpManager {
     this.reregisterTools(name, conn, defs);
   }
 
-  /** Replace một server's tool registrations (reconnect refresh). */
+  /** MCP A: apply per-server tool include/exclude filters to a tool list. */
+  private filterToolDefs(name: string, defs: McpTool[]): McpTool[] {
+    const filter = this.configs[name]?.tools;
+    if (!filter) return defs;
+    const include = filter.include?.filter(Boolean) ?? [];
+    const exclude = new Set((filter.exclude ?? []).map((s) => s.toLowerCase()));
+    const match = (pat: string, n: string): boolean => {
+      if (!pat.includes("*")) return n === pat.toLowerCase();
+      const rx = new RegExp("^" + pat.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
+      return rx.test(n);
+    };
+    return defs.filter((t) => {
+      const n = t.name.toLowerCase();
+      if (include.length > 0 && !include.some((pat) => match(pat, n))) return false;
+      if ([...exclude].some((e) => match(e, n))) return false;
+      return true;
+    });
+  }
+
+  /** Replace một server's tool registrations (reconnect refresh) — honor config filters. */
   private reregisterTools(name: string, conn: McpConnection, defs: McpTool[]): void {
     for (const [key, t] of [...this.tools]) {
       if (t.serverName === name) this.tools.delete(key);
     }
-    for (const def of defs) {
+    for (const def of this.filterToolDefs(name, defs)) {
       const key = mcpToolKey(name, def.name);
       this.tools.set(key, { conn, serverName: name, toolName: def.name, def });
     }
@@ -516,6 +652,26 @@ export class McpManager {
     return this.tools.get(name);
   }
 
+  /** MCP A: connection state + metadata for /mcp status display.
+   *  connected is based on McpConnection.state, not tool count. */
+  serverStates(): Array<{
+    name: string;
+    state: McpConnState;
+    serverInfo: { name?: string; version?: string };
+    capabilities: Record<string, unknown>;
+    instructions: string | null;
+    toolCount: number;
+  }> {
+    return [...this.conns.entries()].map(([name, conn]) => ({
+      name,
+      state: conn.state,
+      serverInfo: conn.serverInfo,
+      capabilities: conn.capabilities,
+      instructions: conn.instructions,
+      toolCount: [...this.tools.values()].filter((t) => t.serverName === name).length,
+    }));
+  }
+
   /** Convert all discovered MCP tools to OpenAI function-calling specs. */
   toToolSpecs(): import("./llm.js").ToolSpec[] {
     return [...this.tools.values()].map(({ conn: _, serverName, toolName, def }) => ({
@@ -534,21 +690,31 @@ export class McpManager {
     this.tools.clear();
   }
 
-  /** M4: config hot-reload — connect server mới, kill server đã bị xóa khỏi config. */
+  /** M4: config hot-reload — connect server mới, kill server đã bị xóa/changed khỏi config. */
   async applyConfig(configs: Record<string, McpServerConfig>): Promise<void> {
-    this.configs = configs;
-    // Server bị xóa → kill + unregister.
+    const report = this.onStatus ?? ((line: string) => console.error(line));
+    // A server's transport-effective config changed → restart it (kill + reconnect).
+    const configChanged = (prev: McpServerConfig, next: McpServerConfig): boolean => {
+      const pick = (c: McpServerConfig) =>
+        JSON.stringify([c.command, c.url, c.type, c.args, c.env ?? {}, c.headers ?? {}, c.timeoutMs ?? null, c.tools ?? {}]);
+      return pick(prev) !== pick(next);
+    };
+    // Server bị xóa hoặc đổi config → kill + unregister.
     for (const [name, conn] of [...this.conns]) {
-      if (!configs[name]) {
+      if (!configs[name] || configChanged(this.configs[name], configs[name])) {
         conn.kill();
         this.conns.delete(name);
         for (const [key, t] of [...this.tools]) {
           if (t.serverName === name) this.tools.delete(key);
         }
-        const report = this.onStatus ?? ((line: string) => console.error(line));
-        report(`✘ MCP "${name}" removed (config changed)`);
+        if (configs[name] && configChanged(this.configs[name], configs[name])) {
+          report(`↻ MCP "${name}" config changed — restarting`);
+        } else {
+          report(`✘ MCP "${name}" removed (config changed)`);
+        }
       }
     }
+    this.configs = configs;
     // Server mới → connect.
     for (const [name, cfg] of Object.entries(configs)) {
       if (this.conns.has(name)) continue;
@@ -558,11 +724,9 @@ export class McpManager {
         await conn.connect();
         await this.registerTools(name, conn);
         this.conns.set(name, conn);
-        const report = this.onStatus ?? ((line: string) => console.error(line));
         const n = [...this.tools.values()].filter((t) => t.serverName === name).length;
         report(`✓ MCP "${name}" connected — ${n} tool${n === 1 ? "" : "s"} (hot-reload)`);
       } catch (e) {
-        const report = this.onStatus ?? ((line: string) => console.error(line));
         report(`⚠  MCP server "${name}" unavailable: ${String((e as Error).message).slice(0, 160)}`);
       }
     }

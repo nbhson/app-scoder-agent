@@ -1782,21 +1782,30 @@ export class Agent {
   }
 
   /** MCP server overview (for /mcp): config always; tools once connected. */
-  async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }> }>> {
+  async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }>; serverInfo: { name?: string; version?: string }; capabilities: Record<string, unknown> }>> {
     const configs = (this.config.mcpServers ?? {}) as Record<string, { command?: string; url?: string }>;
     // M3: http server hiển thị url thay vì command.
     const target = (cfg: { command?: string; url?: string }) => cfg.url ?? cfg.command ?? "(unknown)";
     if (!this.mcp) {
-      return Object.entries(configs).map(([name, cfg]) => ({ name, command: target(cfg), connected: false, tools: [] }));
+      return Object.entries(configs).map(([name, cfg]) => ({ name, command: target(cfg), connected: false, tools: [], serverInfo: {}, capabilities: {} }));
     }
     await this.connectMcp();
+    // MCP A: connected = actual connection state, not tool count (0-tool servers
+    // still report connected: true). Includes serverInfo + capabilities.
+    const states = this.mcp.serverStates();
+    const stateMap = new Map(states.map((s) => [s.name, s]));
     const byServer = new Map(this.mcp.listToolsByServer().map((s) => [s.server, s.tools]));
-    return Object.entries(configs).map(([name, cfg]) => ({
-      name,
-      command: target(cfg),
-      connected: byServer.has(name),
-      tools: byServer.get(name) ?? [],
-    }));
+    return Object.entries(configs).map(([name, cfg]) => {
+      const st = stateMap.get(name);
+      return {
+        name,
+        command: target(cfg),
+        connected: st?.state === "ready",
+        tools: byServer.get(name) ?? [],
+        serverInfo: st?.serverInfo ?? {},
+        capabilities: st?.capabilities ?? {},
+      };
+    });
   }
 
   /** Call one MCP tool directly by its full name (mcp__server__tool) (/mcp exec). */
