@@ -122,6 +122,33 @@ describe("write_file / edit_file", () => {
       "literal $-patterns phải giữ nguyên, không bị interpolate",
     );
   });
+
+  it("edit_file fuzzy: whitespace drift (indent/trailing) still matches", async () => {
+    const p = "sub/fuzzy.txt";
+    await writeFile.run(ctx, { path: p, content: "  const x   = 1;\n  const y=2;\n" });
+    // old_string thiếu chính xác (khác indent + khoảng trắng) → fuzzy fallback
+    const r = await editFile.run(ctx, {
+      path: p,
+      old_string: "const x = 1;",
+      new_string: "let x = 3;",
+    });
+    assert.equal(r.ok, true, `expected fuzzy match, got: ${r.output}`);
+    assert.match(r.output, /fuzzy whitespace match/);
+    assert.equal(readFileSync(join(workdir, "sub/fuzzy.txt"), "utf8"), "  let x = 3;\n  const y=2;\n");
+  });
+
+  it("edit_file fuzzy: ambiguous whitespace matches are refused, not guessed", async () => {
+    const p = "sub/fuzzy-ambig.txt";
+    // Exact "const x = 1;" absent (6 vs 2 spaces) → only fuzzy matches, and they're ambiguous
+    await writeFile.run(ctx, { path: p, content: "const x      = 1;\n\tconst x  = 1;\n" });
+    const r = await editFile.run(ctx, {
+      path: p,
+      old_string: "const x = 1;",
+      new_string: "const y = 9;",
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /tolerant matches|disambiguate/);
+  });
 });
 
 describe("list_files", () => {

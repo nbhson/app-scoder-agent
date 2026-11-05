@@ -457,10 +457,11 @@ Việc làm:
   - [x] `write_todos` 2.0 (verify/acceptance/depends_on)
   - [x] `src/memory.ts` + inject ledger
   - [x] Compaction v2 + resume test
-- [ ] Phase 3 — Agent C
-  - [ ] Diagnostics parser + verify commands
-  - [ ] Self-review pass + completion gate
-  - [ ] `task` batch + `ask_user` + edit fuzzy/apply_patch
+- [x] Phase 3 — Agent C
+  - [x] Diagnostics parser + verify commands
+  - [x] Self-review pass + completion gate
+  - [x] `ask_user` (tool contract + event + timeout)
+  - [ ] `task` batch + edit fuzzy/apply_patch
   - [ ] Eval gate CI
 - [ ] Phase 4 — MCP A
   - [ ] Protocol version + capabilities + instructions

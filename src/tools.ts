@@ -247,6 +247,16 @@ async function toolWriteFile(ctx: ToolContext, args: { path: string; content: st
   };
 }
 
+/** v2: whitespace-insensitive regex for edit_file fuzzy fallback. */
+function wsInsensitiveRegex(s: string): RegExp {
+  let rx = "";
+  for (const ch of s) {
+    if (/\s/.test(ch)) rx += "\\s+";
+    else rx += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(rx);
+}
+
 async function toolEditFile(
   ctx: ToolContext,
   args: { path: string; old_string: string; new_string: string },
@@ -258,16 +268,33 @@ async function toolEditFile(
     return { ok: false, output: `ERROR: ${(err as Error).message}` };
   }
   const content = readFileSync(abs, "utf8");
-  if (!content.includes(args.old_string)) {
-    return { ok: false, output: `old_string not found in ${args.path}. Read the file again and retry with exact text.` };
+  let matched: string;
+  let newContent: string;
+  let fuzzy = false;
+  if (content.includes(args.old_string)) {
+    const count = content.split(args.old_string).length - 1;
+    if (count > 1) {
+      return { ok: false, output: `old_string matches ${count} locations in ${args.path}; include more surrounding context to make it unique.` };
+    }
+    // Function replacement: avoids JS $-pattern interpolation ($&, $', $`, $1…)
+    // which would corrupt literal text like "$&" in the new content.
+    newContent = content.replace(args.old_string, () => args.new_string);
+    matched = args.old_string;
+  } else {
+    // v2 fuzzy fallback: exact string missing → retry with whitespace-tolerant
+    // matching (indent/trailing-space drift between model and file). Reports
+    // ambiguity instead of guessing when multiple regions match.
+    const all = [...content.matchAll(new RegExp(wsInsensitiveRegex(args.old_string).source, "g"))];
+    if (all.length === 0) {
+      return { ok: false, output: `old_string not found in ${args.path}. Read the file again and retry with exact text.` };
+    }
+    if (all.length > 1) {
+      return { ok: false, output: `old_string not found exactly and ${all.length} whitespace-tolerant matches exist in ${args.path}; include more surrounding context to disambiguate.` };
+    }
+    fuzzy = true;
+    matched = all[0][0];
+    newContent = content.slice(0, all[0].index) + args.new_string + content.slice(all[0].index + all[0][0].length);
   }
-  const count = content.split(args.old_string).length - 1;
-  if (count > 1) {
-    return { ok: false, output: `old_string matches ${count} locations in ${args.path}; include more surrounding context to make it unique.` };
-  }
-  // Function replacement: avoids JS $-pattern interpolation ($&, $', $`, $1…)
-  // which would corrupt literal text like "$&" in the new content.
-  const newContent = content.replace(args.old_string, () => args.new_string);
 
   const diff = unifiedDiff(args.path, content, newContent);
   const gate = await gateWrite(ctx, args.path, diff);
@@ -277,7 +304,7 @@ async function toolEditFile(
   const fmtNote = formatFile(ctx, abs);
   return {
     ok: true,
-    output: `Edited ${args.path}${fmtNote ? `\n${fmtNote}` : ""}`,
+    output: `Edited ${args.path}${fuzzy ? " (fuzzy whitespace match)" : ""}${fmtNote ? `\n${fmtNote}` : ""}`,
     diff: toToolDiff(args.path, diff),
   };
 }
