@@ -11,6 +11,7 @@ import { getVersion as getPackageVersion } from "./version.js";
 import { dispatchCommand, type CommandHost } from "./tui/command-registry.js";
 import { selectableAgents } from "./agents.js";
 import * as ui from "./ui.js";
+import type { McpServerConfig } from "./mcp.js";
 
 // Single source of truth: read version from package.json (see src/version.ts).
 const VERSION = getPackageVersion();
@@ -36,7 +37,9 @@ interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init" | "models";
+  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init" | "models" | "mcp";
+  mcpCmd?: "list" | "add" | "remove" | "test";
+  mcpArgs?: string[]; // rest args for the mcp subcommand
   resumeId?: string;
   logsId?: string;
   logsFilter?: string;
@@ -192,11 +195,22 @@ function parseArgs(argv: string[]): CliArgs {
       case "--version":
         args.version = true;
         break;
-      default:
+      default: {
         if (a.startsWith("-")) {
-          throw new Error(`Unknown option: ${a} (see --help)`);
+          // MCP subcommand flags (--command, --url, --trust, --args) are not
+          // known globally — pass them through as positional args for runMcpCommand
+          // to interpret. Only throw if we are NOT in an mcp subcommand context.
+          const isMcpContext = rest[0] === "mcp" || argv.slice(0, i).includes("mcp");
+          if (!isMcpContext) throw new Error(`Unknown option: ${a} (see --help)`);
+          rest.push(a);
+          // Consume the next token as this option's value if present.
+          if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+            rest.push(argv[++i]);
+          }
+          break;
         }
         rest.push(a);
+      }
     }
   }
 
@@ -232,6 +246,20 @@ function parseArgs(argv: string[]): CliArgs {
     args.task = null;
   } else if (rest[0] === "init") {
     args.subcommand = "init";
+    args.task = null;
+  } else if (rest[0] === "mcp") {
+    // scoder mcp list|add <name>|remove <name>|test <name>
+    // e.g. scoder mcp add github --command "npx mcp-github" --url "..." --trust readonly
+    args.subcommand = "mcp";
+    const m = rest[1];
+    if (m === "list" || m === "add" || m === "remove" || m === "test") {
+      args.mcpCmd = m;
+    } else if (m) {
+      args.mcpCmd = "list";
+    } else {
+      args.mcpCmd = "list";
+    }
+    args.mcpArgs = rest.slice(2);
     args.task = null;
   }
 
@@ -414,6 +442,97 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
   process.exit(0);
 }
 
+async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | "test", restArgs: string[]): Promise<void> {
+  const { McpManager } = await import("./mcp.js");
+  const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
+  const { join, dirname, resolve: pathResolve } = await import("node:path");
+  const { mkdirSync } = await import("node:fs");
+  const rcPath = join(cfg.workdir, ".scoderrc.json");
+
+  // Load existing mcpServers from workdir rc.
+  const existing: Record<string, McpServerConfig> = {};
+  if (existsSync(rcPath)) {
+    try { Object.assign(existing, JSON.parse(readFileSync(rcPath, "utf8")).mcpServers ?? {}); } catch { /* ignore */ }
+  }
+
+  if (cmd === "list") {
+    const servers = Object.entries(cfg.mcpServers ?? existing);
+    if (servers.length === 0) {
+      console.log("no MCP servers configured — add mcpServers to .scoderrc.json");
+      return;
+    }
+    for (const [name, cfg_srv] of servers) {
+      const trust = cfg_srv.trust ?? "auto";
+      const enabled = cfg_srv.enabled === false ? " (disabled)" : "";
+      const target = cfg_srv.url ?? cfg_srv.command ?? "?";
+      console.log(`${name}: ${target}${trust !== "auto" ? ` [${trust}]` : ""}${enabled}`);
+    }
+    return;
+  }
+
+  if (cmd === "add") {
+    // scoder mcp add <name> --command "..." [--url "..."] [--trust auto|ask|readonly|deny]
+    const name = restArgs[0];
+    if (!name) { console.error("usage: scoder mcp add <name> --command '...' [--url '...'] [--trust readonly]"); return; }
+    const opts: Record<string, string> = {};
+    for (let i = 1; i < restArgs.length; i++) {
+      if (restArgs[i] === "--command" || restArgs[i] === "-c") opts.command = restArgs[++i];
+      else if (restArgs[i] === "--url" || restArgs[i] === "-u") opts.url = restArgs[++i];
+      else if (restArgs[i] === "--trust" || restArgs[i] === "-t") opts.trust = restArgs[++i];
+      else if (restArgs[i] === "--args" || restArgs[i] === "-a") opts.args = restArgs[++i];
+    }
+    if (!opts.command && !opts.url) { console.error("error: --command or --url required"); return; }
+    const newEntry: McpServerConfig = { ...(opts.command ? { command: opts.command } : {}), ...(opts.url ? { url: opts.url } : {}), ...(opts.args ? { args: opts.args.split(" ") } : {}), ...(opts.trust ? { trust: opts.trust as McpServerConfig["trust"] } : {}) };
+    const allServers = { ...existing, [name]: newEntry };
+    const rc = existsSync(rcPath) ? JSON.parse(readFileSync(rcPath, "utf8")) : {};
+    mkdirSync(dirname(rcPath) || ".", { recursive: true });
+    writeFileSync(rcPath, JSON.stringify({ ...rc, mcpServers: allServers }, null, 2) + "\n", "utf8");
+    console.log(`MCP server "${name}" added to ${rcPath}`);
+    return;
+  }
+
+  if (cmd === "remove") {
+    const name = restArgs[0];
+    if (!name) { console.error("usage: scoder mcp remove <name>"); return; }
+    if (!existing[name] && !(cfg.mcpServers ?? {})[name]) { console.error(`MCP server "${name}" not found in config`); return; }
+    const allServers = { ...existing };
+    delete allServers[name];
+    const rc = existsSync(rcPath) ? JSON.parse(readFileSync(rcPath, "utf8")) : {};
+    mkdirSync(dirname(rcPath) || ".", { recursive: true });
+    writeFileSync(rcPath, JSON.stringify({ ...rc, mcpServers: allServers }, null, 2) + "\n", "utf8");
+    console.log(`MCP server "${name}" removed from ${rcPath}`);
+    return;
+  }
+
+  if (cmd === "test") {
+    const name = restArgs[0];
+    if (!name) { console.error("usage: scoder mcp test <name>"); return; }
+    const srvCfg = (cfg.mcpServers ?? {})[name] ?? existing[name];
+    if (!srvCfg) { console.error(`MCP server "${name}" not found`); return; }
+    if (srvCfg.enabled === false) { console.log(`✘ "${name}" is disabled (enabled:false)`); return; }
+    if (srvCfg.trust === "readonly") { console.log(`✘ "${name}" is trust:readonly — not spawning`); return; }
+    console.log(`connecting to "${name}"...`);
+    const m = new McpManager({ [name]: srvCfg });
+    try {
+      await m.connectAll();
+      const states = m.serverStates();
+      const s = states[0];
+      if (s?.state === "ready") {
+        console.log(`✓ "${name}" connected — ${s.toolCount} tools`);
+        console.log(`  serverInfo: ${s.serverInfo.name ?? "?"} v${s.serverInfo.version ?? "?"}`);
+        console.log(`  capabilities: ${Object.keys(s.capabilities).join(", ") || "(none)"}`);
+      } else {
+        console.log(`✘ "${name}" failed to connect (state: ${s?.state})`);
+      }
+    } finally {
+      m.killAll();
+    }
+    return;
+  }
+
+  console.error(`unknown mcp command: ${cmd}`);
+}
+
 async function main(): Promise<void> {
   let args: CliArgs;
   try {
@@ -549,6 +668,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.subcommand === "mcp") {
+    await runMcpCommand(cfg, args.mcpCmd ?? "list", args.mcpArgs ?? []);
+    return;
+  }
+
   if (args.subcommand === "tui") {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       ui.warn("TUI requires an interactive terminal (TTY) — falling back to the classic REPL.");
@@ -598,7 +722,14 @@ async function main(): Promise<void> {
   await repl(cfg);
 }
 
-main().catch((err) => {
-  ui.error(`fatal: ${(err as Error).stack ?? (err as Error).message}`);
-  process.exit(2);
-});
+import { pathToFileURL } from "node:url";
+
+// Guard: only run when executed as entry point (not imported in tests).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    ui.error(`fatal: ${(err as Error).stack ?? (err as Error).message}`);
+    process.exit(2);
+  });
+}
+
+export { parseArgs };

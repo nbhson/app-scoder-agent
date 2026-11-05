@@ -464,9 +464,15 @@ Việc làm:
   - [ ] `task` batch + edit fuzzy/apply_patch
   - [ ] Eval gate CI
 - [ ] Phase 4 — MCP A
-  - [ ] Protocol version + capabilities + instructions
-  - [ ] Resources/prompts/notifications
-  - [ ] HTTP SSE incremental + cancel + applyConfig restart
+  - [x] Protocol version + capabilities + instructions (from initialize)
+  - [x] `tools/list_changed` notification → reregisterTools
+  - [x] HTTP SSE incremental + consumeSseStream (ReadableStream, no body buffer)
+  - [x] AbortSignal cancellation (combined in HttpTransport.post, wire only)
+  - [x] Per-server tool filters (tools.include/exclude + glob)
+  - [x] applyConfig restart on transport-effective config change
+  - [x] `mcpStatus`/`serverStates` using connection state (not tool count)
+  - [ ] Resources/prompts/notifications (full list + read/subscribe)
+  - [ ] Eval gate CI
 - [ ] Phase 5 — MCP B
   - [ ] Per-server trust/tool filters/timeouts
   - [ ] `scoder mcp` CLI + config import

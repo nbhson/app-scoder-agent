@@ -105,15 +105,33 @@ export function formatSessions(all: SessionSummary[]): string {
 
 /** Format MCP status listing (dùng chung). */
 export function formatMcpStatus(
-  status: Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }> }>,
+  status: Array<{
+    name: string;
+    command: string;
+    connected: boolean;
+    tools: Array<{ name: string; description?: string }>;
+    serverInfo?: { name?: string; version?: string };
+    capabilities?: Record<string, unknown>;
+  }>,
 ): string {
   if (status.length === 0) return "no MCP servers configured — add mcpServers to .scoderrc.json";
   return status
-    .map(
-      (srv) =>
-        `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}` +
-        (srv.connected ? ` (${srv.tools.length} tools)\n` + srv.tools.map((t) => `    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`).join("\n") : " (not connected)"),
-    )
+    .map((srv) => {
+      const capParts: string[] = [];
+      if (srv.serverInfo?.name) capParts.push(srv.serverInfo.name + (srv.serverInfo.version ? " v" + srv.serverInfo.version : ""));
+      if (srv.capabilities?.ping === true) capParts.push("ping");
+      if (srv.capabilities?.tools) capParts.push("tools");
+      if (srv.capabilities?.resources) capParts.push("resources");
+      if (srv.capabilities?.prompts) capParts.push("prompts");
+      const capTag = capParts.length > 0 ? ` [${capParts.join(", ")}]` : "";
+      return (
+        `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}${capTag}` +
+        (srv.connected
+          ? ` (${srv.tools.length} tools)\n` +
+            srv.tools.map((t) => `    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`).join("\n")
+          : " (not connected)")
+      );
+    })
     .join("\n");
 }
 

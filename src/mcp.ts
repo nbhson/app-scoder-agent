@@ -27,6 +27,10 @@ export interface McpServerConfig {
   tools?: { include?: string[]; exclude?: string[] };
   /** MCP A: request timeout (ms) — override default 120s. */
   timeoutMs?: number;
+  /** MCP B: whether to connect this server at all (default true). */
+  enabled?: boolean;
+  /** MCP B: permission mode for this server's tools. Defaults to "auto" (use global mode). */
+  trust?: "auto" | "ask" | "readonly" | "deny";
 }
 
 export interface McpTool {
@@ -307,7 +311,7 @@ export function parseSseMessages(text: string): Array<Record<string, unknown>> {
 // ── JSON-RPC connection ──────────────────────────────────────────────────────
 
 /** M1: connection state — surface qua onState cho AgentEvent mcp_status. */
-export type McpConnState = "connecting" | "ready" | "reconnecting" | "dead";
+export type McpConnState = "connecting" | "ready" | "reconnecting" | "dead" | "disabled";
 
 const RECONNECT_MAX = 5;
 const RECONNECT_BASE_MS = 500; // backoff: 0.5s, 1s, 2s, 4s, 8s
@@ -535,8 +539,18 @@ export class McpManager {
 
   /** Connect all servers; skip failures with a warning. Returns discovered tool count. */
   async connectAll(): Promise<number> {
+    const report = this.onStatus ?? ((line: string) => console.error(line));
     await Promise.allSettled(
       Object.entries(this.configs).map(async ([name, cfg]) => {
+        // MCP B: `enabled:false` and `trust:"readonly"` servers are NOT spawned —
+        // readonly mode must never start an external process. Report them as
+        // skipped so /mcp can still list them.
+        if (cfg.enabled === false || cfg.trust === "readonly") {
+          if (cfg.enabled === false) report(`· MCP "${name}" skipped (enabled: false)`);
+          else report(`· MCP "${name}" skipped (trust: readonly — not spawned)`);
+          this.onServerState?.(name, "disabled", cfg.enabled === false ? "enabled:false" : "trust:readonly");
+          return;
+        }
         const conn = new McpConnection(name, cfg);
         this.wireReconnect(name, conn);
         await conn.connect();
@@ -544,9 +558,10 @@ export class McpManager {
         this.conns.set(name, conn);
       }),
     ).then((results) => {
-      const report = this.onStatus ?? ((line: string) => console.error(line));
       results.forEach((r, i) => {
         const name = Object.keys(this.configs)[i];
+        const cfg = this.configs[name];
+        if (cfg?.enabled === false || cfg?.trust === "readonly") return; // already reported as skipped
         if (r.status === "rejected") {
           this.onServerState?.(name, "dead", "connect failed");
           report(`⚠  MCP server "${name}" unavailable: ${String((r.reason as Error)?.message).slice(0, 160)}`);
@@ -715,9 +730,14 @@ export class McpManager {
       }
     }
     this.configs = configs;
-    // Server mới → connect.
+    // Server mới → connect (except enabled:false / trust:readonly — never spawn).
     for (const [name, cfg] of Object.entries(configs)) {
       if (this.conns.has(name)) continue;
+      if (cfg.enabled === false || cfg.trust === "readonly") {
+        this.onServerState?.(name, "disabled", cfg.enabled === false ? "enabled:false" : "trust:readonly");
+        report(`· MCP "${name}" skipped (${cfg.enabled === false ? "enabled: false" : "trust: readonly — not spawned"})`);
+        continue;
+      }
       const conn = new McpConnection(name, cfg);
       this.wireReconnect(name, conn);
       try {
