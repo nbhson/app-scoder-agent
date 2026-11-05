@@ -77,6 +77,12 @@ export interface TuiState {
   mcpServers: Record<string, string>;
   /** Live: accumulated streaming output chars during current run (chars / ~4 ≈ tokens). */
   streamingOutputChars: number;
+  /** Timestamp (ms) when the current LLM stream started emitting deltas. */
+  streamStartedAt: number | null;
+  /** Timestamp (ms) when the current LLM call started (step boundary). */
+  llmCallStartedAt: number | null;
+  /** Tok/s of the most recently completed LLM call (output tokens / call duration). */
+  lastLlmTokPerSec: number | null;
   /** v2: active primary agent name (from run_start). */
   agent: string;
   /** v2: context-window pressure from the last `context` event. */
@@ -111,6 +117,9 @@ export function initialState(): TuiState {
     phases: [],
     mcpServers: {},
     streamingOutputChars: 0,
+    streamStartedAt: null,
+    llmCallStartedAt: null,
+    lastLlmTokPerSec: null,
     agent: "build",
     context: null,
     queue: { pending: 0, steering: 0 },
@@ -276,6 +285,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.lastGuardrail = null;
       state.phases = [];
       state.streamingOutputChars = 0;
+      state.streamStartedAt = null;
+      state.llmCallStartedAt = null;
+      state.lastLlmTokPerSec = null;
       // The TUI pushes the user's message itself when submitting; avoid a
       // duplicate when run_start carries the same task.
       const last = lastItem(state);
@@ -300,6 +312,10 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     case "step": {
       state.step = ev.step;
       state.maxSteps = ev.maxSteps;
+      // New LLM turn: reset per-stream tracking.
+      state.streamingOutputChars = 0;
+      state.streamStartedAt = null;
+      state.llmCallStartedAt = Date.now();
       // A new step starts: close any still-"streaming" assistant message.
       const last = lastItem(state);
       if (last && last.kind === "assistant" && last.streaming) last.streaming = false;
@@ -307,6 +323,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       break;
     }
     case "llm_delta": {
+      if (state.streamStartedAt == null) {
+        state.streamStartedAt = state.llmCallStartedAt ?? Date.now();
+      }
       state.streamingOutputChars += ev.delta.length;
       const last = lastItem(state);
       if (last && last.kind === "assistant" && last.streaming) {
@@ -327,6 +346,17 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.usage.inputTokens += ev.usage.input_tokens ?? 0;
       state.usage.outputTokens += ev.usage.output_tokens ?? 0;
       state.usage.cachedTokens += ev.usage.cached_tokens ?? 0;
+      // Per-call speed from the actual call duration, not the whole run.
+      const start = state.streamStartedAt ?? state.llmCallStartedAt;
+      if (start != null) {
+        const elapsedMs = Math.max(1, Date.now() - start);
+        const out = ev.usage.output_tokens ?? 0;
+        if (out > 0) {
+          state.lastLlmTokPerSec = Math.round(out / (elapsedMs / 1000));
+        }
+      }
+      state.streamingOutputChars = 0;
+      state.streamStartedAt = null;
       break;
     }
     case "tool_call": {

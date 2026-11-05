@@ -177,6 +177,17 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       return { ...next, items: [...next.items] };
     });
   }, [update]);
+  // Realtime tick: re-render at least once per second while a run is active so
+  // sidebar metrics (elapsed time, ctx pressure, tok/s during/after a stream)
+  // update live instead of only on the next event/command boundary.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!runningRef.current) return;
+      update((s) => ({ ...s }));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [update]);
+
   const queueEvent = useCallback(
     (ev: AgentEvent) => {
       // T-03: permission modal must appear instantly (not batched) — the run

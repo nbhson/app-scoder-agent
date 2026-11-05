@@ -113,15 +113,17 @@ function MetricsSection({ state }: { state: TuiState }): React.JSX.Element {
   const cost =
     (state.usage.inputTokens / 1_000_000) * resolveModelPricing(state.model).input +
     (state.usage.outputTokens / 1_000_000) * resolveModelPricing(state.model).output;
-  // tok/s: output tokens / giây thô (chưa floor — 0.6s run đầu vẫn ra số).
-  const tokPerSec =
-    hasUsage && elapsedMs != null && elapsedMs > 500
-      ? Math.round(state.usage.outputTokens / (elapsedMs / 1000))
-      : null;
-  // Live estimate based on accumulated streaming chars (chars / ~4 ≈ tokens).
+  // tok/s of the most recently completed LLM call (output tokens / call duration).
+  // This is NOT averaged over the whole run (which includes tool/build time and
+  // dilutes the number); it reflects the model's actual generation speed.
+  const tokPerSec = state.lastLlmTokPerSec;
+  // Live estimate during an active stream: chars so far / elapsed since the
+  // first delta of this stream.
+  const streamElapsedMs =
+    state.streamStartedAt != null ? Date.now() - state.streamStartedAt : null;
   const liveTokPerSec =
-    state.streamingOutputChars > 0 && elapsedMs != null && elapsedMs > 250
-      ? Math.round((state.streamingOutputChars / 4) / (elapsedMs / 1000))
+    state.streamingOutputChars > 0 && streamElapsedMs != null && streamElapsedMs > 250
+      ? Math.round((state.streamingOutputChars / 4) / (streamElapsedMs / 1000))
       : null;
   const win = contextWindowFor(state.provider, state.model);
   // `ctx` should reflect the CURRENT context window pressure (estimateTokens of
