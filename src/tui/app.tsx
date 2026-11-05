@@ -18,7 +18,7 @@ import { setQuiet } from "../ui.js";
 import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
 import { resolveSessionId } from "../session.js";
-import { applyEvent, initialState, markAborted, type ChatItem, type TuiState } from "./state.js";
+import { applyEvent, initialState, markAborted, estimateItemRows, type ChatItem, type TuiState } from "./state.js";
 import { parseSlashCommand } from "./commands.js";
 import { dispatchCommand, type CommandHost } from "./command-registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
@@ -285,7 +285,20 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       }
       return { success: true, steps: 0, buildCmd: cfg.buildCmd, summary: "resumed" };
     },
-  }), [cfg, update, pushNotice, createAgent]);
+    /** [Phase 7] Transcript items — used by /export and /search. */
+    transcriptItems: () => stateRef.current.items,
+    /** [Phase 7] Scroll to a transcript item by index (best-effort row estimation). */
+    selectTranscriptItem: (index: number) => {
+      const items = stateRef.current.items;
+      if (index < 0 || index >= items.length) return;
+      // target: show item at index at the TOP of the viewport.
+      // Ink contentOffsetY shifts content upward by that many rows.
+      let above = 0;
+      for (let i = 0; i < index; i++) above += estimateItemRows(items[i]);
+      const maxScroll = Math.max(0, content.height - viewport.height);
+      setScrollOffset(Math.max(0, maxScroll - above));
+    },
+  }), [cfg, update, pushNotice, createAgent, viewport, content]);
 
   /** One round of the /review state machine: call the gate, render the result. */
   const reviewStep = useCallback(

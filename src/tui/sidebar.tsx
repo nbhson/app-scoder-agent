@@ -255,6 +255,34 @@ function McpSection({ state, config }: { state: TuiState; config: AgentConfig })
   );
 }
 
+// ── Subagent tree (Phase 7 — spawned via `task` tool) ────────────────────────
+
+type SubagentInfo = { id: string; name: string; description: string; status: "running" | "ok" | "failed"; steps?: number; summary?: string };
+
+function SubagentSection({ state }: { state: TuiState }): React.JSX.Element {
+  if (state.subagents.length === 0) return <></>;
+  return (
+    <Section title="SUBAGENTS">
+      {state.subagents.map((s: SubagentInfo) => {
+        const color =
+          s.status === "running" ? theme.accent :
+          s.status === "ok" ? theme.success :
+          theme.error;
+        const mark = s.status === "running" ? "◐" : s.status === "ok" ? "✔" : "✘";
+        const summary = s.summary ? ` — ${s.summary.slice(0, 50)}${s.summary.length > 50 ? "…" : ""}` : "";
+        const steps = s.steps != null ? ` (${s.steps} steps)` : "";
+        return (
+          <Text key={s.id} wrap="truncate" dimColor>
+            <Text color={color}>  {mark} </Text>
+            <Text color={color}>{s.name}</Text>
+            <Text dimColor>{summary}{steps}</Text>
+          </Text>
+        );
+      })}
+    </Section>
+  );
+}
+
 // ── Root ─────────────────────────────────────────────────────────────────────
 
 /** Sidebar phải — mọi trạng thái sống của run, cập nhật theo AgentEvent. */
@@ -274,6 +302,7 @@ export function Sidebar({ state, config }: { state: TuiState; config: AgentConfi
       <MetricsSection state={state} />
       <PhaseSection state={state} />
       <PlanSection state={state} />
+      <SubagentSection state={state} />
       <BuildSection state={state} config={config} />
     </Box>
   );

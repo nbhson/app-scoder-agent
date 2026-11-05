@@ -50,6 +50,8 @@ export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly>", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
   { name: "/undo", aliases: [], description: "revert files: /undo [files|edit] — edit also trims the turn back for re-send", usage: "/undo [files|edit]", visibility: "tui-only", source: "builtin" },
   { name: "/commands", aliases: [], description: "list all commands (builtin + custom) — /commands <name> to inspect", usage: "/commands [name]", visibility: "public", source: "builtin" },
+  { name: "/export", aliases: [], description: "export session transcript: /export [md|json]", usage: "/export [md|json]", visibility: "public", source: "builtin" },
+  { name: "/search", aliases: [], description: "search transcript: /search <query>", usage: "/search <query>", visibility: "public", source: "builtin" },
   { name: "/exit", aliases: ["/quit"], description: "quit (aliases: /quit, exit, quit)", usage: "/exit", visibility: "public", source: "builtin" },
 ];
 

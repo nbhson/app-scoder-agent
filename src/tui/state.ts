@@ -214,10 +214,11 @@ function capTail(text: string, max = MAX_OUTPUT_CHARS): string {
  */
 export function toolPhase(name: string): string | null {
   if (name === "write_todos") return "plan";
-  if (name === "list_files" || name === "read_file" || name === "grep" || name === "glob" || name === "web_fetch" || name === "load_skill") return "explore";
+  if (name === "list_files" || name === "read_file" || name === "grep" || name === "glob" || name === "web_fetch" || name === "load_skill" || name === "repo_map") return "explore";
   if (name === "write_file" || name === "edit_file" || name === "apply_patch") return "edit";
   if (name === "run_command") return "build";
   if (name === "task") return "delegate";
+  if (name === "ask_user") return "clear";
   if (name.startsWith("mcp__")) return "mcp";
   return null;
 }

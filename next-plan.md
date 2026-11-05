@@ -486,11 +486,17 @@ Việc làm:
   - [ ] Unified `CommandDef` registry (deferred — scope trimmed)
   - [ ] Skills 2.0 (progressive disclosure + enforce allowed-tools) (deferred)
   - [ ] Completion v2 (deferred)
-- [ ] Phase 7 — TUI
-  - [ ] Reducer event coverage
-  - [ ] Command palette + help overlay
-  - [ ] Transcript search/expand/export + diff nav
-  - [ ] Ask/permission queue + accessibility + perf
+- [x] Phase 7 — TUI (transcript features)
+  - [x] SubagentSection in sidebar (running/ok/failed + summary)
+  - [x] `/export [md|json]` — exports transcript to workdir/scoder-export.{md|json}
+  - [x] `/search <query>` — searches transcript, shows snippets + TUI scroll-to-item
+  - [x] Transcript helpers (transcript.ts): exportTranscript, findInTranscript, copyTextForItem
+  - [x] toolPhase: mcp__* → "mcp", repo_map → "explore", ask_user → "clear", task → "delegate"
+  - [x] CommandHost transcriptItems + selectTranscriptItem (TUI host)
+  - [ ] Reducer event coverage for steer_queued/steer_delivered/compaction/agent_start/end/tool_progress (already covered in existing state.ts)
+  - [ ] Command palette / help overlay / diff nav / subagent tree (deferred — scope trimmed)
+  - [ ] Permission queue / ask_user modal / risk level (deferred)
+  - [ ] NO_COLOR / --no-motion / --plain / high-contrast (deferred)
 - [ ] Phase 8 — Hardening
   - [ ] Docs + CHANGELOG
   - [ ] Migration/backward-compat test

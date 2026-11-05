@@ -10,6 +10,7 @@
  * nằm ở tui/ nhưng không import ink/react (unit-test được).
  */
 import type { Agent, AgentRunResult, UsageTotals } from "../agent.js";
+import type { ChatItem } from "./state.js";
 import type { AgentConfig } from "../config.js";
 import { listSessions, resolveSessionId, type SessionFile, type SessionSummary } from "../session.js";
 import { discoverSkills, type Skill } from "../skills.js";
@@ -18,6 +19,7 @@ import { agentsMdTemplate } from "../agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, runCustomCommand, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
+import { exportTranscript, findInTranscript, type TranscriptMatch } from "./transcript.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────
 
@@ -52,6 +54,10 @@ export interface CommandHost {
   replaceAgent(agent: Agent | null): void;
   /** Resume + chạy tiếp trong foreground (REPL: console; TUI: tự quản running state). */
   resumeAndRun?(session: SessionFile): Promise<AgentRunResult>;
+  /** [TUI] Current transcript items — used by /export and /search. */
+  transcriptItems?(): ChatItem[];
+  /** [TUI] Scroll to a transcript item by index (/search navigation). */
+  selectTranscriptItem?(index: number): void;
 }
 
 /** UI sink — mỗi frontend cung cấp một hàm hiển thị. */
@@ -373,6 +379,42 @@ export function coreCommands(): CommandEntry[] {
           return;
         }
         notice(`command "/${name}" not found`, "warn");
+      },
+    },
+    {
+      name: "/export",
+      description: "export session transcript: /export [md|json] — writes to workdir/scoder-export.{md|json}",
+      run(slash, host, notice) {
+        const items = host.transcriptItems ? host.transcriptItems() : [];
+        if (items.length === 0) { notice("no transcript to export", "warn"); return; }
+        const fmt = (slash.arg.trim().toLowerCase() as "md" | "json") || "md";
+        if (fmt !== "md" && fmt !== "json") { notice("usage: /export [md|json]", "warn"); return; }
+        const content = exportTranscript(items, fmt);
+        const fileName = `scoder-export.${fmt}`;
+        const filePath = join(host.config.workdir, fileName);
+        try {
+          writeFileSync(filePath, "\ufeff" + content, "utf8");
+          notice(`exported ${items.length} items → ${filePath}`);
+        } catch (e) {
+          notice(`export failed: ${(e as Error).message}`, "error");
+        }
+      },
+    },
+    {
+      name: "/search",
+      description: "search transcript: /search <query> — shows snippets; TUI jumps to result",
+      run(slash, host, notice) {
+        if (!slash.arg.trim()) { notice("usage: /search <query>", "warn"); return; }
+        const items = host.transcriptItems ? host.transcriptItems() : [];
+        if (items.length === 0) { notice("no transcript to search", "warn"); return; }
+        const matches: TranscriptMatch[] = findInTranscript(items, slash.arg);
+        if (matches.length === 0) { notice(`no results for "${slash.arg.trim()}"`, "warn"); return; }
+        notice(`${matches.length} match${matches.length > 1 ? "es" : ""} in transcript:\n` +
+          matches.slice(0, 20).map((m) => `  [${m.index}] ${m.kind}: ${m.snippet}`).join("\n"));
+        // TUI: jump to first result
+        if (host.selectTranscriptItem && matches.length > 0) {
+          host.selectTranscriptItem(matches[0].index);
+        }
       },
     },
   ];
