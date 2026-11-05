@@ -1485,7 +1485,7 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
   - [x] Config import from ~/.claude.json, opencode.json, .mcp.json
   - [x] Audit log tool call + untrusted output flag
   - [x] Eval gate CI
-- [ ] Phase 6 — Command/Skill MVP
+- [x] Phase 6 — Command/Skill MVP
   - [x] Custom `.scoder/commands/*.md` (global + project, YAML frontmatter, $1/$ARGUMENTS)
   - [x] `/commands` listing + inspect
   - [ ] Unified `CommandDef` registry (deferred — scope trimmed)
@@ -1498,7 +1498,7 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
   - [x] Transcript helpers (transcript.ts): exportTranscript, findInTranscript, copyTextForItem
   - [x] toolPhase: mcp__* → "mcp", repo_map → "explore", ask_user → "clear", task → "delegate"
   - [x] CommandHost transcriptItems + selectTranscriptItem (TUI host)
-  - [ ] Reducer event coverage for steer_queued/steer_delivered/compaction/agent_start/end/tool_progress (already covered in existing state.ts)
+  - [x] Reducer event coverage for steer_queued/steer_delivered/compaction/agent_start/end/tool_progress (already covered in existing state.ts)
   - [ ] Command palette / help overlay / diff nav / subagent tree (deferred — scope trimmed)
   - [ ] Permission queue / ask_user modal / risk level (deferred)
   - [ ] NO_COLOR / --no-motion / --plain / high-contrast (deferred)
