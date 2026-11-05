@@ -3,11 +3,12 @@ import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval 
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
-import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem } from "./tools.js";
+import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem, type AskUserRequest } from "./tools.js";
 import { invalidateFileIndex } from "./tui/at-complete.js";
 import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
+import { parseDiagnostics, formatDiagnostics, classifyError, detectVerifyCmds, type VerifyCommands } from "./diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "./prompt-builder.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
@@ -260,6 +261,16 @@ export class Agent {
   private memory: WorkingMemory = emptyWorkingMemory();
   /** v2: one-shot guardrail nudge for editing without a plan. */
   private planNudged = false;
+  /** v2: diffs accumulated during the run (for the self-review pass). */
+  private runDiffs: string[] = [];
+  /** v2: self-review consumed once per run. */
+  private selfReviewDone = false;
+  /** v2: build no-progress tracking — same failure signature twice → escalate. */
+  private lastVerifySignature = "";
+  private verifyStrikes = 0;
+  /** v2: ask_user plumbing (frontends register handlers; serve → not-interactive). */
+  private onQuestion: ((req: AskUserRequest & { id: string }) => Promise<string | null>) | null = null;
+  private questionSeq = 0;
   /** Guardrail Engine — khởi tạo trong constructor (cần this.config). */
   private guardrails: ReturnType<typeof createGuardrailEngine>;
 
@@ -324,6 +335,141 @@ export class Agent {
     }
   }
 
+  // ── v2: ask_user (frontend-wired question flow) ───────────────────────────
+
+  /** Frontends register a question handler (TUI modal / REPL readline). */
+  setQuestionHandler(fn: ((req: AskUserRequest & { id: string }) => Promise<string | null>) | null): void {
+    this.onQuestion = fn;
+  }
+
+  private async programmaticAsk(req: AskUserRequest): Promise<{ ok: boolean; output: string }> {
+    if (!this.onQuestion) {
+      return {
+        ok: false,
+        output: "ERROR: ask_user is unavailable — non-interactive session. Proceed with your best judgment or stop and report.",
+      };
+    }
+    const id = `q${Date.now()}_${++this.questionSeq}`;
+    this.emit({
+      type: "question_request",
+      id,
+      question: req.question,
+      options: req.options,
+      multiple: req.multiple,
+      timeoutSecs: req.timeoutSecs ?? 120,
+    });
+    try {
+      const timeoutMs = (req.timeoutSecs ?? 120) * 1000;
+      const answer = await Promise.race([
+        this.onQuestion({ ...req, id }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+      if (answer == null || (typeof answer === "string" && !answer.trim())) {
+        return { ok: false, output: "ERROR: ask_user timed out or was cancelled." };
+      }
+      this.logger.log({ type: "ask_user", question: req.question, answer: String(answer).slice(0, 500) });
+      return { ok: true, output: `User answered: ${answer}` };
+    } catch (err) {
+      return { ok: false, output: `ERROR: ask_user failed: ${(err as Error).message.slice(0, 200)}` };
+    }
+  }
+
+  // ── v2: verification pipeline (build → test → typecheck → lint) ───────────
+
+  /** Resolved verify commands: rc overrides → manifest detection → buildCmd. */
+  private resolveVerify(buildCmd: string): VerifyCommands {
+    const cfg = this.config.verifyCmds ?? {};
+    const detected = detectVerifyCmds(this.config.workdir);
+    const pick = (name: keyof VerifyCommands, fallback: string | undefined): string | undefined => {
+      const v = cfg[name];
+      if (v === "") return undefined; // explicit disable
+      return v ?? fallback;
+    };
+    return {
+      build: pick("build", buildCmd),
+      test: pick("test", detected.test),
+      typecheck: pick("typecheck", detected.typecheck),
+      lint: pick("lint", detected.lint),
+    };
+  }
+
+  /** Run the full gate: build → test → typecheck → lint, fail fast, one build event per cmd. */
+  private async verifyAll(buildCmd: string): Promise<BuildResult> {
+    const v = this.resolveVerify(buildCmd);
+    const outputs: Array<{ cmd: string; res: BuildResult }> = [];
+    const runOne = async (cmd: string): Promise<BuildResult> => {
+      const res = await runBuild(this.config.workdir, cmd, (stream, delta) =>
+        this.handleToolOutput("build", stream, delta),
+      );
+      this.endToolStream();
+      ui.buildStatus(res.success, res.output);
+      this.emit({ type: "build", success: res.success, command: cmd, output: res.output });
+      this.logger.log({ type: "build", success: res.success, command: cmd, output: res.output.slice(0, 10_000) });
+      return res;
+    };
+    // Always verify the build when one is configured; test/typecheck/lint add on.
+    for (const cmd of [v.build, v.test, v.typecheck, v.lint]) {
+      if (!cmd) continue;
+      const res = await runOne(cmd);
+      outputs.push({ cmd, res });
+      if (!res.success) break;
+    }
+    if (outputs.length === 0) {
+      return { success: true, command: buildCmd, output: "(no verify commands)" };
+    }
+    const allOk = outputs.every((o) => o.res.success);
+    const combined = outputs.map((o) => `$ ${o.cmd}\n${o.res.output}`).join("\n\n");
+    this.lastBuildResult = { success: allOk, command: outputs.map((o) => o.cmd).join(" && "), output: combined };
+    return this.lastBuildResult;
+  }
+
+  /** Signature of a verification failure — stable across cosmetic differences. */
+  private failureSignature(output: string): string {
+    const diags = parseDiagnostics(output);
+    if (diags.length > 0) return diags.slice(0, 5).map((d) => d.code ?? d.message).join("|");
+    return output.toLowerCase().replace(/\d+/g, "N").replace(/\s+/g, " ").slice(0, 300);
+  }
+
+  /** Collect the run's diff texts (capped) for the self-review pass. */
+  private collectRunDiff(): string {
+    if (this.runDiffs.length === 0) return "";
+    const joined = this.runDiffs.join("\n");
+    return joined.length > 12_000 ? `…[truncated]\n${joined.slice(-12_000)}` : joined;
+  }
+
+  /**
+   * v2: self-review pass — ask the model to review the accumulated diff for
+   * blocking issues before we call the run done. [blocking] lines or LGTM;
+   * infrastructure problems never block completion.
+   */
+  private async selfReviewGate(): Promise<string | null> {
+    if (this.config.selfReview === false) return null;
+    if (this.selfReviewDone) return null;
+    if (!this.filesModified) return null;
+    this.selfReviewDone = true;
+    const diff = this.collectRunDiff();
+    if (!diff) return null;
+    const prompt =
+      `You are reviewing an agent's diff for this task:\n\nTASK: ${this.currentTask}\n\nDIFF:\n${diff}\n\n` +
+      `List ONLY blocking issues (correctness, security, or acceptance violations), each on its own line prefixed with "[blocking]" ` +
+      `and include file:line and a one-line fix. If there are no blocking issues, reply exactly "LGTM".`;
+    try {
+      const res = await this.client.chat([{ role: "user", content: prompt }], [], { signal: this.runSignal.signal });
+      this.recordLlmUsage(res.usage);
+      const text = (res.message.content ?? "").trim();
+      const blocking = text.split("\n").filter((l) => /\[blocking\]/i.test(l));
+      if (blocking.length === 0) {
+        this.logger.log({ type: "self_review", verdict: /^LGTM\b/im.test(text) ? "lgtm" : "no-blocking-findings" });
+        return null;
+      }
+      this.logger.log({ type: "self_review", verdict: "blocking", findings: blocking.slice(0, 10).join("\n").slice(0, 2000) });
+      return blocking.slice(0, 10).join("\n").slice(0, 3000);
+    } catch (err) {
+      this.logger.log({ type: "self_review", verdict: "error", error: (err as Error).message.slice(0, 200) });
+      return null;
+    }
+  }
+
   private logGuardrailDecision(d: GuardrailDecision): void {
     const kind = d.action.kind;
     this.logger.log({ type: "guardrail", rule: d.rule, action: kind, reason: d.reason });
@@ -381,6 +527,7 @@ export class Agent {
       formatter: config.formatter,
       sandbox: config.sandbox,
       allowSubagents: config.allowSubagents,
+      askUser: (req) => this.programmaticAsk(req),
     };
     // G7: thresholds từ rc limits.
     if (config.limits?.maxOutputChars) setMaxOutputChars(config.limits.maxOutputChars);
@@ -768,6 +915,10 @@ export class Agent {
         if (filesModified) this.filesModified = true;
         // T-01: @-autocomplete index invalidate on tool writes.
         if (filesModified) invalidateFileIndex();
+        if (result.diff?.text) {
+          this.runDiffs.push(result.diff.text);
+          if (this.runDiffs.length > 40) this.runDiffs.shift();
+        }
         this.endToolStream();
         this.currentToolCall = null;
         ui.toolResult(tc.name, result.ok, result.output);
@@ -1020,6 +1171,10 @@ export class Agent {
     this.plan = [];
     this.planNudged = false;
     this.memory = emptyWorkingMemory(task);
+    this.runDiffs = [];
+    this.selfReviewDone = false;
+    this.verifyStrikes = 0;
+    this.lastVerifySignature = "";
     const skillsBlock = buildSkillsBlock(this.skills); // I3
     // v2: AGENTS.md conventions + repo map (bounded token budget each).
     const agentsGuideBlock = buildAgentGuideBlock(this.config.workdir, task);
@@ -1130,6 +1285,10 @@ export class Agent {
     // and restore the last write_todos plan so resumed runs keep their ledger.
     this.memory = memoryFromMessages(this.messages, session.task);
     this.planNudged = false;
+    this.runDiffs = [];
+    this.selfReviewDone = false;
+    this.verifyStrikes = 0;
+    this.lastVerifySignature = "";
     let restoredPlan: TodoItem[] | null = null;
     for (const m of this.messages) {
       if (m.role !== "assistant" || !m.tool_calls) continue;
@@ -1403,18 +1562,46 @@ export class Agent {
           continue;
         }
         if (a.kind === "verify-build") {
-          // Xác minh độc lập với lời của model (async — loop tự chạy build).
-          lastBuild = await this.checkBuild(buildCmd);
+          // Xác minh độc lập với lời của model (async — loop tự chạy verify).
+          lastBuild = await this.verifyAll(buildCmd);
           if (lastBuild.success) {
+            // v2: self-review the diff before calling it done.
+            const reviewNote = await this.selfReviewGate();
+            if (reviewNote) {
+              reminders.push(`[self-review] blocking findings — fix these, then verify again:\n${reviewNote}`);
+              continue;
+            }
             if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
             return this.finish(true, steps, buildCmd, a.successSummary);
           }
-          reminders.push(`${a.failReminder}\n${summariseOutput(lastBuild.output)}\nFix and continue.`);
+          // Structured diagnostics + error class instead of a raw log tail.
+          const diags = parseDiagnostics(lastBuild.output);
+          const errClass = classifyError(lastBuild.output);
+          const signature = this.failureSignature(lastBuild.output);
+          this.verifyStrikes = signature === this.lastVerifySignature ? this.verifyStrikes + 1 : 1;
+          this.lastVerifySignature = signature;
+          let failBlock = diags.length > 0 ? formatDiagnostics(diags) : summariseOutput(lastBuild.output);
+          reminders.push(`${a.failReminder}\n${failBlock}\nError class: ${errClass.kind} — ${errClass.strategy}\nFix and continue.`);
+          if (this.verifyStrikes >= 4) {
+            for (const r of reminders) this.messages.push({ role: "user", content: r });
+            if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
+            return this.finish(false, steps, buildCmd, `Verification failed the same way ${this.verifyStrikes} times — stopping. Last error class: ${errClass.kind}.`);
+          }
+          if (this.verifyStrikes >= 2) {
+            reminders.push("<system-reminder>The SAME verification failed repeatedly. Stop retrying the identical approach — change strategy fundamentally, or report the blocker in your final message.</system-reminder>");
+          }
           continue;
         }
         if (a.kind === "finish") {
           // Giữ nguyên thứ tự tin nhắn như bản inline cũ: reminder (wrap-up)
           // đã đẩy trước khi kết thúc.
+          if (a.success && this.filesModified && !a.chatOnly && !this.selfReviewDone && this.config.selfReview !== false) {
+            const reviewNote = await this.selfReviewGate();
+            if (reviewNote) {
+              reminders.push(`[self-review] blocking findings — fix these, then verify again:\n${reviewNote}`);
+              continue;
+            }
+          }
           for (const r of reminders) this.messages.push({ role: "user", content: r });
           if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
           return this.finish(a.success, steps, buildCmd, a.summary, a.chatOnly ?? false);
@@ -1515,20 +1702,6 @@ export class Agent {
       },
       this.sessionCreatedAt,
     );
-  }
-
-  /** Explicitly verify the build (independent of what the LLM claims). */
-  private async checkBuild(buildCmd: string): Promise<BuildResult> {
-    const res = await runBuild(this.config.workdir, buildCmd, (stream, delta) =>
-      this.handleToolOutput("build", stream, delta),
-    );
-    this.endToolStream();
-    ui.buildStatus(res.success, res.output);
-    // Keep the last build visible to finish() → finish.verification.
-    this.lastBuildResult = res;
-    this.emit({ type: "build", success: res.success, command: buildCmd, output: res.output });
-    this.logger.log({ type: "build", success: res.success, command: buildCmd, output: res.output.slice(0, 10_000) });
-    return res;
   }
 
   // ── Frontend-facing APIs (REPL/TUI slash commands) ─────────────────────────

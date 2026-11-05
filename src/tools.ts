@@ -846,6 +846,16 @@ export interface ToolContext {
   sandbox?: SandboxConfig;
   /** G7: max chars tool output (default 20_000) — clamp() đọc từ đây. */
   maxOutputChars?: number;
+  /** v2: ask_user — frontends (TUI/REPL) provide a handler for interactive questions. */
+  askUser?: (req: AskUserRequest) => Promise<{ ok: boolean; output: string }>;
+}
+
+/** v2: ask_user request shape. Frontends wire a handler via ctx.askUser. */
+export interface AskUserRequest {
+  question: string;
+  options?: string[];
+  multiple?: boolean;
+  timeoutSecs?: number;
 }
 
 /** One row of the agent's session plan (write_todos). */

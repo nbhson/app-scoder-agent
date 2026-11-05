@@ -31,6 +31,10 @@ export interface AgentConfig {
   repoMap?: boolean;
   /** v2: prompt version — 4 = rollback to V4 prompt; 5/undefined = V5 (default). */
   promptVersion?: number;
+  /** v2: verify commands for the completion gate (rc "verifyCmds"). Empty string disables one. */
+  verifyCmds?: { build?: string; test?: string; lint?: string; typecheck?: string };
+  /** v2: run a self-review pass over the run's diff before finishing (default true). */
+  selfReview?: boolean;
   /** Max tokens for chat completions */
   maxTokens: number;
   temperature: number;
@@ -113,6 +117,10 @@ interface RcFile {
   repoMap?: boolean;
   /** v2: prompt version override — 4 = rollback to V4, 5/undefined = V5 (default). */
   promptVersion?: number;
+  /** v2: verify commands for the completion gate (empty string disables one). */
+  verifyCmds?: { build?: string; test?: string; lint?: string; typecheck?: string };
+  /** v2: self-review pass over the run's diff before finishing (default true). */
+  selfReview?: boolean;
   /** Custom providers (I-01): id -> {baseUrl, apiKeyEnv, kind}. */
   providers?: unknown;
   /** Max steps before wrap-up reminder injection. */
@@ -373,6 +381,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     routing: rc.routing,
     repoMap: rc.repoMap,
     promptVersion: rc.promptVersion,
+    verifyCmds: rc.verifyCmds,
+    selfReview: rc.selfReview,
     modelPricing: parsePricing(rc.modelPricing),
   };
 
