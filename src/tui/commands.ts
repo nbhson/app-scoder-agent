@@ -120,7 +120,7 @@ export interface CompletionProvider {
 
 import { readdirSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, basename, extname, dirname } from "node:path";
+import { join, resolve, basename, extname } from "node:path";
 import { suggest } from "./at-complete.js";
 
 // ── Custom commands discovery (Phase 6) ──────────────────────────────────────
@@ -149,7 +149,7 @@ export interface CustomCommand {
 }
 
 /** Substitute $ARGUMENTS, $1..$n, @file references in the body. */
-function substituteTemplate(body: string, argStr: string, workdir: string): string {
+function substituteTemplate(body: string, argStr: string): string {
   const args = argStr.trim().split(/\s+/).filter(Boolean);
   let out = body;
   out = out.replace(/\$ARGUMENTS/g, argStr.trim());
@@ -167,7 +167,7 @@ export function discoverCustomCommands(workdir: string): CustomCommand[] {
 
   const results: CustomCommand[] = [];
   for (const dir of dirs) {
-    let files: string[] = [];
+    let files: string[];
     try { files = readdirSync(dir); } catch { continue; }
     for (const file of files) {
       if (extname(file) !== ".md") continue;
@@ -247,7 +247,7 @@ function parseCustomCommandFile(
 
 /** Substitute + execute a custom command; returns the prompt text to inject. */
 export function runCustomCommand(cmd: CustomCommand, argStr: string): string {
-  return substituteTemplate(cmd.body, argStr, dirname(cmd.filePath));
+  return substituteTemplate(cmd.body, argStr);
 }
 
 /** Build providers from runtime context (called once per keystroke burst). */

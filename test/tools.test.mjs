@@ -16,6 +16,7 @@ const listFiles = getTool("list_files");
 const readFile = getTool("read_file");
 const writeFile = getTool("write_file");
 const editFile = getTool("edit_file");
+const applyPatch = getTool("apply_patch");
 
 const ctx = { workdir, permissionMode: "auto", permissions: undefined };
 
@@ -148,6 +149,88 @@ describe("write_file / edit_file", () => {
     });
     assert.equal(r.ok, false);
     assert.match(r.output, /tolerant matches|disambiguate/);
+  });
+});
+
+describe("apply_patch — multi-hunk atomic edits", () => {
+  it("applies multiple edits in one write, sequentially", async () => {
+    const p = "sub/patch.txt";
+    await writeFile.run(ctx, { path: p, content: "alpha\nbeta\ngamma\n" });
+    const r = await applyPatch.run(ctx, {
+      path: p,
+      edits: [
+        { old_string: "alpha", new_string: "ALPHA" },
+        // depends on edit #1 having run first
+        { old_string: "ALPHA\nbeta", new_string: "ALPHA\nBETA" },
+        { old_string: "gamma", new_string: "GAMMA" },
+      ],
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.match(r.output, /Applied 3 edits/);
+    assert.equal(readFileSync(join(workdir, p), "utf8"), "ALPHA\nBETA\nGAMMA\n");
+    assert.ok(r.diff, "phải trả diff để TUI hiển thị");
+    assert.match(r.diff.text, /-alpha/);
+    assert.match(r.diff.text, /\+ALPHA/);
+  });
+
+  it("is atomic: a failing edit leaves the file untouched", async () => {
+    const p = "sub/patch-atomic.txt";
+    await writeFile.run(ctx, { path: p, content: "one\ntwo\n" });
+    const r = await applyPatch.run(ctx, {
+      path: p,
+      edits: [
+        { old_string: "one", new_string: "ONE" },
+        { old_string: "NOT_THERE", new_string: "x" },
+      ],
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /edit #2\/2 failed/);
+    assert.match(r.output, /No changes written/);
+    assert.equal(readFileSync(join(workdir, p), "utf8"), "one\ntwo\n", "file phải giữ nguyên");
+  });
+
+  it("refuses an ambiguous old_string without writing", async () => {
+    const p = "sub/patch-dup.txt";
+    await writeFile.run(ctx, { path: p, content: "same\nsame\n" });
+    const r = await applyPatch.run(ctx, {
+      path: p,
+      edits: [{ old_string: "same", new_string: "diff" }],
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /matches 2 locations/);
+    assert.equal(readFileSync(join(workdir, p), "utf8"), "same\nsame\n");
+  });
+
+  it("supports fuzzy whitespace matching inside a patch", async () => {
+    const p = "sub/patch-fuzzy.txt";
+    await writeFile.run(ctx, { path: p, content: "  const x   = 1;\n" });
+    const r = await applyPatch.run(ctx, {
+      path: p,
+      edits: [{ old_string: "const x = 1;", new_string: "const x = 2;" }],
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.match(r.output, /1 fuzzy whitespace match/);
+    assert.equal(readFileSync(join(workdir, p), "utf8"), "  const x = 2;\n");
+  });
+
+  it("rejects empty edits, missing files, and path escapes", async () => {
+    const empty = await applyPatch.run(ctx, { path: "sub/patch.txt", edits: [] });
+    assert.equal(empty.ok, false);
+    assert.match(empty.output, /non-empty array/);
+
+    const missing = await applyPatch.run(ctx, {
+      path: "sub/does-not-exist.txt",
+      edits: [{ old_string: "a", new_string: "b" }],
+    });
+    assert.equal(missing.ok, false);
+    assert.match(missing.output, /cannot read/);
+
+    const escape = await applyPatch.run(ctx, {
+      path: "../outside.txt",
+      edits: [{ old_string: "a", new_string: "b" }],
+    });
+    assert.equal(escape.ok, false);
+    assert.match(escape.output, /escapes working directory/);
   });
 });
 

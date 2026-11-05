@@ -257,6 +257,46 @@ function wsInsensitiveRegex(s: string): RegExp {
   return new RegExp(rx);
 }
 
+type EditOutcome =
+  | { ok: true; content: string; fuzzy: boolean }
+  | { ok: false; error: string };
+
+/** Apply one exact (or whitespace-tolerant) replacement to in-memory content. */
+function applyOneEdit(
+  content: string,
+  path: string,
+  oldString: string,
+  newString: string,
+): EditOutcome {
+  if (typeof oldString !== "string" || oldString.length === 0) {
+    return { ok: false, error: "old_string must be a non-empty string." };
+  }
+  if (content.includes(oldString)) {
+    const count = content.split(oldString).length - 1;
+    if (count > 1) {
+      return { ok: false, error: `old_string matches ${count} locations in ${path}; include more surrounding context to make it unique.` };
+    }
+    // Function replacement: avoids JS $-pattern interpolation ($&, $', $`, $1…)
+    // which would corrupt literal text like "$&" in the new content.
+    return { ok: true, content: content.replace(oldString, () => newString), fuzzy: false };
+  }
+  // v2 fuzzy fallback: exact string missing → retry with whitespace-tolerant
+  // matching (indent/trailing-space drift between model and file). Reports
+  // ambiguity instead of guessing when multiple regions match.
+  const all = [...content.matchAll(new RegExp(wsInsensitiveRegex(oldString).source, "g"))];
+  if (all.length === 0) {
+    return { ok: false, error: `old_string not found in ${path}. Read the file again and retry with exact text.` };
+  }
+  if (all.length > 1) {
+    return { ok: false, error: `old_string not found exactly and ${all.length} whitespace-tolerant matches exist in ${path}; include more surrounding context to disambiguate.` };
+  }
+  return {
+    ok: true,
+    content: content.slice(0, all[0].index) + newString + content.slice(all[0].index + all[0][0].length),
+    fuzzy: true,
+  };
+}
+
 async function toolEditFile(
   ctx: ToolContext,
   args: { path: string; old_string: string; new_string: string },
@@ -268,33 +308,9 @@ async function toolEditFile(
     return { ok: false, output: `ERROR: ${(err as Error).message}` };
   }
   const content = readFileSync(abs, "utf8");
-  let matched: string;
-  let newContent: string;
-  let fuzzy = false;
-  if (content.includes(args.old_string)) {
-    const count = content.split(args.old_string).length - 1;
-    if (count > 1) {
-      return { ok: false, output: `old_string matches ${count} locations in ${args.path}; include more surrounding context to make it unique.` };
-    }
-    // Function replacement: avoids JS $-pattern interpolation ($&, $', $`, $1…)
-    // which would corrupt literal text like "$&" in the new content.
-    newContent = content.replace(args.old_string, () => args.new_string);
-    matched = args.old_string;
-  } else {
-    // v2 fuzzy fallback: exact string missing → retry with whitespace-tolerant
-    // matching (indent/trailing-space drift between model and file). Reports
-    // ambiguity instead of guessing when multiple regions match.
-    const all = [...content.matchAll(new RegExp(wsInsensitiveRegex(args.old_string).source, "g"))];
-    if (all.length === 0) {
-      return { ok: false, output: `old_string not found in ${args.path}. Read the file again and retry with exact text.` };
-    }
-    if (all.length > 1) {
-      return { ok: false, output: `old_string not found exactly and ${all.length} whitespace-tolerant matches exist in ${args.path}; include more surrounding context to disambiguate.` };
-    }
-    fuzzy = true;
-    matched = all[0][0];
-    newContent = content.slice(0, all[0].index) + args.new_string + content.slice(all[0].index + all[0][0].length);
-  }
+  const outcome = applyOneEdit(content, args.path, args.old_string, args.new_string);
+  if (!outcome.ok) return { ok: false, output: outcome.error };
+  const newContent = outcome.content;
 
   const diff = unifiedDiff(args.path, content, newContent);
   const gate = await gateWrite(ctx, args.path, diff);
@@ -304,7 +320,64 @@ async function toolEditFile(
   const fmtNote = formatFile(ctx, abs);
   return {
     ok: true,
-    output: `Edited ${args.path}${fuzzy ? " (fuzzy whitespace match)" : ""}${fmtNote ? `\n${fmtNote}` : ""}`,
+    output: `Edited ${args.path}${outcome.fuzzy ? " (fuzzy whitespace match)" : ""}${fmtNote ? `\n${fmtNote}` : ""}`,
+    diff: toToolDiff(args.path, diff),
+  };
+}
+
+async function toolApplyPatch(
+  ctx: ToolContext,
+  args: { path: string; edits: Array<{ old_string: string; new_string: string }> },
+): Promise<ToolResult> {
+  let abs: string;
+  try {
+    abs = safePath(ctx.workdir, args.path);
+  } catch (err) {
+    return { ok: false, output: `ERROR: ${(err as Error).message}` };
+  }
+  if (!Array.isArray(args.edits) || args.edits.length === 0) {
+    return { ok: false, output: "ERROR: edits must be a non-empty array." };
+  }
+  if (args.edits.length > 50) {
+    return { ok: false, output: `ERROR: too many edits (${args.edits.length}); split into chunks of at most 50.` };
+  }
+  let content: string;
+  try {
+    content = readFileSync(abs, "utf8");
+  } catch (err) {
+    return { ok: false, output: `ERROR: cannot read ${args.path}: ${(err as Error).message}` };
+  }
+  const original = content;
+  let fuzzy = 0;
+  for (let i = 0; i < args.edits.length; i++) {
+    const e = args.edits[i];
+    if (!e || typeof e.old_string !== "string" || typeof e.new_string !== "string") {
+      return { ok: false, output: `ERROR: edit #${i + 1} must have string old_string and new_string. No changes written.` };
+    }
+    const outcome = applyOneEdit(content, args.path, e.old_string, e.new_string);
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        output: `ERROR: edit #${i + 1}/${args.edits.length} failed — ${outcome.error} No changes written.`,
+      };
+    }
+    content = outcome.content;
+    if (outcome.fuzzy) fuzzy++;
+  }
+  if (content === original) {
+    return { ok: true, output: `No changes to ${args.path} (all edits were no-ops).` };
+  }
+
+  const diff = unifiedDiff(args.path, original, content);
+  const gate = await gateWrite(ctx, args.path, diff);
+  if (gate) return gate;
+
+  writeFileSync(abs, content, "utf8");
+  const fmtNote = formatFile(ctx, abs);
+  const fuzzyNote = fuzzy > 0 ? ` (${fuzzy} fuzzy whitespace match${fuzzy === 1 ? "" : "es"})` : "";
+  return {
+    ok: true,
+    output: `Applied ${args.edits.length} edit${args.edits.length === 1 ? "" : "s"} to ${args.path}${fuzzyNote}${fmtNote ? `\n${fmtNote}` : ""}`,
     diff: toToolDiff(args.path, diff),
   };
 }
@@ -1071,7 +1144,8 @@ export const AGENT_TOOLS: AgentTool[] = [
       function: {
         name: "edit_file",
         description:
-          "Replace an exact unique substring in a file. old_string must appear exactly once; include enough surrounding context.",
+          "Replace an exact unique substring in a file. old_string must appear exactly once; include enough surrounding context. " +
+          "For multiple replacements in the same file, use apply_patch (atomic, one write).",
         parameters: obj(
           {
             path: str("Relative file path"),
@@ -1084,6 +1158,37 @@ export const AGENT_TOOLS: AgentTool[] = [
     },
     run: (ctx, args) =>
       toolEditFile(ctx, args as { path: string; old_string: string; new_string: string }),
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "apply_patch",
+        description:
+          "Apply multiple exact replacements to ONE file atomically. Edits run in order; each old_string must match exactly once " +
+          "in the content produced by the previous edits. If any edit fails, nothing is written. " +
+          "Use this instead of repeated edit_file calls for multi-hunk changes.",
+        parameters: obj(
+          {
+            path: str("Relative file path"),
+            edits: {
+              type: "array",
+              description: "Ordered list of replacements applied atomically (1–50).",
+              items: obj(
+                {
+                  old_string: str("Exact text to replace (must be unique at its turn)"),
+                  new_string: str("Replacement text"),
+                },
+                ["old_string", "new_string"],
+              ),
+            },
+          },
+          ["path", "edits"],
+        ),
+      },
+    },
+    run: (ctx, args) =>
+      toolApplyPatch(ctx, args as { path: string; edits: Array<{ old_string: string; new_string: string }> }),
   },
   {
     spec: {
@@ -1209,10 +1314,17 @@ export const AGENT_TOOLS: AgentTool[] = [
   },
 ];
 
+/** One subtask in a batch `task` call. */
+export interface TaskSpec {
+  description: string;
+  prompt: string;
+  agent?: string;
+}
+
 /** I-06: subagent spawner — injected by agent.ts (avoids circular import). */
 export type TaskRunner = (
   ctx: ToolContext,
-  args: { description: string; prompt: string; agent?: string },
+  args: { description?: string; prompt?: string; agent?: string; tasks?: TaskSpec[] },
 ) => Promise<ToolResult>;
 
 /** task tool — runner resolved from ctx.taskRunner (per-agent, no global). */
@@ -1222,24 +1334,50 @@ const taskTool: AgentTool = {
     function: {
       name: "task",
       description:
-        "Delegate a self-contained subtask to a subagent that runs its own agent loop with its own context. " +
+        "Delegate self-contained subtasks to subagents that run their own agent loop with their own context. " +
         "WHEN TO USE: broad codebase exploration (find where X lives, summarize module Y) so the main " +
-        "conversation stays lean, or an independent subtask that needs many steps. " +
-        "The prompt must be self-contained (the subagent sees nothing else); it returns a summary. " +
+        "conversation stays lean, or independent subtasks that need many steps. " +
+        "SINGLE: pass description + prompt. BATCH: pass tasks[] to run up to 8 subtasks concurrently " +
+        "(bounded at 4 in flight) and get one merged result. " +
+        "Every prompt must be self-contained (the subagent sees nothing else); each returns a summary. " +
         "Prefer this over reading dozens of files yourself.",
       parameters: obj(
         {
-          description: str("One-line summary of the subtask (shown in the UI)"),
-          prompt: str("Self-contained instructions for the subagent, including any file paths and the expected output"),
+          description: str("One-line summary of the subtask (single mode; shown in the UI)"),
+          prompt: str("Self-contained instructions for the subagent (single mode)"),
           agent: str("Optional agent name from the available agents (default: explore for research, build for changes)"),
+          tasks: {
+            type: "array",
+            description: "Batch mode: up to 8 subtasks run concurrently. When set, description/prompt are ignored.",
+            items: obj(
+              {
+                description: str("One-line summary of this subtask (shown in the UI)"),
+                prompt: str("Self-contained instructions for this subagent"),
+                agent: str("Optional agent name for this subtask"),
+              },
+              ["description", "prompt"],
+            ),
+          },
         },
-        ["description", "prompt"],
+        [],
       ),
     },
   },
   run: (ctx, args) => {
     if (!ctx.taskRunner) return { ok: false, output: "ERROR: task tool not wired (no runner in context)." };
-    return ctx.taskRunner(ctx, args as { description: string; prompt: string; agent?: string });
+    const a = args as { description?: string; prompt?: string; agent?: string; tasks?: TaskSpec[] };
+    if (Array.isArray(a.tasks) && a.tasks.length > 0) {
+      if (a.tasks.length > 8) {
+        return { ok: false, output: `ERROR: too many tasks (${a.tasks.length}); split into batches of at most 8.` };
+      }
+      const invalid = a.tasks.findIndex((t) => !t || typeof t.prompt !== "string" || !t.prompt.trim());
+      if (invalid >= 0) return { ok: false, output: `ERROR: tasks[${invalid}] is missing a non-empty prompt.` };
+      return ctx.taskRunner(ctx, { tasks: a.tasks });
+    }
+    if (typeof a.prompt !== "string" || !a.prompt.trim()) {
+      return { ok: false, output: "ERROR: task requires a non-empty `prompt` (single mode) or a non-empty `tasks` array (batch mode)." };
+    }
+    return ctx.taskRunner(ctx, a);
   },
 };
 

@@ -18,7 +18,7 @@ import { selectableAgents } from "../agents.js";
 import { agentsMdTemplate } from "../agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, runCustomCommand, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
+import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
 import { exportTranscript, findInTranscript, type TranscriptMatch } from "./transcript.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────

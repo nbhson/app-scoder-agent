@@ -541,13 +541,16 @@ export class Agent {
     // registration alone allowed grandchildren through). Runner lives on the
     // per-instance ctx — concurrent Agents (server multi-run) stay isolated.
     if (config.allowSubagents !== false) {
-      const runner: TaskRunner = async (ctx, args) => {
-        if (ctx.allowSubagents === false) {
-          return { ok: false, output: "ERROR: task tool not available — subagents cannot spawn further subagents (depth limit)." };
-        }
+      const availableNames = () => discoverAgents(config.workdir)
+        .filter((a) => a.mode !== "subagent" || a.name === "explore")
+        .map((a) => a.name)
+        .join(", ");
+
+      /** Run one subtask in its own child Agent. */
+      const runOne = async (args: { description?: string; prompt?: string; agent?: string }): Promise<ToolResult> => {
         const def = args.agent ? findAgent(config.workdir, args.agent) : findAgent(config.workdir, "explore");
         if (args.agent && !def) {
-          return { ok: false, output: `ERROR: agent "${args.agent}" not found — available: ${discoverAgents(config.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name).join(", ")}` };
+          return { ok: false, output: `ERROR: agent "${args.agent}" not found — available: ${availableNames()}` };
         }
         const child = new Agent({
           ...config,
@@ -579,7 +582,7 @@ export class Agent {
           else if (ev.type === "llm_delta") this.emit({ type: "tool_output", name: tag, stream: "stdout", delta: ev.delta });
         };
         try {
-          const res = await child.run(args.prompt);
+          const res = await child.run(args.prompt ?? "");
           this.emit({ type: "agent_end", id: childId, ok: res.success, steps: res.steps, summary: res.summary.slice(0, 500) });
           return {
             ok: res.success,
@@ -595,6 +598,39 @@ export class Agent {
           // Child agents are ephemeral: close their MCP connections (if any).
           child.dispose();
         }
+      };
+
+      const runner: TaskRunner = async (ctx, args) => {
+        if (ctx.allowSubagents === false) {
+          return { ok: false, output: "ERROR: task tool not available — subagents cannot spawn further subagents (depth limit)." };
+        }
+        // Batch mode: bounded concurrency (max 4 in flight), stable result order.
+        if (Array.isArray(args.tasks) && args.tasks.length > 0) {
+          const tasks = args.tasks;
+          const results: ToolResult[] = new Array(tasks.length);
+          const concurrency = Math.min(4, tasks.length);
+          let cursor = 0;
+          const worker = async () => {
+            for (;;) {
+              const i = cursor++;
+              if (i >= tasks.length) return;
+              results[i] = await runOne(tasks[i]);
+            }
+          };
+          await Promise.all(Array.from({ length: concurrency }, () => worker()));
+          const okCount = results.filter((r) => r.ok).length;
+          const body = results
+            .map((r, i) => `## Task ${i + 1}: ${tasks[i].description}\n${r.output}`)
+            .join("\n\n");
+          return {
+            ok: okCount === tasks.length,
+            output: `[batch ${tasks.length} task${tasks.length === 1 ? "" : "s"} — ${okCount}/${tasks.length} ok]\n\n${body}`,
+          };
+        }
+        if (typeof args.prompt !== "string" || !args.prompt.trim()) {
+          return { ok: false, output: "ERROR: task requires a non-empty `prompt`." };
+        }
+        return runOne(args);
       };
       this.ctx.taskRunner = runner;
     }
@@ -1580,7 +1616,7 @@ export class Agent {
           const signature = this.failureSignature(lastBuild.output);
           this.verifyStrikes = signature === this.lastVerifySignature ? this.verifyStrikes + 1 : 1;
           this.lastVerifySignature = signature;
-          let failBlock = diags.length > 0 ? formatDiagnostics(diags) : summariseOutput(lastBuild.output);
+          const failBlock = diags.length > 0 ? formatDiagnostics(diags) : summariseOutput(lastBuild.output);
           reminders.push(`${a.failReminder}\n${failBlock}\nError class: ${errClass.kind} — ${errClass.strategy}\nFix and continue.`);
           if (this.verifyStrikes >= 4) {
             for (const r of reminders) this.messages.push({ role: "user", content: r });

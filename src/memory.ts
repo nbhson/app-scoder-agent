@@ -90,7 +90,7 @@ export function noteConstraint(mem: WorkingMemory, text: string): void {
 /** Decision heuristic: explicit "Decision:" / "Decided:" / "Quyết định" / "Chốt" lines in assistant prose. */
 export function scanDecisions(mem: WorkingMemory, text: string): void {
   for (const line of text.split("\n")) {
-    const mm = /^\s*(?:[-*]\s*)?(?:decision|decided|quyết định|chốt)\s*[:\-]\s*(.+)$/i.exec(line);
+    const mm = /^\s*(?:[-*]\s*)?(?:decision|decided|quyết định|chốt)\s*[:-]\s*(.+)$/i.exec(line);
     if (mm?.[1]) noteDecision(mem, mm[1].trim());
   }
 }

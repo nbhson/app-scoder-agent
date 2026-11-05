@@ -22,3 +22,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      # Eval gate (Phase 3): deterministic mock-LLM scenarios. Any regression
+      # fails the build — stricter than the plan's >5% threshold.
+      - run: npm run eval

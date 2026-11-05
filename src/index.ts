@@ -445,7 +445,7 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
 async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | "test", restArgs: string[]): Promise<void> {
   const { McpManager } = await import("./mcp.js");
   const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
-  const { join, dirname, resolve: pathResolve } = await import("node:path");
+  const { join, dirname } = await import("node:path");
   const { mkdirSync } = await import("node:fs");
   const rcPath = join(cfg.workdir, ".scoderrc.json");
 

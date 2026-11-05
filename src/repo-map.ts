@@ -11,7 +11,7 @@
  *    (relpath + mtime of every walked file). Any edit invalidates the map.
  *  - Hidden + noise dirs skipped (node_modules/.git/dist/…, dot-dirs).
  */
-import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative, sep } from "node:path";
 
@@ -121,7 +121,6 @@ export function renderRepoMap(workdir: string, budgetChars = DEFAULT_BUDGET_CHAR
     `REPO MAP — ${files.length} files (auto-generated; orient from this, don't read everything)`,
   ];
   let budget = budgetChars;
-  let shown = 0;
   let truncated = 0;
   for (const f of files) {
     let line = `  ${f.rel} (${kb(f.size)})`;
@@ -139,7 +138,6 @@ export function renderRepoMap(workdir: string, budgetChars = DEFAULT_BUDGET_CHAR
     }
     lines.push(line);
     budget -= line.length + 1;
-    shown++;
   }
   if (truncated > 0) lines.push(`  … ${truncated} more file(s) — use list_files/glob to explore`);
   return lines.join("\n");

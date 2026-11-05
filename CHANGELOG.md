@@ -19,6 +19,10 @@ changes__: 0.8.x `.scoderrc.json`, event streams and skill files keep loading.
   (permission/model/temperature/steps/reasoning) applied at spec level.
 - Agent C: diagnostics parser + verify commands, self-review + completion
   gate, `ask_user` tool contract with timeout + `<<QUESTION>>` protocol.
+- `task` batch mode: `tasks[]` runs up to 8 subtasks with bounded concurrency
+  (max 4 in flight) and merges results in declaration order.
+- `apply_patch` tool: atomic multi-hunk edits (one write, all-or-nothing).
+- CI eval gate: `npm run eval` runs the deterministic mock-LLM suite.
 - `read_file` offset/limit ranges; `grep`/diagnostics precedence fixes.
 
 ### MCP
