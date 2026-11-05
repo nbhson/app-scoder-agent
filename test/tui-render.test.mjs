@@ -80,6 +80,7 @@ describe("tui chrome — BuildRail wide/narrow", () => {
     const s = runningState();
     const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), 120);
     assert.match(out, /scoder/);
+    assert.match(out, /scoder \(v\d+\.\d+\.\d+\)/);
     assert.match(out, /\[auto\]/);
     assert.match(out, /○ —/);
     assert.ok(!out.includes("m1"), "wide mode không hiện model (trùng bottom StatusBar)");

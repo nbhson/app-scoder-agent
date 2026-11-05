@@ -8,6 +8,7 @@ import type { AgentConfig } from "../config.js";
 import type { TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
 import { Spinner } from "./chat-views.js";
+import { getVersion } from "../version.js";
 
 /** Fuel gauge is scaled to this many cells regardless of maxSteps. */
 export const GAUGE_CELLS = 12;
@@ -71,7 +72,7 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
     >
       {/* Left: brand logo */}
       <Text bold color={theme.brand}>
-        ⚑ <Text bold>scoder</Text>
+        ⚑ <Text bold>scoder</Text><Text dimColor> (v{getVersion()})</Text>
       </Text>
 
       {/* Center: guardrail warning OR phase breadcrumb */}
