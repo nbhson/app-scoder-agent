@@ -50,6 +50,14 @@
 | `permissions.ts` | Permission checker, catastrophic deny list, rule engine |
 | `config.ts` | Config loading: rc file, env vars, CLI overrides |
 | `guardrails.ts` | Guardrail Engine: doom-loop, text-only streak, wrap-up |
+| `agents.ts` | Primary/subagent definitions (build/plan/review/custom) |
+| `agents-guide.ts` | AGENTS.md hierarchy collection |
+| `compaction.ts` | LLM-powered history summarization |
+| `memory.ts` | Working memory / task state |
+| `repo-map.ts` | Repository map for context |
+| `snapshot.ts` | Git shadow snapshots before file writes |
+| `steering.ts` | Steering / follow-up injection |
+| `context.ts` | History trimming, mentions, completion detection |
 
 ### Context & Storage
 

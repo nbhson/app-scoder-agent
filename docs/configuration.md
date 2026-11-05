@@ -14,6 +14,15 @@
 | `SCODER_SERVER_TOKEN` | — | `scoder serve` auth token |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | `1` to allow localhost/private in web_fetch |
 | `SCODER_NO_APIKEY_WARNING` | — | `1` to suppress apiKey-in-rc warning |
+| `SCODER_AGENT` | — | Primary agent name (build/plan/review/custom) |
+| `SCODER_REASONING` | — | `1` to enable reasoning/thinking output |
+| `SCODER_SKILLS` | `~/.scoder/skills` | Skills directory override |
+| `SCODER_CONFIG` | `~/.scoder/config.json` | Global config file override |
+| `SCODER_NO_SAVE` | — | `1` to disable session auto-save |
+| `SCODER_NO_WATCH` | — | `1` to disable file watching |
+| `SCODER_PLAIN` | — | `1` for plain (monochrome) output |
+| `SCODER_THEME` | — | Palette name (mission/paper/mono/light/high-contrast/solarized) |
+| `SCODER_NO_MOTION` | — | `1` to disable animations |
 
 Legacy env vars (still work):
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`

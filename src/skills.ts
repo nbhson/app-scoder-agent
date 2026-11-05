@@ -37,6 +37,7 @@ const MAX_SKILL_BODY_CHARS = 20_000;
 export const skillWarnings: SkillWarning[] = [];
 
 /** Minimal YAML-lite parser supporting scalars, flow arrays, block arrays, nested. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function parseFrontmatter(text: string): { meta: Record<string, any>; body: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   if (!m) return { meta: {}, body: text };
@@ -44,8 +45,10 @@ export function parseFrontmatter(text: string): { meta: Record<string, any>; bod
   return { meta, body: m[2].trim() };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseYamlLite(src: string): Record<string, any> {
   const lines = src.split(/\r?\n/);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const out: Record<string, any> = {};
   let i = 0;
   while (i < lines.length) {
@@ -57,6 +60,7 @@ function parseYamlLite(src: string): Record<string, any> {
     const raw = kv[2].trim();
     if (raw === "") {
       // block array or nested
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const items: any[] = [];
       let j = i + 1;
       while (j < lines.length && /^\s+-\s+/.test(lines[j])) {

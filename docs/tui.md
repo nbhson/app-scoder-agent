@@ -103,8 +103,12 @@ scoder tui "fix the bug"       # auto-submit initial task
 | `Tab` | Autocomplete (commands, skill names, MCP tools) |
 | `PgUp/PgDn` | Page scroll (0.8 viewport) |
 | `Home/End` | Jump to top/bottom |
-| `Esc` | Return to live tail / Abort |
+| `Esc` | Return to live tail / Abort / enter vim normal mode in input |
 | `Ctrl+C` | Quit |
+| `Ctrl+P` | Open command palette |
+| `Ctrl+S` | Open session picker |
+| `?` | Show help modal |
+| Mouse wheel | Scroll chat pane |
 
 ## Slash Commands
 
@@ -113,24 +117,37 @@ Same commands available in TUI and REPL:
 | Command | Description |
 |---------|-------------|
 | `/help` | Command list |
+| `/plan` | Show current plan |
+| `/agent` | List/select primary agents |
+| `/init` | Create AGENTS.md template |
+| `/sessions` | List/resume sessions |
+| `/diff` | Show diffs |
+| `/theme` | Switch palette |
 | `/clear` | Reset conversation |
+| `/compact` | Summarize older history |
 | `/cost` | Token usage |
 | `/model` | Model info |
 | `/skills` | List skills |
 | `/skill <name>` | Load a skill |
 | `/mcp` | MCP servers & tools |
 | `/review <prompt>` | Prompt gate |
-| `/permission <auto\|readonly>` | Switch mode |
+| `/permission <mode>` | Switch mode |
+| `/undo` | Revert files |
+| `/commands` | List all commands |
+| `/export [md\|json]` | Export transcript |
+| `/search <query>` | Search transcript |
 | `/exit` | Quit |
 
 ## Themes
 
-TUI supports 3 built-in themes + custom terminal detection:
+TUI supports 6 built-in palettes (mission, paper, mono, light, high-contrast, solarized)
+plus terminal capability detection and a project default via `.scoder/theme.json`:
 
 ```bash
-scoder tui --theme dark   # Dark theme (default if terminal supports)
-scoder tui --theme light  # Light theme
-scoder tui --theme mono   # Monochrome
+# In the TUI:
+/theme list
+/theme mission
+/theme high-contrast
 ```
 
 ## Non-TTY Fallback

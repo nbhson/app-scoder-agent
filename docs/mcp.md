@@ -98,3 +98,59 @@ scoder
 ## Hot Reload
 
 MCP servers configured in `.scoderrc.json` are connected at startup. To add/remove servers mid-session, edit the config and the agent will pick up changes at the next turn.
+
+## Per-Server Governance
+
+Each server entry supports additional fields:
+
+```json
+{
+  "mcpServers": {
+    "db": {
+      "command": "node",
+      "args": ["db-server.js"],
+      "enabled": true,
+      "trust": "ask",
+      "tools": { "include": ["query_*"], "exclude": ["drop_*"] },
+      "timeoutMs": 60000,
+      "type": "stdio"
+    }
+  }
+}
+```
+
+- `enabled` — `false` skips spawning the server entirely
+- `trust` — `auto` (default) \| `ask` \| `readonly` \| `deny`; `readonly` servers are never spawned and their tools are disabled
+- `tools.include` / `tools.exclude` — glob filters applied to discovered tool names
+- `timeoutMs` — per-server request timeout (default 120s)
+- `type` — force `stdio` or `http` transport (auto-detected from `url`/`command`)
+
+## MCP Resources & Prompts
+
+Connected servers may expose resources and prompts (Phase 4). The agent has
+generic tools `mcp_list_resources`, `mcp_read_resource` (optional `subscribe`),
+`mcp_list_prompts`, and `mcp_get_prompt`, advertised only when a server
+supports them. Notifications (`resources/list_changed`, `prompts/list_changed`,
+`resources/updated`, `progress`) refresh caches automatically.
+
+## CLI Management
+
+```bash
+scoder mcp list
+scoder mcp add <name> --command "..." [--url "..."] [--trust auto|ask|readonly|deny] [--args "..."]
+scoder mcp remove <name>
+scoder mcp test <name>
+scoder mcp import [path] [--dry-run] [--force]
+```
+
+`scoder mcp import` discovers and imports server definitions from Claude Desktop
+(`~/.claude.json`), OpenCode (`opencode.json`), and `.mcp.json`.
+
+## Security
+
+- MCP tools bypass the built-in shell permission system; in `readonly` mode they
+  are disabled entirely.
+- Tool output is flagged `untrusted: true` in the event stream and wrapped with
+  an `[UNTRUSTED]` marker in the LLM conversation.
+- Audit log entries (`mcp_audit`) are written to the JSONL log for MCP tool
+  calls and resource reads.

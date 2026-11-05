@@ -105,7 +105,6 @@ Safety defaults:
 | `SCODER_MAX_STEPS` | `40` | Max loop iterations before giving up |
 | `SCODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
 | `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
-| `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
 | `SCODER_SERVER_TOKEN` | — | `scoder serve` only: require `Authorization: Bearer <token>` |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | Set to `1` to let `web_fetch` reach localhost/private addresses (local dev) |
 | `SCODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
@@ -233,6 +232,12 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | Command | Description |
 |---|---|
 | `/help` | command list |
+| `/plan` | show the current plan; `/plan done\|start <id\|n>` to mark steps |
+| `/agent` | list/select primary agents (build/plan/review/custom) |
+| `/init` | create an AGENTS.md template in this project |
+| `/sessions` | list saved sessions; `/sessions resume <id\|last>` |
+| `/diff` | show diffs: `/diff turn\|session\|branch` (TUI) |
+| `/theme` | switch palette (TUI) |
 | `/clear` | reset conversation + agent context |
 | `/compact` | summarize older history now (manual compaction) |
 | `/cost` | session token usage |
@@ -241,7 +246,11 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | `/skill <name>` | stage a skill for the next task |
 | `/mcp` | MCP servers + tools; exec one directly: `/mcp <server> <tool> [json\|text]` or `/mcp mcp__server__tool [json\|text]` — non-JSON text binds to the tool's first string parameter |
 | `/review <prompt>` | Prompt gate (prompt-gate MCP): LLM rewrites your prompt, you pick original/rewritten/update/cancel — only the approved prompt is used |
-| `/permission <auto\|readonly>` | switch permission mode at runtime |
+| `/permission <auto\|ask\|readonly>` | switch permission mode at runtime |
+| `/undo` | revert files (and optionally trim the turn) (TUI) |
+| `/commands` | list all commands (builtin + custom) |
+| `/export [md\|json]` | export session transcript |
+| `/search <query>` | search the transcript |
 | `/exit` | quit |
 
 In the TUI, **Tab** completes commands (and `/skill` names, `/mcp <server> <tool>` arguments), **↑/↓** recall sent-message history.
@@ -339,6 +348,13 @@ scoder can use tools from [MCP](https://modelcontextprotocol.io) servers configu
 - **Resilience**: a dead stdio server reconnects with exponential backoff (max 5 attempts) and refreshes its tool list; HTTP calls are stateless and retry on the next call
 - Built-in tools always take priority over MCP tools with colliding names
 - ⚠️ **MCP tools bypass the built-in permission system** (no command classification, no diff preview). In `readonly` mode they are therefore disabled entirely; in `auto`/`ask` mode they run unsandboxed — only add MCP servers you trust.
+
+### MCP governance
+
+Each server supports `enabled`, `trust` (`auto`/`ask`/`readonly`/`deny`), `tools.include`/`exclude`
+(globs), and `timeoutMs`. `readonly` servers are never spawned. Import existing configs with
+`scoder mcp import`. MCP tool output is flagged `untrusted` and wrapped with an `[UNTRUSTED]`
+marker; audit entries are written to the JSONL log.
 
 ### Prompt gate (`/review`)
 
@@ -487,7 +503,12 @@ scoder --help | --version     Help and version
 | `--permission <mode>` | `auto` \| `ask` \| `readonly` shell-command policy (default `auto`) |
 | `-y` | Non-interactive mode (denies commands needing confirmation) |
 | `--provider <name>` | `openai` \| `anthropic` (env SCODER_PROVIDER; auto-detected) |
+| `--agent <name>` | Primary agent to run (build/plan/review/custom) |
 | `--no-save` | Disable session auto-save to `.scoder/sessions/` |
+| `--no-color` | Disable colored output |
+| `--no-motion` | Disable animations |
+| `--plain` | Plain (monochrome) output |
+| `--high-contrast` | High-contrast theme |
 | `--log-file` | Write a structured JSONL event log to `.scoder/logs/` |
 | `--port <n>` | (`serve`) TCP port, `0` = random free port |
 | `--host <addr>` | (`serve`) Bind address (default `127.0.0.1`) |
