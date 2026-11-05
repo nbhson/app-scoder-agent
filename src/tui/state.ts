@@ -30,6 +30,8 @@ export type ChatItem =
   | { kind: "notice"; text: string; level: "info" | "warn" | "error" }
   | { kind: "thinking"; text: string; streaming: boolean }
   | { kind: "build"; success: boolean; command: string }
+  /** v2: compaction divider — "đã tóm tắt N tin nhắn · X→Y tokens". */
+  | { kind: "compaction"; tokensBefore: number; tokensAfter: number; manual?: boolean }
   | { kind: "todo"; items: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> }
   | {
       kind: "diff";
@@ -75,6 +77,16 @@ export interface TuiState {
   mcpServers: Record<string, string>;
   /** Live: accumulated streaming output chars during current run (chars / ~4 ≈ tokens). */
   streamingOutputChars: number;
+  /** v2: active primary agent name (from run_start). */
+  agent: string;
+  /** v2: context-window pressure from the last `context` event. */
+  context: { tokens: number; window: number; pct: number } | null;
+  /** v2: pending steering/queue depth (HUD badge). */
+  queue: { pending: number; steering: number };
+  /** v2: last reported verification verdict (from finish). */
+  verification: { ok: boolean | null; detail: string } | null;
+  /** v2: subagents spawned in this run (tree state for the sidebar). */
+  subagents: Array<{ id: string; name: string; description: string; status: "running" | "ok" | "failed"; steps?: number; summary?: string }>;
 }
 
 export function initialState(): TuiState {
@@ -99,6 +111,11 @@ export function initialState(): TuiState {
     phases: [],
     mcpServers: {},
     streamingOutputChars: 0,
+    agent: "build",
+    context: null,
+    queue: { pending: 0, steering: 0 },
+    verification: null,
+    subagents: [],
   };
 }
 
@@ -122,6 +139,8 @@ export function estimateItemRows(item: ChatItem): number {
       return 1 + Math.ceil((item.text?.length ?? 0) / 80) + (item.text ? item.text.split("\n").length : 0);
     case "tool":
       return 1 + 2; // title + preview 2 lines
+    case "compaction":
+      return 1;
     case "diff":
       return 3 + Math.min(24, (item.text?.split("\n").length ?? 0)); // header + ≤24 lines + border
     case "todo":
@@ -195,9 +214,11 @@ function capTail(text: string, max = MAX_OUTPUT_CHARS): string {
  */
 export function toolPhase(name: string): string | null {
   if (name === "write_todos") return "plan";
-  if (name === "list_files" || name === "read_file" || name === "web_fetch" || name === "load_skill") return "explore";
-  if (name === "write_file" || name === "edit_file") return "edit";
+  if (name === "list_files" || name === "read_file" || name === "grep" || name === "glob" || name === "web_fetch" || name === "load_skill") return "explore";
+  if (name === "write_file" || name === "edit_file" || name === "apply_patch") return "edit";
   if (name === "run_command") return "build";
+  if (name === "task") return "delegate";
+  if (name.startsWith("mcp__")) return "mcp";
   return null;
 }
 
@@ -238,6 +259,11 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.buildCmd = ev.buildCmd;
       state.buildLamp = "none";
       state.permission = ev.permission;
+      state.agent = ev.agent ?? "build";
+      state.context = null;
+      state.queue = { pending: 0, steering: 0 };
+      state.verification = null;
+      state.subagents = [];
       state.startedAt = Date.now();
       state.endedAt = null;
       state.status = "running";
@@ -387,10 +413,65 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       appendItem(state, { kind: "notice", text: ev.line, level: ev.line.includes("unavailable") ? "warn" : "info" });
       break;
     }
+    case "steer_queued": {
+      // Pending depth tracked via the absolute `queue` event; nothing else.
+      state.queue = { ...state.queue, pending: state.queue.pending + 1, steering: state.queue.steering + (ev.mode === "steer" ? 1 : 0) };
+      break;
+    }
+    case "steer_delivered": {
+      state.queue = { pending: 0, steering: 0 };
+      appendItem(state, { kind: "notice", text: `steer: ${ev.count} message(s) delivered`, level: "info" });
+      break;
+    }
+    case "queue": {
+      state.queue = { pending: ev.pending, steering: ev.steering };
+      break;
+    }
+    case "compaction": {
+      appendItem(state, { kind: "compaction", tokensBefore: ev.tokensBefore, tokensAfter: ev.tokensAfter, manual: ev.manual });
+      break;
+    }
+    case "context": {
+      state.context = { tokens: ev.tokens, window: ev.window, pct: ev.pct };
+      break;
+    }
+    case "agent_start": {
+      // Track in the tree list; rendering lands in the sidebar (Phase 7).
+      const rest = state.subagents.filter((s) => s.id !== ev.id);
+      rest.push({ id: ev.id, name: ev.name, description: ev.description, status: "running" });
+      state.subagents = rest.slice(-20);
+      break;
+    }
+    case "agent_end": {
+      state.subagents = state.subagents.map((s) =>
+        s.id === ev.id ? { ...s, status: ev.ok ? "ok" : "failed", steps: ev.steps, summary: ev.summary } : s,
+      );
+      break;
+    }
+    case "tool_progress": {
+      // Attach latest progress message to the running tool card (if any).
+      for (let i = state.items.length - 1; i >= 0; i--) {
+        const it = state.items[i];
+        if (it.kind === "tool" && it.ok === null && (it.callId === ev.id || it.name === ev.name)) {
+          if (ev.message) it.output = capTail(`${it.output}\n… ${ev.message}`.trim());
+          break;
+        }
+        if (it.kind === "tool") break;
+      }
+      break;
+    }
+    case "question_request": {
+      // Surfaced via the dedicated ask_user modal (Phase 3/7); queue a notice
+      // so the transcript isn't silent while waiting for user input.
+      appendItem(state, { kind: "notice", text: `❓ ${ev.question}`, level: "info" });
+      break;
+    }
     case "finish": {
       state.status = ev.success ? "success" : /interrupted|aborted/i.test(ev.summary) ? "aborted" : "failed";
       state.summary = ev.summary;
       state.endedAt = Date.now();
+      if (ev.usage) state.usage = { ...ev.usage };
+      if (ev.verification) state.verification = { ...ev.verification };
       // Close ALL dangling streaming assistant messages — not just the last
       // item: a notice/tool item appended after the assistant text would
       // otherwise leave it stuck in raw streaming mode (invisible text).

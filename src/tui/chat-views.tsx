@@ -263,6 +263,17 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
           </Box>
         </Box>
       );
+    case "compaction": {
+      // Divider marking an LLM summarization of older history.
+      const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+      return (
+        <Box paddingLeft={1} marginTop={1}>
+          <Text dimColor italic>
+            ── {item.manual ? "compacted (manual)" : "compacted"}: {fmt(item.tokensBefore)} → {fmt(item.tokensAfter)} tokens ───
+          </Text>
+        </Box>
+      );
+    }
     case "notice":
       return (
         <Box paddingLeft={2} marginTop={1}>

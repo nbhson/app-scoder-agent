@@ -129,7 +129,10 @@ describe("tui state — phase breadcrumb + guardrail tracking", () => {
     assert.equal(toolPhase("write_file"), "edit");
     assert.equal(toolPhase("edit_file"), "edit");
     assert.equal(toolPhase("run_command"), "build");
-    assert.equal(toolPhase("mcp__x__y"), null);
+    assert.equal(toolPhase("grep"), "explore");
+    assert.equal(toolPhase("glob"), "explore");
+    assert.equal(toolPhase("task"), "delegate");
+    assert.equal(toolPhase("mcp__x__y"), "mcp");
   });
 
   it("run_start reset phases + guardrail; tool_call/build đẩy phase không trùng liền trước", async () => {

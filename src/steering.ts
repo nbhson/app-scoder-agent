@@ -32,6 +32,11 @@ export class SteeringInbox {
     return this.items.length;
   }
 
+  /** Breakdown for the `queue` event: total pending vs steer-mode count. */
+  counts(): { pending: number; steering: number } {
+    return { pending: this.items.length, steering: this.items.filter((x) => x.mode === "steer").length };
+  }
+
   clear(): void {
     this.items = [];
   }

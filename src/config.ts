@@ -19,6 +19,12 @@ export interface AgentConfig {
   maxSteps: number;
   /** Guardrail thresholds (doom-loop, text-only streak, wrap-up timing, G6 token budget) */
   guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number; tokenBudget?: number };
+  /**
+   * v2 event schema: name of the primary agent driving this session
+   * (e.g. "build" | "plan" | "review"). Logged into run_start.agent so the
+   * TUI/server can show which profile is active. Defaults to "build".
+   */
+  agent?: string;
   /** Max tokens for chat completions */
   maxTokens: number;
   temperature: number;

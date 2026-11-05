@@ -25,6 +25,7 @@ import { discoverSkills, findSkill, type Skill } from "./skills.js";
 import { discoverAgents, findAgent } from "./agents.js";
 
 import { SteeringInbox } from "./steering.js";
+import { randomUUID } from "node:crypto";
 import * as ui from "./ui.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
@@ -34,6 +35,22 @@ export interface AgentRunResult {
   steps: number;
   buildCmd: string | null;
   summary: string;
+}
+
+/**
+ * Event schema version — bumped when AgentEvent changes shape.
+ * v2 (additive): `run_start` gains schemaVersion/agent, `finish` gains
+ * usage/verification, new event types: compaction, agent_start, agent_end,
+ * tool_progress, question_request, queue, context.
+ * Consumers on v1 ignore events/fields they don't know.
+ */
+export const EVENT_SCHEMA_VERSION = 2;
+
+/** Verification outcome attached to `finish` — the completion gate's verdict. */
+export interface VerificationInfo {
+  /** true = build/tests pass; false = failing; null = nothing to verify. */
+  ok: boolean | null;
+  detail: string;
 }
 
 export interface UsageTotals {
@@ -48,7 +65,7 @@ export interface UsageTotals {
  * (the `scoder serve` HTTP/SSE API) can render runs without touching the UI.
  */
 export type AgentEvent =
-  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string; permission: string }
+  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string; permission: string; schemaVersion?: number; agent?: string }
   | { type: "step"; step: number; maxSteps: number }
   | { type: "llm_delta"; delta: string }
   /** I-05: reasoning/thinking stream delta (rendered dim, toggleable). */
@@ -90,10 +107,26 @@ export type AgentEvent =
       alwaysAllowPrefix?: string;
       timeoutSecs: number;
     }
-  | { type: "finish"; success: boolean; steps: number; summary: string }
+  /** v2: LLM compaction actually ran (manual via /compact or auto in-loop). */
+  | { type: "compaction"; tokensBefore: number; tokensAfter: number; manual?: boolean }
+  /** v2: a subagent started (parentId links to the spawning agent). */
+  | { type: "agent_start"; id: string; parentId?: string; name: string; description: string; model: string }
+  /** v2: a subagent finished. */
+  | { type: "agent_end"; id: string; ok: boolean; steps: number; summary: string }
+  /** v2: progress of a long-running tool (e.g. MCP notifications/progress). */
+  | { type: "tool_progress"; id: string; name: string; current?: number; total?: number; message?: string }
+  /** v2: agent asks the user a question (ask_user tool). */
+  | { type: "question_request"; id: string; question: string; options?: string[]; multiple?: boolean; timeoutSecs: number }
+  /** v2: pending steering/queue depth — HUD badge source. */
+  | { type: "queue"; pending: number; steering: number }
+  /** v2: context window pressure after an LLM turn. */
+  | { type: "context"; tokens: number; window: number; pct: number; compacted?: boolean }
+  | { type: "finish"; success: boolean; steps: number; summary: string; usage?: UsageTotals; verification?: VerificationInfo }
   | { type: "error"; message: string };
 
 export class Agent {
+  /** v2 event schema: stable id for the run — links agent_start/agent_end. */
+  readonly id = randomUUID();
   private client: import("./provider-registry.js").ProviderRuntimeContract;
   private messages: ChatMessage[] = [];
   private tools: ToolSpec[] = allToolSpecs();
@@ -225,6 +258,18 @@ export class Agent {
         });
         // Abort cascade: parent abort kills child's in-flight LLM calls.
         this.runSignal.signal.addEventListener("abort", () => child.abort(), { once: true });
+        const childId = child.id;
+        const description = typeof args.description === "string" && args.description.trim()
+          ? args.description.trim()
+          : `subagent ${def?.name ?? "task"}`;
+        this.emit({
+          type: "agent_start",
+          id: childId,
+          parentId: this.id,
+          name: def?.name ?? "task",
+          description,
+          model: def?.model ?? this.config.model,
+        });
         // Event relay: child activity appears as subagent-tagged tool output.
         const tag = `subagent:${def?.name ?? "task"}`;
         child.onEvent = (ev) => {
@@ -233,6 +278,7 @@ export class Agent {
         };
         try {
           const res = await child.run(args.prompt);
+          this.emit({ type: "agent_end", id: childId, ok: res.success, steps: res.steps, summary: res.summary.slice(0, 500) });
           return {
             ok: res.success,
             output: res.success
@@ -240,7 +286,9 @@ export class Agent {
               : `[subagent ${def?.name ?? "task"} FAILED — ${res.steps} steps]\n${res.summary}`,
           };
         } catch (err) {
-          return { ok: false, output: `ERROR: subagent failed: ${(err as Error).message}` };
+          const msg = (err as Error).message;
+          this.emit({ type: "agent_end", id: childId, ok: false, steps: 0, summary: msg.slice(0, 500) });
+          return { ok: false, output: `ERROR: subagent failed: ${msg}` };
         } finally {
           // Child agents are ephemeral: close their MCP connections (if any).
           child.dispose();
@@ -289,6 +337,7 @@ export class Agent {
     if (!t) return;
     this.events.append({ type: "steer.enqueued", mode: "steer", text: t });
     this.emit({ type: "steer_queued", mode: "steer", text: t });
+    this.emit({ type: "queue", ...this.steerInbox.counts() });
   }
 
   /** Queue: same inbox, but only relevant when the agent is idle (queued run). */
@@ -298,6 +347,7 @@ export class Agent {
     if (!t) return;
     this.events.append({ type: "steer.enqueued", mode: "queue", text: t });
     this.emit({ type: "steer_queued", mode: "queue", text: t });
+    this.emit({ type: "queue", ...this.steerInbox.counts() });
   }
 
   /** Drain the steering inbox; delivered at the top of the next step. */
@@ -571,6 +621,18 @@ export class Agent {
     return { ...this.usageTotals };
   }
 
+  /** v2: emit context-window pressure (tokens/window/pct) after an LLM turn. */
+  private emitContextEvent(compacted = false): void {
+    try {
+      const window = this.compactionSettings().contextWindow;
+      const tokens = estimateTokens(this.messages);
+      const pct = window > 0 ? Math.min(100, Math.round((tokens / window) * 100)) : 0;
+      this.emit({ type: "context", tokens, window, pct, ...(compacted ? { compacted: true } : {}) });
+    } catch {
+      // best-effort metric — never break the loop on it
+    }
+  }
+
   private recordLlmUsage(usage: ChatResult["usage"]): void {    if (!usage) return;
     const input = usage.prompt_tokens ?? 0;
     const output = usage.completion_tokens ?? 0;
@@ -793,6 +855,8 @@ export class Agent {
       workdir: this.config.workdir,
       buildCmd,
       permission: this.config.permissionMode,
+      schemaVersion: EVENT_SCHEMA_VERSION,
+      agent: this.config.agent ?? "build",
     });
 
     await this.connectMcp();
@@ -942,6 +1006,7 @@ export class Agent {
         // — engine exposes a hook so the runLoop doesn't touch tracker state.
         this.guardrails.notifySteered();
         this.emit({ type: "steer_delivered", count: steered.length });
+        this.emit({ type: "queue", ...this.steerInbox.counts() });
         ui.info(`steer: +${steered.length} user message(s) delivered`);
       }
 
@@ -966,6 +1031,7 @@ export class Agent {
       });
       if (this.aborted) break;
       this.recordLlmUsage(usage);
+      this.emitContextEvent();
       this.logger.log({ type: "step", step: steps, durationMs: Date.now() - stepStart, toolCalls: message.tool_calls?.length ?? 0 });
 
       // H-09: after an interrupted stream, nudge the model to continue rather
@@ -1141,6 +1207,8 @@ export class Agent {
             summary: (summaryRes.message.content ?? "").slice(0, 2000),
           });
           ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${this.messages.length} messages)`);
+          this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: false });
+          this.emitContextEvent(true);
         } catch (err) {
           // Compaction is best-effort — mechanical trim stays as fallback.
           ui.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
@@ -1211,6 +1279,8 @@ export class Agent {
     );
     this.endToolStream();
     ui.buildStatus(res.success, res.output);
+    // Keep the last build visible to finish() → finish.verification.
+    this.lastBuildResult = res;
     this.emit({ type: "build", success: res.success, command: buildCmd, output: res.output });
     this.logger.log({ type: "build", success: res.success, command: buildCmd, output: res.output.slice(0, 10_000) });
     return res;
@@ -1259,6 +1329,8 @@ export class Agent {
         summary: summary.slice(0, 2000),
       });
       ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens)`);
+      this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: true });
+      this.emitContextEvent(true);
       return {
         ok: true,
         message: `compaction done: ${messagesBefore} → ${this.messages.length} messages · ~${tokensBefore} → ~${tokensAfter} tokens`,
@@ -1409,7 +1481,13 @@ export class Agent {
     } else {
       ui.error(`Task NOT complete. ${summary}`);
     }
-    this.emit({ type: "finish", success, steps, summary: summary.slice(0, 2000) });
+    const lb = this.lastBuildResult;
+    const verification: VerificationInfo = chatOnly
+      ? { ok: null, detail: "chat-only turn — nothing to verify" }
+      : lb
+        ? { ok: lb.success, detail: `${lb.success ? "build passed" : "build FAILED"}: ${lb.command}` }
+        : { ok: null, detail: "no verification command ran" };
+    this.emit({ type: "finish", success, steps, summary: summary.slice(0, 2000), usage: this.getUsage(), verification });
     this.logger.log({ type: "finish", success, steps });
     return { success, steps, buildCmd, summary: summary.slice(0, 2000) };
   }

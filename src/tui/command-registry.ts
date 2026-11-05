@@ -13,7 +13,7 @@ import type { Agent, AgentRunResult, UsageTotals } from "../agent.js";
 import type { AgentConfig } from "../config.js";
 import { listSessions, resolveSessionId, type SessionFile, type SessionSummary } from "../session.js";
 import { discoverSkills, type Skill } from "../skills.js";
-import { formatSlashHelp, parseMcpExec, type SlashCommand } from "./commands.js";
+import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────
 
@@ -52,6 +52,14 @@ export type NoticeSink = (text: string, level?: "info" | "warn" | "error") => vo
 export interface CommandEntry {
   name: string;
   description: string;
+  /** Usage line for /help (defaults to name + "<args>" when absent). */
+  usage?: string;
+  /** Alternate names that dispatch to this command. */
+  aliases?: string[];
+  /** public = all frontends; tui-only = Ink only; hidden = not listed in /help. */
+  visibility?: CommandVisibility;
+  /** Where the command comes from (custom commands land as project/global later). */
+  source?: CommandDef["source"];
   /** Ném lỗi → dispatcher bắt và chuyển thành error notice. */
   run(slash: SlashCommand, host: CommandHost, notice: NoticeSink): Promise<CommandOutcome | void> | CommandOutcome | void;
 }
@@ -217,6 +225,11 @@ export function coreCommands(): CommandEntry[] {
   ];
 }
 
+/** Merged catalog of builtin command metadata — /help & completion read this. */
+export function commandCatalog(): CommandDef[] {
+  return BUILTIN_COMMANDS.map((def) => ({ ...def }));
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 export interface DispatchResult {
@@ -241,10 +254,13 @@ export async function dispatchCommand(
   notice: NoticeSink,
   extra: CommandEntry[] = [],
 ): Promise<DispatchResult> {
-  const m = /^\/([a-zA-Z][a-zA-Z0-9]*)(?:\s+(.*\S))?\s*$/.exec(input.trim());
+  const m = /^\/([a-zA-Z][a-zA-Z0-9-]*)(?:\s+([\s\S]*\S))?\s*$/.exec(input.trim());
   if (!m) return { handled: false, outcome: null };
-  const cmd = "/" + m[1].toLowerCase();
+  const raw = "/" + m[1].toLowerCase();
   const arg = m[2] ?? "";
+  // Resolve aliases → canonical command (e.g. /quit → /exit).
+  const resolved = resolveCommandDef(raw);
+  const cmd = resolved?.name ?? raw;
   const slash: SlashCommand = { cmd, arg };
   if (cmd === "/exit" || cmd === "/quit") return { handled: true, outcome: { quit: true } };
   if (cmd === "/clear") {

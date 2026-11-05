@@ -11,29 +11,60 @@ export interface SlashCommand {
   arg: string;
 }
 
-export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = [
-  { cmd: "/help", desc: "show this command list" },
-  { cmd: "/sessions", desc: "list saved sessions — /sessions resume <id|last>" },
-  { cmd: "/diff", desc: "show diffs: /diff turn | session | branch" },
-  { cmd: "/theme", desc: "switch palette: /theme <name> — /theme list (mission|paper|mono|light|high-contrast|solarized)" },
-  { cmd: "/clear", desc: "clear the conversation and reset agent context" },
-  { cmd: "/compact", desc: "summarize older history now (manual compaction)" },
-  { cmd: "/cost", desc: "token usage of the current session" },
-  { cmd: "/model", desc: "show the active model & provider" },
-  { cmd: "/skills", desc: "list discovered skills (SKILL.md)" },
-  { cmd: "/skill", desc: "load a skill into context: /skill <name>" },
-  { cmd: "/mcp", desc: "MCP servers & tools: /mcp [server] [tool] [json|text]" },
-  { cmd: "/review", desc: "prompt gate: rewrite + user approval — /review <prompt>" },
-  { cmd: "/permission", desc: "view or switch permission mode: /permission <auto|ask|readonly>" },
-  { cmd: "/undo", desc: "revert files: /undo [files|edit] — edit also trims the turn back for re-send" },
-  { cmd: "/exit", desc: "quit (aliases: /quit, exit, quit)" },
+// ── v2 skeleton: một nguồn duy nhất cho command metadata ─────────────────────
+// Phase 6 hoàn thiện registry (handler + completion + visibility enforcement);
+// Phase 0 chỉ chốt hình dạng CommandDef và để SLASH_COMMANDS suy ra từ đây —
+// xoá nguy cơ 2 danh sách lệch nhau. Handler vẫn sống ở command-registry.ts /
+// frontend-specific (không import agent ở module thuần này).
+export type CommandVisibility = "public" | "hidden" | "tui-only";
+export type CommandSource = "builtin" | "project" | "global" | "mcp";
+
+export interface CommandDef {
+  /** Canonical name including the leading slash, e.g. "/help". */
+  name: string;
+  aliases: string[];
+  description: string;
+  /** Usage line, e.g. "/sessions resume <id|last>" (defaults to /name). */
+  usage: string;
+  visibility: CommandVisibility;
+  source: CommandSource;
+}
+
+/** Built-in commands — the single catalog both help and completion read. */
+export const BUILTIN_COMMANDS: CommandDef[] = [
+  { name: "/help", aliases: [], description: "show this command list", usage: "/help", visibility: "public", source: "builtin" },
+  { name: "/sessions", aliases: [], description: "list saved sessions — /sessions resume <id|last>", usage: "/sessions [resume <id|last>]", visibility: "public", source: "builtin" },
+  { name: "/diff", aliases: [], description: "show diffs: /diff turn | session | branch", usage: "/diff [turn|session|branch]", visibility: "tui-only", source: "builtin" },
+  { name: "/theme", aliases: [], description: "switch palette: /theme <name> — /theme list (mission|paper|mono|light|high-contrast|solarized)", usage: "/theme [name|list]", visibility: "tui-only", source: "builtin" },
+  { name: "/clear", aliases: [], description: "clear the conversation and reset agent context", usage: "/clear", visibility: "public", source: "builtin" },
+  { name: "/compact", aliases: [], description: "summarize older history now (manual compaction)", usage: "/compact", visibility: "public", source: "builtin" },
+  { name: "/cost", aliases: [], description: "token usage of the current session", usage: "/cost", visibility: "public", source: "builtin" },
+  { name: "/model", aliases: [], description: "show the active model & provider", usage: "/model [provider/model]", visibility: "public", source: "builtin" },
+  { name: "/skills", aliases: [], description: "list discovered skills (SKILL.md)", usage: "/skills", visibility: "public", source: "builtin" },
+  { name: "/skill", aliases: [], description: "load a skill into context: /skill <name>", usage: "/skill <name>", visibility: "public", source: "builtin" },
+  { name: "/mcp", aliases: [], description: "MCP servers & tools: /mcp [server] [tool] [json|text]", usage: "/mcp [server [tool [json]]]", visibility: "public", source: "builtin" },
+  { name: "/review", aliases: [], description: "prompt gate: rewrite + user approval — /review <prompt>", usage: "/review <prompt>", visibility: "tui-only", source: "builtin" },
+  { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly>", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
+  { name: "/undo", aliases: [], description: "revert files: /undo [files|edit] — edit also trims the turn back for re-send", usage: "/undo [files|edit]", visibility: "tui-only", source: "builtin" },
+  { name: "/exit", aliases: ["/quit"], description: "quit (aliases: /quit, exit, quit)", usage: "/exit", visibility: "public", source: "builtin" },
 ];
+
+/** Back-compat view used by completion + /help — derived from BUILTIN_COMMANDS. */
+export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = BUILTIN_COMMANDS
+  .filter((c) => c.visibility !== "hidden")
+  .map((c) => ({ cmd: c.name, desc: c.description }));
+
+/** Resolve a command name or alias → canonical CommandDef (case-insensitive). */
+export function resolveCommandDef(name: string): CommandDef | undefined {
+  const n = name.toLowerCase();
+  return BUILTIN_COMMANDS.find((c) => c.name === n || c.aliases.includes(n));
+}
 
 /** Parse "/cmd arg…"; returns null when the input is not a slash command. */
 export function parseSlashCommand(input: string): SlashCommand | null {
-  const m = /^\/([a-zA-Z][a-zA-Z0-9]*)(?:\s+(.*\S))?\s*$/.exec(input.trim());
+  const m = /^\/([a-zA-Z][a-zA-Z0-9-]*)(?:\s+([\s\S]*\S))?\s*$/.exec(input.trim());
   if (!m) return null;
-  return { cmd: "/" + m[1].toLowerCase(), arg: m[2] ?? "" };
+  return { cmd: resolveCommandDef("/" + m[1].toLowerCase())?.name ?? "/" + m[1].toLowerCase(), arg: m[2] ?? "" };
 }
 
 /**

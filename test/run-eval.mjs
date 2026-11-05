@@ -116,7 +116,8 @@ function checkNoOrphanTools(events) {
 const scenarioFiles = [];
 try {
   const { readdirSync } = await import("node:fs");
-  const dir = new URL("./eval/", import.meta.url).pathname;
+  const { fileURLToPath } = await import("node:url");
+  const dir = fileURLToPath(new URL("./eval/", import.meta.url));
   for (const f of readdirSync(dir)) if (f.endsWith(".mjs")) scenarioFiles.push(join(dir, f));
 } catch {
   // no scenarios yet
@@ -128,7 +129,8 @@ if (scenarioFiles.length === 0) {
 }
 
 for (const file of scenarioFiles.sort()) {
-  const mod = await import(file);
+  const { pathToFileURL } = await import("node:url");
+  const mod = await import(pathToFileURL(file).href);
   const scenario = mod.default ?? mod.scenario;
   const name = scenario.name ?? file.split("/").pop();
   try {
