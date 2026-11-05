@@ -4,6 +4,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   dispatchCommand,
   coreCommands,
@@ -12,6 +15,7 @@ import {
   formatSessions,
   formatMcpStatus,
 } from "../dist/tui/command-registry.js";
+import { discoverCustomCommands, runCustomCommand } from "../dist/tui/commands.js";
 
 /** Fake host — agent chỉ cần các method /cost /skills /permission đụng tới. */
 /** @typedef {import("../dist/tui/command-registry.js").CommandHost} CommandHost */
@@ -180,5 +184,79 @@ describe("formatters (T1)", () => {
     const t2 = formatMcpStatus([{ name: "srv", command: "c", connected: true, tools: [{ name: "t1", description: "d" }] }]);
     assert.match(t2, /✓ srv/);
     assert.match(t2, /mcp__srv__t1\s+d/);
+  });
+});
+
+// ── Phase 6: custom commands ────────────────────────────────────────────────
+
+describe("discoverCustomCommands", () => {
+  it("finds project-level custom command from .scoder/commands/", async () => {
+    const tmp = mkdirSync(join(tmpdir(), "cmd-test-" + Math.random()), { recursive: true });
+    try {
+      const cmdDir = join(tmp, ".scoder", "commands");
+      mkdirSync(cmdDir, { recursive: true });
+      writeFileSync(join(cmdDir, "review-fix.md"), [
+        "---",
+        "name: review-fix",
+        "description: Review all changed files",
+        "args: [path]",
+        "---",
+        "Review @$1 and list blocking issues.",
+      ].join("\n"));
+      const cmds = discoverCustomCommands(tmp);
+      assert.equal(cmds.length, 1);
+      assert.equal(cmds[0].name, "review-fix");
+      assert.equal(cmds[0].description, "Review all changed files");
+      assert.deepStrictEqual(cmds[0].args, ["path"]);
+      assert.equal(cmds[0].source, "project");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("parses frontmatter-less file (name = filename, body = content)", async () => {
+    const tmp = mkdirSync(join(tmpdir(), "cmd-test-" + Math.random()), { recursive: true });
+    try {
+      const cmdDir = join(tmp, ".scoder", "commands");
+      mkdirSync(cmdDir, { recursive: true });
+      writeFileSync(join(cmdDir, "quick-fix.md"), "Apply the smallest fix that makes the tests pass.\n");
+      const cmds = discoverCustomCommands(tmp);
+      assert.equal(cmds[0].name, "quick-fix");
+      assert.ok(cmds[0].body.includes("smallest fix"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("runCustomCommand substitutes $1 $ARGUMENTS in body", async () => {
+    const cmd = { name: "x", description: "d", visibility: "public", aliases: [], body: "Review $1\n$ARGUMENTS\nDone", source: "project", filePath: "/tmp/x.md" };
+    const out = runCustomCommand(cmd, "src/main.go --verbose");
+    assert.match(out, /Review src\/main\.go/);
+    assert.match(out, /--verbose/);
+  });
+});
+
+describe("/commands dispatch", () => {
+  it("/commands → lists builtin + custom (custom in output)", async () => {
+    const tmp = mkdirSync(join(tmpdir(), "cmd-test-" + Math.random()), { recursive: true });
+    try {
+      const cmdDir = join(tmp, ".scoder", "commands");
+      mkdirSync(cmdDir, { recursive: true });
+      writeFileSync(join(cmdDir, "mycmd.md"), "---\ndescription: My custom command\n---\nDo the thing.\n");
+      const s = sink();
+      const host = fakeHost({ config: { workdir: tmp, permissionMode: "auto" } });
+      await dispatchCommand("/commands", host, s.fn);
+      assert.ok(s.lines[0].text.includes("builtin"), `should mention builtin: ${s.lines[0].text.slice(0, 200)}`);
+      assert.ok(s.lines[0].text.includes("mycmd") || s.lines[0].text.includes("Do the thing"), `should mention custom: ${s.lines[0].text.slice(0, 200)}`);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("/commands unknown → warn", async () => {
+    const s = sink();
+    const host = fakeHost({ config: { workdir: tmpdir(), permissionMode: "auto" } });
+    await dispatchCommand("/commands nonexistent-xyz-cmd", host, s.fn);
+    assert.equal(s.lines[0].level, "warn");
   });
 });

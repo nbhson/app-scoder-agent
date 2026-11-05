@@ -49,6 +49,7 @@ export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/review", aliases: [], description: "prompt gate: rewrite + user approval — /review <prompt>", usage: "/review <prompt>", visibility: "tui-only", source: "builtin" },
   { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly>", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
   { name: "/undo", aliases: [], description: "revert files: /undo [files|edit] — edit also trims the turn back for re-send", usage: "/undo [files|edit]", visibility: "tui-only", source: "builtin" },
+  { name: "/commands", aliases: [], description: "list all commands (builtin + custom) — /commands <name> to inspect", usage: "/commands [name]", visibility: "public", source: "builtin" },
   { name: "/exit", aliases: ["/quit"], description: "quit (aliases: /quit, exit, quit)", usage: "/exit", visibility: "public", source: "builtin" },
 ];
 
@@ -115,7 +116,137 @@ export interface CompletionProvider {
   candidates(token: string): CompletionCandidate[];
 }
 
+import { readdirSync, existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve, basename, extname, dirname } from "node:path";
 import { suggest } from "./at-complete.js";
+
+// ── Custom commands discovery (Phase 6) ──────────────────────────────────────
+
+export type CustomCommandExecMode = "prompt" | "agent" | "shell";
+
+export interface CustomCommand {
+  name: string;
+  description: string;
+  visibility: CommandVisibility;
+  aliases: string[];
+  /** @default "prompt" */
+  exec?: CustomCommandExecMode;
+  /** Agent name for exec:"agent" */
+  agent?: string;
+  /** Model for exec:"agent" */
+  model?: string;
+  /** Shell command for exec:"shell" */
+  shell?: string;
+  /** Argument names (positional) for $1..$n substitution. */
+  args?: string[];
+  /** Frontmatter body (raw) for exec:"prompt". */
+  body: string;
+  source: CommandSource;
+  filePath: string;
+}
+
+/** Substitute $ARGUMENTS, $1..$n, @file references in the body. */
+function substituteTemplate(body: string, argStr: string, workdir: string): string {
+  const args = argStr.trim().split(/\s+/).filter(Boolean);
+  let out = body;
+  out = out.replace(/\$ARGUMENTS/g, argStr.trim());
+  for (let i = 0; i < args.length; i++) {
+    out = out.replace(new RegExp(`\\$${i + 1}`, "g"), args[i]);
+  }
+  out = out.replace(/\$ARGUMENTS/g, argStr.trim()); // repeat in case $ARGUMENTS contains $1
+  // @file references — leave as-is (agent interprets them).
+  return out;
+}
+
+/** Discover custom commands from ~/.scoder/commands/*.md + .scoder/commands/*.md. */
+export function discoverCustomCommands(workdir: string): CustomCommand[] {
+  const dirs = [resolve(workdir, ".scoder", "commands"), join(homedir(), ".scoder", "commands")].filter((d) => existsSync(d));
+
+  const results: CustomCommand[] = [];
+  for (const dir of dirs) {
+    let files: string[] = [];
+    try { files = readdirSync(dir); } catch { continue; }
+    for (const file of files) {
+      if (extname(file) !== ".md") continue;
+      const filePath = join(dir, file);
+      let stat;
+      try { stat = statSync(filePath); } catch { continue; }
+      if (!stat.isFile()) continue;
+      const content = readFileSync(filePath, "utf8");
+      const parsed = parseCustomCommandFile(basename(file, ".md"), filePath, content);
+      if (parsed) results.push(parsed);
+    }
+  }
+  return results;
+}
+
+/** Parse a custom command .md file. Returns null on error. */
+function parseCustomCommandFile(
+  defaultName: string,
+  filePath: string,
+  content: string,
+): CustomCommand | null {
+  const source: CommandSource = /[\\/]\.scoder[\\/]commands[\\/]/.test(filePath) ? "project" : "global";
+
+  const frontMatch = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(content.trim());
+  if (!frontMatch) {
+    // No frontmatter: body is the entire file, name is filename.
+    return {
+      name: defaultName,
+      description: content.trim().slice(0, 80),
+      visibility: "public",
+      aliases: [],
+      body: content.trim(),
+      source,
+      filePath,
+    };
+  }
+
+  const frontRaw = frontMatch[1];
+  const body = frontMatch[2].trim();
+
+  // Parse YAML frontmatter manually (no external dependency).
+  const front: Record<string, unknown> = {};
+  for (const line of frontRaw.split("\n")) {
+    const m = /^(\w+):\s*(.*)$/.exec(line.trim());
+    if (m) {
+      const [, key, rawVal] = m;
+      front[key] = rawVal.startsWith('"') && rawVal.endsWith('"')
+        ? rawVal.slice(1, -1)
+        : rawVal;
+    }
+  }
+
+  return {
+    name: String(front.name ?? defaultName),
+    description: String(front.description ?? body.split("\n")[0].slice(0, 80)),
+    visibility: (front.visibility as CommandVisibility) ?? "public",
+    aliases: Array.isArray(front.aliases) ? front.aliases.map(String) : [],
+    exec: (front.exec as CustomCommandExecMode) ?? "prompt",
+    agent: front.agent ? String(front.agent) : undefined,
+    model: front.model ? String(front.model) : undefined,
+    shell: front.shell ? String(front.shell) : undefined,
+    args: front.args
+      ? (Array.isArray(front.args)
+          ? front.args.map(String)
+          : String(front.args)
+            // YAML flow array "[a, b]" → strip brackets, split on comma.
+            .replace(/^\[|\]$/g, "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean))
+      : undefined,
+    body,
+    source,
+    filePath,
+  };
+}
+
+/** Substitute + execute a custom command; returns the prompt text to inject. */
+export function runCustomCommand(cmd: CustomCommand, argStr: string): string {
+  return substituteTemplate(cmd.body, argStr, dirname(cmd.filePath));
+}
 
 /** Build providers from runtime context (called once per keystroke burst). */
 export function completionProviders(sources: {

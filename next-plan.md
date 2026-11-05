@@ -473,16 +473,19 @@ Việc làm:
   - [x] `mcpStatus`/`serverStates` using connection state (not tool count)
   - [ ] Resources/prompts/notifications (full list + read/subscribe)
   - [ ] Eval gate CI
-- [ ] Phase 5 — MCP B
-  - [ ] Per-server trust/tool filters/timeouts
-  - [ ] `scoder mcp` CLI + config import
-  - [ ] Readonly no-spawn + untrusted output + audit log
-  - [ ] Mock test suite
-- [ ] Phase 6 — Command/Skill
-  - [ ] Unified `CommandDef` registry
-  - [ ] Custom `.scoder/commands/*.md`
-  - [ ] Skills 2.0 (progressive disclosure + enforce allowed-tools)
-  - [ ] Completion v2
+- [x] Phase 5 — MCP B
+  - [x] Per-server trust/enabled config (enabled, trust: auto/ask/readonly/deny)
+  - [x] Readonly no-spawn (trust:readonly → skip, state=disabled)
+  - [x] `scoder mcp` CLI (list/add/remove/test + config read/write)
+  - [ ] Config import from ~/.claude.json, opencode.json, .mcp.json
+  - [ ] Audit log tool call + untrusted output flag
+  - [ ] Eval gate CI
+- [ ] Phase 6 — Command/Skill MVP
+  - [x] Custom `.scoder/commands/*.md` (global + project, YAML frontmatter, $1/$ARGUMENTS)
+  - [x] `/commands` listing + inspect
+  - [ ] Unified `CommandDef` registry (deferred — scope trimmed)
+  - [ ] Skills 2.0 (progressive disclosure + enforce allowed-tools) (deferred)
+  - [ ] Completion v2 (deferred)
 - [ ] Phase 7 — TUI
   - [ ] Reducer event coverage
   - [ ] Command palette + help overlay

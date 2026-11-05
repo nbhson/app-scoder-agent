@@ -17,7 +17,7 @@ import { selectableAgents } from "../agents.js";
 import { agentsMdTemplate } from "../agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
+import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, runCustomCommand, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────
 
@@ -320,6 +320,59 @@ export function coreCommands(): CommandEntry[] {
           return;
         }
         notice(formatSessions(listSessions(host.config.workdir)));
+      },
+    },
+    {
+      name: "/commands",
+      description: "list all commands (builtin + custom) — /commands <name> to inspect",
+      run(slash, host, notice) {
+        const all = BUILTIN_COMMANDS.map((c) => ({
+          name: c.name,
+          desc: c.description,
+          source: c.source,
+        }));
+        const custom = discoverCustomCommands(host.config.workdir).map((c) => ({
+          name: "/commands " + c.name,
+          desc: c.description,
+          source: c.source,
+        }));
+        const combined = [...all, ...custom];
+        if (!slash.arg) {
+          // List mode — grouped by source.
+          const bySource: Record<string, typeof combined> = {};
+          for (const c of combined) bySource[c.source] = (bySource[c.source] ?? []).concat(c);
+          const sections = Object.entries(bySource)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([src, cmds]) => `  ${src}:\n${cmds.map((c) => `    ${c.name}  ${c.desc}`).join("\n")}`);
+          notice(`commands:\n${sections.join("\n\n")}`);
+          return;
+        }
+        // Inspect mode — /commands <name>
+        const name = slash.arg.trim().toLowerCase();
+        const customCmd = custom.find((c) => c.name === "/commands " + name || c.name === "/commands " + name.slice(1));
+        if (customCmd) {
+          // Full info for custom command
+          const cmd = discoverCustomCommands(host.config.workdir).find(
+            (c) => "/commands " + c.name === customCmd.name,
+          );
+          if (!cmd) return;
+          notice(
+            `command: ${cmd.name}\n` +
+              `description: ${cmd.description}\n` +
+              `exec: ${cmd.exec ?? "prompt"}\n` +
+              `source: ${cmd.source} — ${cmd.filePath}\n` +
+              (cmd.args ? `args: ${cmd.args.join(", ")}\n` : "") +
+              `\n${cmd.body.slice(0, 400)}\n` +
+              (cmd.body.length > 400 ? "\n… (truncated)" : ""),
+          );
+          return;
+        }
+        const builtin = BUILTIN_COMMANDS.find((c) => c.name === "/" + name || c.name === "/commands " + name);
+        if (builtin) {
+          notice(`${builtin.name}: ${builtin.description}\nusage: ${builtin.usage}`);
+          return;
+        }
+        notice(`command "/${name}" not found`, "warn");
       },
     },
   ];
