@@ -9,6 +9,7 @@ import { JsonlLogger } from "./logger.js";
 import { collectUsage, formatCostReport } from "./cost.js";
 import { getVersion as getPackageVersion } from "./version.js";
 import { dispatchCommand, type CommandHost } from "./tui/command-registry.js";
+import { selectableAgents } from "./agents.js";
 import * as ui from "./ui.js";
 
 // Single source of truth: read version from package.json (see src/version.ts).
@@ -30,6 +31,7 @@ interface CliArgs {
   workdir?: string;
   maxSteps?: number;
   yes: boolean;
+  agent?: string;
   permission?: string;
   provider?: string;
   noSave?: boolean;
@@ -78,6 +80,7 @@ OPTIONS
   -s, --max-steps <n>       Max autonomous loop iterations (default 40)
   -y, --yes                 Non-interactive mode (auto-approves commands)
   --permission <mode>       auto | ask | readonly (env SCODER_PERMISSION, default auto)
+  --agent <name>            primary agent to run (default build; see /agent): build | plan | review | <custom>
   --no-save                 Disable session auto-save to .scoder/sessions/
   --log-file                Write a JSONL event log to .scoder/logs/<session>.jsonl
                             (or set SCODER_LOG_FILE=1 / =/path/to/log.jsonl)
@@ -133,6 +136,9 @@ function parseArgs(argv: string[]): CliArgs {
       case "-y":
       case "--yes":
         args.yes = true;
+        break;
+      case "--agent":
+        args.agent = next();
         break;
       case "--permission": {
         const mode = next();
@@ -366,6 +372,9 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
     const host: CommandHost = {
       agent: () => agent,
       config: cfg,
+      updateConfig: (patch) => {
+        Object.assign(cfg, patch); // mutate the shared cfg so new Agents see it
+      },
       replaceAgent: (next) => {
         agent.abort();
         agent.dispose();
@@ -435,7 +444,17 @@ async function main(): Promise<void> {
     provider: args.provider as "openai" | "anthropic" ?? undefined,
     noSave: args.noSave,
     logFile: args.logFile,
+    agent: args.agent,
   });
+
+  // v2: --agent must reference a selectable (mode primary|all) agent.
+  if (args.agent) {
+    const ok = selectableAgents(cfg.workdir).some((a) => a.name === args.agent);
+    if (!ok) {
+      ui.error(`unknown or non-primary agent "${args.agent}" — selectable: ${selectableAgents(cfg.workdir).map((a) => a.name).join(", ")}`);
+      process.exit(2);
+    }
+  }
 
   // Subcommands
   if (args.subcommand === "init") {

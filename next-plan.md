@@ -444,15 +444,15 @@ Việc làm:
 
 ## 12. Checklist theo phase
 
-- [ ] Phase 0 — Foundations
-  - [ ] Chốt event schema v2 (additive)
-  - [ ] Tạo command registry skeleton
-  - [ ] Dựng eval harness + baseline 10 scenario
-- [ ] Phase 1 — Agent A
-  - [ ] AgentDef mở rộng + `--agent` + `/agent`
-  - [ ] `AGENTS.md` hierarchy + `/init`
-  - [ ] Repo map + `read_file` range + `grep` context
-  - [ ] Prompt V5 + version log
+- [x] Phase 0 — Foundations
+  - [x] Chốt event schema v2 (additive)
+  - [x] Tạo command registry skeleton
+  - [x] Dựng eval harness + baseline 10 scenario
+- [x] Phase 1 — Agent A
+  - [x] AgentDef mở rộng + `--agent` + `/agent`
+  - [x] `AGENTS.md` hierarchy + `/init`
+  - [x] Repo map + `read_file` range + `grep` context
+  - [x] Prompt V5 + version log
 - [ ] Phase 2 — Agent B
   - [ ] `write_todos` 2.0 (verify/acceptance/depends_on)
   - [ ] `src/memory.ts` + inject ledger

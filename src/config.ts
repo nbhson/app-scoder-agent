@@ -25,6 +25,12 @@ export interface AgentConfig {
    * TUI/server can show which profile is active. Defaults to "build".
    */
   agent?: string;
+  /** v2: model routing per primary agent — { plan, build, review } (rc "routing"). */
+  routing?: { plan?: string; build?: string; review?: string };
+  /** v2: false disables the repo-map injection into the system prompt (default on). */
+  repoMap?: boolean;
+  /** v2: prompt version — 4 = rollback to V4 prompt; 5/undefined = V5 (default). */
+  promptVersion?: number;
   /** Max tokens for chat completions */
   maxTokens: number;
   temperature: number;
@@ -99,6 +105,14 @@ interface RcFile {
   provider?: string;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost`. */
   modelPricing?: Record<string, { input: number; output: number }>;
+  /** v2: named primary agent to use (e.g. "build" | "plan" | "review"). */
+  agent?: string;
+  /** v2: model routing per agent name — { "plan": "provider/model", "build": …, "review": … }. */
+  routing?: { plan?: string; build?: string; review?: string };
+  /** v2: false disables repo-map injection into the system prompt (default on). */
+  repoMap?: boolean;
+  /** v2: prompt version override — 4 = rollback to V4, 5/undefined = V5 (default). */
+  promptVersion?: number;
   /** Custom providers (I-01): id -> {baseUrl, apiKeyEnv, kind}. */
   providers?: unknown;
   /** Max steps before wrap-up reminder injection. */
@@ -181,6 +195,9 @@ function mergeRc(global: RcFile, project: RcFile): RcFile {
   const merged: RcFile = { ...global, ...project };
   if (global.mcpServers || project.mcpServers) {
     merged.mcpServers = { ...global.mcpServers, ...project.mcpServers };
+  }
+  if (global.routing || project.routing) {
+    merged.routing = { ...global.routing, ...project.routing };
   }
   if (global.modelPricing || project.modelPricing) {
     merged.modelPricing = { ...global.modelPricing, ...project.modelPricing };
@@ -352,6 +369,10 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     sandbox: rc.sandbox,
     limits: parseLimits(rc.limits),
     snapshots: rc.snapshots,
+    agent: overrides.agent ?? process.env.SCODER_AGENT ?? rc.agent,
+    routing: rc.routing,
+    repoMap: rc.repoMap,
+    promptVersion: rc.promptVersion,
     modelPricing: parsePricing(rc.modelPricing),
   };
 

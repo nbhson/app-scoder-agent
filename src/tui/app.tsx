@@ -40,20 +40,23 @@ export interface TuiAppProps {
 }
 
 export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element {
+  // v2: the effective config can be hot-patched by slash commands (/agent,
+  // /permission) — the prop is the initial value, cfg is the live one.
+  const [cfg, setCfg] = useState(config);
   const { exit } = useApp();
   // T-09: theme resolve at mount (.scoder/theme.json > builtin). Proxy-based
   // theme reads re-render via a bump.
   const [, bump] = useState(0);
   const bumpFrame = useCallback(() => bump((n) => n + 1), []);
   useEffect(() => {
-    setActiveTheme(getTheme(config.workdir));
+    setActiveTheme(getTheme(cfg.workdir));
     bumpFrame();
-  }, [config.workdir, bumpFrame]);
+  }, [cfg.workdir, bumpFrame]);
   const [state, setState] = useState<TuiState>(initialState);
   const [input, setInput] = useState(initialTask ?? "");
   /** Rows scrolled up from the bottom; 0 = follow the newest content. */
   const [scrollOffset, setScrollOffset] = useState(0);
-  const [permMode, setPermMode] = useState(config.permissionMode);
+  const [permMode, setPermMode] = useState(cfg.permissionMode);
   // T-03: active permission prompt (modal) — the run blocks until answered.
   const [permPrompt, setPermPrompt] = useState<Extract<AgentEvent, { type: "permission_request" }> | null>(null);
   const permPromptRef = useRef(permPrompt);
@@ -125,16 +128,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       process.stdout.write(MOUSE_DISABLE);
     };
   }, [stdin, setRawMode, isRawModeSupported, wheelScroll]);
-  const skills = useMemo(() => discoverSkills(config.workdir), [config.workdir]);
+  const skills = useMemo(() => discoverSkills(cfg.workdir), [cfg.workdir]);
   const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
   // T-02: completion sources (agents + files) computed once per mount.
   const atSources = useMemo(
     () => ({
       skills: skillNames,
-      agents: discoverAgents(config.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name),
-      files: fileIndex(config.workdir),
+      agents: discoverAgents(cfg.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name),
+      files: fileIndex(cfg.workdir),
     }),
-    [config.workdir, skillNames],
+    [cfg.workdir, skillNames],
   );
 
   // Mirror of state for the submit path (isFirst, /cost, /model) and the
@@ -208,7 +211,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         pushNotice("agent is running — wait or Esc first", "warn");
         return;
       }
-      const s = resolveSessionId(config.workdir, session.id);
+      const s = resolveSessionId(cfg.workdir, session.id);
       if (!s) {
         pushNotice(`session not found: ${session.id}`, "error");
         return;
@@ -224,9 +227,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               : { kind: "assistant" as const, text: typeof m.content === "string" ? m.content : "", streaming: false },
           ),
         step: s.steps ?? 0,
-        maxSteps: s.maxSteps ?? config.maxSteps,
-        model: s.model || config.model,
-        provider: s.provider || config.provider,
+        maxSteps: s.maxSteps ?? cfg.maxSteps,
+        model: s.model || cfg.model,
+        provider: s.provider || cfg.provider,
         status: "idle",
         summary: null,
       }));
@@ -241,13 +244,14 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         pushNotice(`resume failed: ${(err as Error).message}`, "error");
       }
     },
-    [config, createAgent, pushNotice, update],
+    [cfg, createAgent, pushNotice, update],
   );
 
   /** T1: CommandHost cho registry dùng chung với REPL. */
   const tuiHost = useCallback((): CommandHost => ({
     agent: () => agentRef.current,
-    config,
+    config: cfg,
+    updateConfig: (patch: Partial<AgentConfig>) => setCfg((c) => ({ ...c, ...patch })),
     isRunning: () => runningRef.current,
     replaceAgent: (next) => {
       agentRef.current?.abort();
@@ -259,7 +263,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         eventQueue.current = [];
         update(() => initialState());
       }
-      setPermMode(config.permissionMode);
+      setPermMode(cfg.permissionMode);
     },
     resumeAndRun: async (s) => {
       const agent = createAgent();
@@ -279,9 +283,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         runningRef.current = false;
         pushNotice(`resume failed: ${(err as Error).message}`, "error");
       }
-      return { success: true, steps: 0, buildCmd: config.buildCmd, summary: "resumed" };
+      return { success: true, steps: 0, buildCmd: cfg.buildCmd, summary: "resumed" };
     },
-  }), [config, update, pushNotice, createAgent]);
+  }), [cfg, update, pushNotice, createAgent]);
 
   /** One round of the /review state machine: call the gate, render the result. */
   const reviewStep = useCallback(
@@ -374,17 +378,21 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
             pushNotice("usage: /review <prompt> — rewrites it, you pick original/rewritten/update/cancel", "warn");
             return;
           }
-          if (!Object.keys(config.mcpServers ?? {}).some((s) => s === "prompt-gate")) {
-            pushNotice("no \"prompt-gate\" MCP server configured — add it to ~/.scoder/config.json", "error");
+          // v2: no hardcoded server/language — any MCP server exposing a
+          // review_and_select_prompt tool wins; language is auto-detected by
+          // the gate from the prompt itself.
+          const servers = Object.keys(cfg.mcpServers ?? {});
+          const gateServer = servers.find((s) => s === "prompt-gate") ?? servers.find((s) => /gate/i.test(s));
+          if (!gateServer) {
+            pushNotice("no MCP prompt-gate server configured — add one exposing review_and_select_prompt to ~/.scoder/config.json", "error");
             return;
           }
           // Context grounded in this session: last user item + current workdir.
           const lastUser = [...stateRef.current.items].reverse().find((i) => i.kind === "user");
-          const context = `User is in scoder TUI at ${config.workdir}${lastUser ? `; earlier they asked: "${(lastUser as { text: string }).text.slice(0, 120)}"` : ""}.`;
-          void reviewStep("mcp__prompt-gate__review_and_select_prompt", {
+          const context = `User is in scoder TUI at ${cfg.workdir}${lastUser ? `; earlier they asked: "${(lastUser as { text: string }).text.slice(0, 120)}"` : ""}.`;
+          void reviewStep(`mcp__${gateServer}__review_and_select_prompt`, {
             prompt: slash.arg,
             context,
-            language: "vietnamese",
           });
           return;
         }
@@ -520,13 +528,13 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         update((s) => ({ ...s, items: [...s.items, { kind: "notice", text: (err as Error).message, level: "error" }] }));
       }
     },
-    [config, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep, tuiHost, preSubmit],
+    [cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, reviewAnswer, reviewStep, tuiHost, preSubmit],
   );
 
   /** Create (or return) the session agent — permission mode always current. */
   function createAgent(): Agent {
     if (agentRef.current) return agentRef.current;
-    const agent = new Agent({ ...config, permissionMode: permMode });
+    const agent = new Agent({ ...cfg, permissionMode: permMode });
     // Events go through the batching queue (see FLUSH_MS above): applyEvent
     // still receives the latest state because update() keeps stateRef in
     // sync synchronously — tool results can never miss their items.
@@ -635,7 +643,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     // content overflows — Ink defaults every box to flexShrink:1, which
     // shrank the input bar to zero rows once the log outgrew the terminal.
     <Box flexDirection="column" height={rows || 24} flexShrink={0}>
-      <BuildRail state={state} config={config} />
+      <BuildRail state={state} config={cfg} />
       {/* Hàng chính: chat bên trái (flexGrow) + Sidebar phải (cố định rộng).
           Clip overflow để BuildRail trên và Input + StatusBar dưới luôn pinned. */}
       <Box flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
@@ -684,12 +692,12 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         </Box>
         </Box>
         {/* Sidebar phải: plan live · tok/s · phases · build · MCP (narrow → ẩn). */}
-        {showSidebar && <Sidebar state={state} config={config} />}
+        {showSidebar && <Sidebar state={state} config={cfg} />}
       </Box>
       {/* Session picker modal — Ctrl+S or bare "/" opens it. */}
       {sessionPickerOpen && (
         <SessionPicker
-          workdir={config.workdir}
+          workdir={cfg.workdir}
           onSelect={handleSessionSelect}
           onClose={() => setSessionPickerOpen(false)}
         />
@@ -705,7 +713,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           historyRef={historyRef}
           skillNames={skillNames}
           agentRef={agentRef}
-          config={config}
+          config={cfg}
           atSources={atSources}
           modalRef={permPromptRef}
         />

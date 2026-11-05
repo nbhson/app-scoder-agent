@@ -12,6 +12,7 @@ import { loadRcFile } from "./config.js";
 import { resolveSandbox, type SandboxConfig } from "./sandbox.js";
 import * as ui from "./ui.js";
 import { toolWebFetch } from "./webfetch.js";
+import { buildRepoMap, renderRepoMap } from "./repo-map.js";
 
 /** Structured diff attached to file-write tool results (for TUI / SSE rendering). */
 export interface ToolDiff {
@@ -120,7 +121,13 @@ export function isProtectedEnvFile(relPath: string): "ask" | "allow" | null {
   return null;
 }
 
-function toolReadFile(workdir: string, args: { path: string }): ToolResult {
+/** Coerce a schema-provided numeric-ish arg to a positive int, else fallback. */
+function toPosInt(v: unknown, fallback: number): number {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
+
+function toolReadFile(workdir: string, args: { path: string; offset?: number | string; limit?: number | string }): ToolResult {
   return toResult(() => {
   const abs = safePath(workdir, args.path);
   // H-04: .env read policy — ask trước khi trả nội dung (secrets hygiene).
@@ -159,8 +166,15 @@ function toolReadFile(workdir: string, args: { path: string }): ToolResult {
   }
   const content = readFileSync(abs, "utf8");
   const lines = content.split("\n");
-  const numbered = lines.map((l, i) => `${i + 1}: ${l}`).join("\n");
-  return { ok: true, output: clamp(numbered) };
+  const total = lines.length;
+  // v2: line-range reads — offset (1-based, default 1) + limit (default all).
+  const offset = Math.min(toPosInt(args.offset, 1), total);
+  const limit = Math.min(toPosInt(args.limit, total - offset + 1), 2000);
+  const slice = lines.slice(offset - 1, offset - 1 + limit);
+  const numbered = slice.map((l, i) => `${offset + i}: ${l}`).join("\n");
+  const end = offset + slice.length - 1;
+  const header = offset > 1 || end < total ? `[lines ${offset}-${end} of ${total} — ${args.path}]\n` : "";
+  return { ok: true, output: clamp(header + numbered) };
   });
 }
 
@@ -268,14 +282,27 @@ async function toolEditFile(
   };
 }
 
-function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
+function toolListFiles(
+  workdir: string,
+  args: { path?: string; depth?: number | string; exclude?: string; include_hidden?: string | boolean },
+): ToolResult {
   return toResult(() => {
   const root = safePath(workdir, args.path ?? ".");
   const skip = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
+  // v2: configurable depth (default 4, cap 8), hidden-dotfiles opt-in, exclude globs.
+  const maxDepth = Math.min(toPosInt(args.depth, 4), 8);
+  const includeHidden = args.include_hidden === true || args.include_hidden === "true";
+  const excludeRx = args.exclude
+    ? new RegExp(
+        args.exclude.split(/[,\s]+/).filter(Boolean)
+          .map((g) => globToRegExp(g).source)
+          .join("|"),
+      )
+    : null;
   const out: string[] = [];
 
   const walk = (dir: string, depth: number) => {
-    if (depth > 4 || out.length > 500) return;
+    if (depth > maxDepth || out.length > 500) return;
     let entries: string[];
     try {
       entries = readdirSync(dir).sort();
@@ -284,6 +311,8 @@ function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
     }
     for (const e of entries) {
       if (skip.has(e)) continue;
+      if (!includeHidden && e.startsWith(".") && e !== ".github") continue;
+      if (excludeRx?.test(e)) continue;
       const full = join(dir, e);
       let st;
       try {
@@ -291,7 +320,7 @@ function toolListFiles(workdir: string, args: { path?: string }): ToolResult {
       } catch {
         continue;
       }
-      const rel = relative(workdir, full);
+      const rel = relative(workdir, full).split(sep).join("/");
       if (st.isDirectory()) {
         out.push(`${rel}/`);
         walk(full, depth + 1);
@@ -335,11 +364,26 @@ function walkFiles(root: string, cb: (rel: string, abs: string) => void, depth =
 }
 
 /** ripgrep if on PATH; else grep -rn; else JS line-scan fallback. Returns formatted hits. */
-export function toolGrep(workdir: string, args: { pattern: string; path?: string; include?: string }): ToolResult {
+export function toolGrep(
+  workdir: string,
+  args: {
+    pattern: string;
+    path?: string;
+    include?: string;
+    context_before?: number | string;
+    context_after?: number | string;
+    max_results?: number | string;
+    type?: string;
+  },
+): ToolResult {
   return toResult(() => {
     const pattern = String(args.pattern ?? "").trim();
     if (!pattern) return { ok: false, output: "ERROR: pattern is required." };
     const root = safePath(workdir, args.path ?? ".");
+    // v2: context lines + hit cap — before/after look like ripgrep -B/-A.
+    const ctxBefore = Math.min(toPosInt(args.context_before, 0), 20);
+    const ctxAfter = Math.min(toPosInt(args.context_after, 0), 20);
+    const maxResults = Math.min(toPosInt(args.max_results, MAX_SEARCH_HITS), 100);
 
     // Fast path: ripgrep (respects .gitignore, fast, JSON output). Skip
     // common noise dirs even when the project has no .gitignore.
@@ -351,19 +395,33 @@ export function toolGrep(workdir: string, args: { pattern: string; path?: string
       "--glob", "!build", "--glob", "!.next", "--glob", "!__pycache__",
       "--glob", "!.venv",
     ];
+    if (ctxBefore > 0) rgArgs.push("-B", String(ctxBefore));
+    if (ctxAfter > 0) rgArgs.push("-A", String(ctxAfter));
     if (args.include) rgArgs.push("-g", args.include);
+    if (args.type) rgArgs.push("--type", String(args.type));
     const rg = spawnSync("rg", rgArgs, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
     const lines: string[] = [];
     let count = 0;
     if ((rg.status ?? 2) === 0 || rg.stdout) {
+      let prevLine = -1;
+      let prevRel = "";
       for (const line of rg.stdout.split("\n")) {
-        if (!line || count >= MAX_SEARCH_HITS) break;
+        if (!line) continue;
+        if (count >= maxResults) break;
         try {
           const j = JSON.parse(line) as { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
-          if (j.type !== "match" || !j.data) continue;
+          if (!j.data || (j.type !== "match" && j.type !== "context")) continue;
           const rel = relative(workdir, j.data.path?.text ?? "").split(sep).join("/");
-          lines.push(`${rel}:${j.data.line_number}: ${(j.data.lines?.text ?? "").trimEnd().slice(0, 200)}`);
-          count++;
+          const ln = j.data.line_number ?? 0;
+          const text = (j.data.lines?.text ?? "").trimEnd().slice(0, 200);
+          // GNU-style: match lines keep ':' separators, context lines use '-'.
+          if (rel !== prevRel || (prevLine >= 0 && ln > prevLine + 1)) {
+            if (lines.length > 0) lines.push("--");
+          }
+          lines.push(`${rel}${j.type === "match" ? ":" : "-"}${ln}${j.type === "match" ? ":" : "-"} ${text}`);
+          if (j.type === "match") count++;
+          prevLine = ln;
+          prevRel = rel;
         } catch { /* skip malformed */ }
       }
       if ((rg.status ?? 2) <= 1) {
@@ -373,14 +431,26 @@ export function toolGrep(workdir: string, args: { pattern: string; path?: string
     }
 
     // Fallback: grep -rn (portable) — output already path:line:text.
-    const g = spawnSync("grep", ["-rn", "--binary-files=without-match", "-I", "-m", "5", "-e", pattern, root], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    const gArgs = ["-rn", "--binary-files=without-match", "-I", "-m", "5", "-e", pattern];
+    if (ctxBefore > 0) gArgs.push("-B", String(ctxBefore));
+    if (ctxAfter > 0) gArgs.push("-A", String(ctxAfter));
+    gArgs.push(root);
+    const g = spawnSync("grep", gArgs, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
     if ((g.status ?? 2) <= 1) {
-      const hits = (g.stdout ?? "").split("\n").filter(Boolean).slice(0, MAX_SEARCH_HITS)
-        .map((l) => l.startsWith(root) ? relative(workdir, root).split(sep).join("/") + l.slice(root.length) : l);
-      return { ok: true, output: hits.length > 0 ? clamp(hits.join("\n")) : "(no matches)" };
+      const hits = (g.stdout ?? "").split("\n").filter(Boolean);
+      const out: string[] = [];
+      let matches = 0;
+      for (const l of hits) {
+        // Context lines GNU-separated with '-'; matches with ':'.
+        const isMatch = /^[^:]*:\d+:/.test(l);
+        if (isMatch && matches >= maxResults) continue;
+        if (isMatch) matches++;
+        out.push(l.startsWith(root) ? relative(workdir, root).split(sep).join("/") + l.slice(root.length) : l);
+      }
+      return { ok: true, output: out.length > 0 ? clamp(out.join("\n")) : "(no matches)" };
     }
     // rg vắng mặt + grep vắng mặt/lỗi → scan JS thuần (luôn chạy được, không cần binary).
-    return jsGrepFallback(workdir, root, pattern, args.include);
+    return jsGrepFallback(workdir, root, pattern, args.include, ctxBefore, ctxAfter, maxResults);
   });
 }
 
@@ -390,7 +460,15 @@ export function toolGrep(workdir: string, args: { pattern: string; path?: string
  * — quan trọng trên Windows máy chưa cài ripgrep. Pattern là regex JS; regex
  * không hợp lệ → coi như literal substring.
  */
-function jsGrepFallback(workdir: string, root: string, pattern: string, include?: string): ToolResult {
+function jsGrepFallback(
+  workdir: string,
+  root: string,
+  pattern: string,
+  include?: string,
+  ctxBefore = 0,
+  ctxAfter = 0,
+  maxResults = MAX_SEARCH_HITS,
+): ToolResult {
   let rx: RegExp;
   try {
     rx = new RegExp(pattern);
@@ -401,8 +479,9 @@ function jsGrepFallback(workdir: string, root: string, pattern: string, include?
     ? globToRegExp(include.includes("/") ? include : `**/${include}`)
     : null;
   const hits: string[] = [];
+  let matches = 0;
   walkFiles(root, (_name, abs) => {
-    if (hits.length >= MAX_SEARCH_HITS) return;
+    if (matches >= maxResults) return;
     const rel = relative(workdir, abs).split(sep).join("/");
     if (includeRx && !includeRx.test(rel)) return;
     try {
@@ -411,11 +490,27 @@ function jsGrepFallback(workdir: string, root: string, pattern: string, include?
       const buf = readFileSync(abs);
       if (buf.includes(0)) return; // skip binary (NUL byte)
       const lines = buf.toString("utf8").split("\n");
-      let perFile = 0;
-      for (let i = 0; i < lines.length && perFile < 5 && hits.length < MAX_SEARCH_HITS; i++) {
-        if (rx.test(lines[i])) {
-          hits.push(`${rel}:${i + 1}: ${lines[i].trimEnd().slice(0, 200)}`);
-          perFile++;
+      // Collect matching line numbers, then emit merged windows with context.
+      const matchIdx: number[] = [];
+      for (let i = 0; i < lines.length && matchIdx.length < 5; i++) {
+        if (rx.test(lines[i])) matchIdx.push(i);
+      }
+      if (matchIdx.length === 0) return;
+      // Merge overlapping windows.
+      const windows: Array<[number, number]> = [];
+      for (const i of matchIdx) {
+        const lo = Math.max(0, i - ctxBefore), hi = Math.min(lines.length - 1, i + ctxAfter);
+        const last = windows[windows.length - 1];
+        if (last && lo <= last[1] + 1) last[1] = Math.max(last[1], hi);
+        else windows.push([lo, hi]);
+      }
+      for (const [lo, hi] of windows) {
+        if (hits.length > 0 && hits[hits.length - 1] !== "--") hits.push("--");
+        for (let i = lo; i <= hi; i++) {
+          const isMatch = matchIdx.includes(i);
+          if (isMatch && matches >= maxResults) break;
+          hits.push(`${rel}${isMatch ? ":" : "-"}${i + 1}${isMatch ? ":" : "-"} ${lines[i].trimEnd().slice(0, 200)}`);
+          if (isMatch) matches++;
         }
       }
     } catch { /* unreadable — skip */ }
@@ -772,6 +867,7 @@ const obj = (properties: Record<string, unknown>, required: string[]) => ({
 });
 
 const str = (description: string) => ({ type: "string", description });
+const num = (description: string) => ({ type: "number", description });
 
 export const AGENT_TOOLS: AgentTool[] = [
   {
@@ -848,22 +944,37 @@ export const AGENT_TOOLS: AgentTool[] = [
       type: "function",
       function: {
         name: "list_files",
-        description: "List files and directories recursively under a path in the working directory.",
-        parameters: obj({ path: str("Relative path, defaults to '.'") }, []),
+        description: "List files and directories recursively under a path in the working directory. Hidden dotfiles are excluded unless include_hidden=true; pass depth / exclude to shape the output.",
+        parameters: obj(
+          {
+            path: str("Relative path, defaults to '.'"),
+            depth: num("Max directory depth to recurse (default 4, cap 8)"),
+            exclude: str("Comma/space-separated globs to exclude, e.g. '*.log,coverage'"),
+            include_hidden: str("'true' to include dotfiles (default: excluded)"),
+          },
+          [],
+        ),
       },
     },
-    run: (ctx, args) => toolListFiles(ctx.workdir, args as { path?: string }),
+    run: (ctx, args) => toolListFiles(ctx.workdir, args as { path?: string; depth?: number; exclude?: string; include_hidden?: string | boolean }),
   },
   {
     spec: {
       type: "function",
       function: {
         name: "read_file",
-        description: "Read a text file. Returns content with 1-based line numbers. Image files (PNG/JPG/GIF) return an `[image: path]` placeholder rendered inline by the TUI.",
-        parameters: obj({ path: str("Relative file path") }, ["path"]),
+        description: "Read a text file. Returns content with 1-based line numbers. Pass offset (1-based start line) and limit to read a slice instead of the whole file. Image files (PNG/JPG/GIF) return an `[image: path]` placeholder rendered inline by the TUI.",
+        parameters: obj(
+          {
+            path: str("Relative file path"),
+            offset: num("1-based line to start from (default: 1)"),
+            limit: num("Max lines to read (default: whole file, capped at 2000)"),
+          },
+          ["path"],
+        ),
       },
     },
-    run: (ctx, args) => toolReadFile(ctx.workdir, args as { path: string }),
+    run: (ctx, args) => toolReadFile(ctx.workdir, args as { path: string; offset?: number; limit?: number }),
   },
   {
     spec: {
@@ -909,7 +1020,7 @@ export const AGENT_TOOLS: AgentTool[] = [
         parameters: obj(
           {
             command: str("Shell command to run"),
-            timeout_secs: str("Timeout in seconds (default 120, max 600)"),
+            timeout_secs: num("Timeout in seconds (default 120, max 600)"),
           },
           ["command"],
         ),
@@ -955,19 +1066,26 @@ export const AGENT_TOOLS: AgentTool[] = [
       function: {
         name: "grep",
         description:
-          "Search file contents with a regex (ripgrep-backed, gitignore-aware). Returns path:line:text hits, max 50. " +
-          "Use for finding code by symbol, error string, or pattern. Combine with read_file for context.",
+          "Search file contents with a regex (ripgrep-backed, gitignore-aware). Returns path:line:text hits (max 50 by default), with optional context lines and a hit cap. " +
+          "Use for finding code by symbol, error string, or pattern. Combine with read_file for full context.",
         parameters: obj(
           {
             pattern: str("Regular expression to search for"),
             path: str("Directory or file to search (default: workdir root)"),
             include: str("Glob filter for filenames, e.g. '*.ts'"),
+            context_before: num("Context lines to print before each match (default 0)"),
+            context_after: num("Context lines to print after each match (default 0)"),
+            max_results: num("Max matching lines to return (default 50, cap 100)"),
+            type: str("ripgrep file type filter, e.g. 'ts', 'py' (rg only; ignored by fallbacks)"),
           },
           ["pattern"],
         ),
       },
     },
-    run: (ctx, args) => toolGrep(ctx.workdir, args as { pattern: string; path?: string; include?: string }),
+    run: (ctx, args) => toolGrep(ctx.workdir, args as {
+      pattern: string; path?: string; include?: string;
+      context_before?: number; context_after?: number; max_results?: number; type?: string;
+    }),
   },
   {
     spec: {
@@ -987,6 +1105,32 @@ export const AGENT_TOOLS: AgentTool[] = [
       },
     },
     run: (ctx, args) => toolGlob(ctx.workdir, args as { pattern: string; path?: string }),
+  },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "repo_map",
+        description:
+          "Return the repository map — file tree with sizes + exported symbols (regex-extracted, budget-bounded, cached). " +
+          "Use to orient before reading files; cheaper than listing/reading everything.",
+        parameters: obj(
+          { path: str("Sub-directory to map (default: repo root)") },
+          [],
+        ),
+      },
+    },
+    run: (ctx, args) => {
+      try {
+        const sub = typeof (args as { path?: unknown }).path === "string" ? (args as { path: string }).path.trim() : "";
+        const out = sub
+          ? renderRepoMap(ctx.workdir, 4000, sub)
+          : buildRepoMap(ctx.workdir);
+        return { ok: true, output: out };
+      } catch (err) {
+        return { ok: false, output: `ERROR: repo map failed: ${(err as Error).message}` };
+      }
+    },
   },
 ];
 

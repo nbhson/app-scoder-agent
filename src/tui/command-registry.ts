@@ -13,6 +13,10 @@ import type { Agent, AgentRunResult, UsageTotals } from "../agent.js";
 import type { AgentConfig } from "../config.js";
 import { listSessions, resolveSessionId, type SessionFile, type SessionSummary } from "../session.js";
 import { discoverSkills, type Skill } from "../skills.js";
+import { selectableAgents } from "../agents.js";
+import { agentsMdTemplate } from "../agents-guide.js";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────
@@ -36,6 +40,12 @@ export interface CommandHost {
   /** Agent hiện tại (TUI: createAgent() lazy — null khi chưa chạy). */
   agent(): Agent | null;
   config: AgentConfig;
+  /**
+   * Patch the *effective* config (TUI: setState; REPL: mutate the shared cfg
+   * object). Handlers that change config MUST use this when present — a bare
+   * `host.config = …` would not reach the frontend's createAgent path.
+   */
+  updateConfig?(patch: Partial<AgentConfig>): void;
   /** Agent đang chạy task? (/sessions resume gate — TUI) */
   isRunning?(): boolean;
   /** Thay agent hiện tại: agent=null → tạo mới từ config (/clear); /sessions resume. */
@@ -199,8 +209,49 @@ export function coreCommands(): CommandEntry[] {
           return;
         }
         host.agent()?.setPermissionMode(mode as "auto" | "ask" | "readonly");
+        host.updateConfig?.({ permissionMode: mode as "auto" | "ask" | "readonly" });
         host.config = withPermissionMode(host.config, mode);
         notice(`permission mode → ${mode}`);
+      },
+    },
+    {
+      name: "/agent",
+      description: "list selectable agents — /agent <name> to switch (idle only)",
+      run(slash, host, notice) {
+        const agents = selectableAgents(host.config.workdir);
+        const current = host.config.agent ?? "build";
+        if (!slash.arg) {
+          notice(
+            "Agents:\n" +
+              agents.map((a) => `  ${a.name === current ? "*" : " "} ${a.name.padEnd(10)} ${a.description}`).join("\n") +
+              "\nswitch with /agent <name> (idle only; resets the conversation)",
+          );
+          return;
+        }
+        const name = slash.arg.trim();
+        const def = agents.find((a) => a.name === name);
+        if (!def) {
+          return notice(`agent "${name}" not selectable — available: ${agents.map((a) => a.name).join(", ")}`, "error");
+        }
+        if (current === name) return notice(`already on agent "${name}"`);
+        if (host.isRunning?.()) return notice("agent is running — wait or Esc first", "warn");
+        host.updateConfig?.({ agent: name });
+        host.config = { ...host.config, agent: name };
+        host.replaceAgent(null); // fresh agent with the new def; old conversation ends here
+        notice(`agent → ${name} (${def.mode}) — conversation reset; /sessions can resume the previous one`);
+      },
+    },
+    {
+      name: "/init",
+      description: "create an AGENTS.md template in this project",
+      run(_slash, host, notice) {
+        const target = join(host.config.workdir, "AGENTS.md");
+        if (existsSync(target)) {
+          notice(`AGENTS.md already exists: ${target}`, "warn");
+          return;
+        }
+        writeFileSync(target, agentsMdTemplate(host.config.workdir), "utf8");
+        notice(`created ${target} — review and commit it`);
       },
     },
     {

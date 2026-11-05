@@ -1,14 +1,17 @@
 /**
- * Agents (I-06) — .scoder/agents/<name>.md definitions + built-ins.
+ * Agents (I-06 + v2 profiles) — .scoder/agents/<name>.md definitions + built-ins.
  *
  * Frontmatter semantics from opencode /v2/docs/agents (concept only —
  * prompt bodies are scoder's own). An agent def is: description, mode
- * (primary|subagent|all), model override, steps, prompt body.
+ * (primary|subagent|all), model override, steps, prompt body — plus v2:
+ * tool whitelist, permission mode, temperature, reasoning, maxTokens,
+ * skills pre-staging, color.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFrontmatter } from "./skills.js";
+import type { PermissionMode } from "./permissions.js";
 
 export interface AgentDef {
   name: string;
@@ -23,7 +26,37 @@ export interface AgentDef {
   prompt: string;
   hidden?: boolean;
   disabled?: boolean;
+  // ── v2: model/tool/permission routing ─────────────────────────────────────
+  /** Tool whitelist — when set, the agent only gets these tool specs. */
+  tools?: string[];
+  /** Permission mode override (plan/explore → readonly). */
+  permission?: PermissionMode;
+  /** Sampling temperature override. */
+  temperature?: number;
+  /** Reasoning/thinking override. */
+  reasoning?: "off" | "on";
+  /** Max output tokens override. */
+  maxTokens?: number;
+  /** Skills staged automatically for this agent (names from discoverSkills). */
+  skills?: string[];
+  /** Sidebar accent color hint for the TUI. */
+  color?: string;
 }
+
+/** Read-only tools an agent may use — mutating specs are filtered out. */
+export const READ_ONLY_TOOL_SPECS = [
+  "read_file",
+  "list_files",
+  "grep",
+  "glob",
+  "repo_map",
+  "web_fetch",
+  "load_skill",
+  "write_todos",
+];
+
+/** Specs a readonly primary/subagent never sees (defense in depth vs permission alone). */
+export const MUTATING_TOOL_SPECS = ["write_file", "edit_file", "apply_patch", "run_command"];
 
 /** Built-in agents — lowest priority; .md files override by name. */
 export const BUILTIN_AGENTS: AgentDef[] = [
@@ -39,6 +72,9 @@ export const BUILTIN_AGENTS: AgentDef[] = [
     mode: "primary",
     prompt:
       "You are a planning agent. Investigate the codebase (read files, search, list) and produce a concrete, step-by-step implementation plan. You MUST NOT modify any files or run mutating commands — report the plan and stop. Structure: goal, findings (files/lines), plan steps ordered, risks, and the exact first step to take.",
+    permission: "readonly",
+    tools: READ_ONLY_TOOL_SPECS,
+    reasoning: "on",
   },
   {
     name: "explore",
@@ -46,8 +82,34 @@ export const BUILTIN_AGENTS: AgentDef[] = [
     mode: "subagent",
     prompt:
       "You are an exploration subagent. Answer the given question about this codebase using read-only tools (list_files, read_file, run_command with read-only commands). Be terse and factual; cite file paths. Do not modify anything.",
+    permission: "readonly",
+    tools: READ_ONLY_TOOL_SPECS,
+  },
+  {
+    name: "review",
+    description: "Code reviewer — reviews diffs for correctness, security and style. Never edits.",
+    mode: "all",
+    prompt:
+      "You are a code review agent. Review the requested diff or files for correctness bugs, security issues, and violations of the project's conventions. Use read-only tools only. Report findings as a ranked list: [blocking] / [important] / [nit] with file:line citations and a concrete fix for each. End with an overall verdict: APPROVE / REQUEST CHANGES / NEEDS DISCUSSION. Do NOT modify any files.",
+    permission: "readonly",
+    tools: READ_ONLY_TOOL_SPECS,
   },
 ];
+
+const parsePermissions = (v: string | undefined): PermissionMode | undefined =>
+  v === "auto" || v === "ask" || v === "readonly" ? v : undefined;
+const parseReasoning = (v: string | undefined): "off" | "on" | undefined =>
+  v === "off" || v === "on" ? v : undefined;
+const parseList = (v: string | undefined): string[] | undefined => {
+  if (!v) return undefined;
+  const out = v.split(",").map((s) => s.trim()).filter(Boolean);
+  return out.length > 0 ? out : undefined;
+};
+const parseNumber = (v: string | undefined): number | undefined => {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
 
 /** Scan .scoder/agents/*.md (project) + ~/.scoder/agents/*.md (global). */
 export function discoverAgents(workdir: string): AgentDef[] {
@@ -67,10 +129,18 @@ export function discoverAgents(workdir: string): AgentDef[] {
           description: meta.description ?? "",
           mode: mode as AgentDef["mode"],
           model: meta.model || undefined,
-          steps: meta.steps ? Number(meta.steps) || undefined : undefined,
+          steps: parseNumber(meta.steps),
           prompt: body,
           hidden: meta.hidden === "true",
           disabled: meta.disabled === "true",
+          tools: parseList(meta.tools),
+          permission: parsePermissions(meta.permission),
+          temperature: parseNumber(meta.temperature),
+          reasoning: parseReasoning(meta.reasoning),
+          // frontmatter keys are lowercased by parseFrontmatter
+          maxTokens: parseNumber(meta.maxtokens),
+          skills: parseList(meta.skills),
+          color: meta.color || undefined,
         });
       } catch {
         // skip malformed
@@ -83,4 +153,28 @@ export function discoverAgents(workdir: string): AgentDef[] {
 /** Find one agent by name (built-ins included). */
 export function findAgent(workdir: string, name: string): AgentDef | null {
   return discoverAgents(workdir).find((a) => a.name === name) ?? null;
+}
+
+/** Primary agents user-selectable via --agent / /agent (mode primary|all). */
+export function selectableAgents(workdir: string): AgentDef[] {
+  return discoverAgents(workdir).filter((a) => a.mode !== "subagent" && !a.hidden);
+}
+
+/**
+ * v2: filter a tool list for an agent def.
+ *  - def.tools set → whitelist (unknown names dropped, reported by caller);
+ *  - def.permission "readonly" → drop mutating specs (defense in depth);
+ *  - otherwise the list is unchanged.
+ */
+export function filterToolNamesForDef(names: string[], def: AgentDef | null): string[] {
+  if (!def) return names;
+  if (def.tools && def.tools.length > 0) {
+    const allow = new Set(def.tools.map((t) => t.toLowerCase()));
+    return names.filter((n) => allow.has(n.toLowerCase()));
+  }
+  if (def.permission === "readonly") {
+    const blocked = new Set(MUTATING_TOOL_SPECS);
+    return names.filter((n) => !blocked.has(n));
+  }
+  return names;
 }

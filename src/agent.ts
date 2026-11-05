@@ -22,7 +22,9 @@ import { McpManager } from "./mcp.js";
 import { validateSchema } from "./json-schema.js";
 import { watchWorkdir, type ReloadWatcher } from "./watch.js";
 import { discoverSkills, findSkill, type Skill } from "./skills.js";
-import { discoverAgents, findAgent } from "./agents.js";
+import { discoverAgents, findAgent, filterToolNamesForDef, type AgentDef } from "./agents.js";
+import { buildRepoMap } from "./repo-map.js";
+import { buildAgentGuideBlock } from "./agents-guide.js";
 
 import { SteeringInbox } from "./steering.js";
 import { randomUUID } from "node:crypto";
@@ -124,10 +126,85 @@ export type AgentEvent =
   | { type: "finish"; success: boolean; steps: number; summary: string; usage?: UsageTotals; verification?: VerificationInfo }
   | { type: "error"; message: string };
 
+export interface ResolvedPrimary {
+  config: AgentConfig;
+  def: AgentDef | null;
+}
+
+/**
+ * v2 (3.1): resolve the primary agent for a run — apply its tool filter
+ * inputs (permission/model/routing/temperature/steps/reasoning) onto the
+ * runtime config BEFORE the client, ctx and tools are built.
+ *
+ * Resolution order for the model: rc/CLI routing[name] → def.model →
+ * config.model (unchanged). Cross-provider "provider/model" refs rebuild the
+ * provider resolution exactly like setModel does.
+ *
+ * Subagent defs passed programmatically (task runner) are applied as well —
+ * the CLI/TUI layer is responsible for not offering subagent mode to users.
+ */
+export function resolvePrimaryConfig(config: AgentConfig): ResolvedPrimary {
+  const name = (config.agent ?? "build").trim() || "build";
+  let def = findAgent(config.workdir, name);
+  if (!def) {
+    ui.warn(`agent "${name}" not found — falling back to the default build agent`);
+    def = findAgent(config.workdir, "build");
+    if (!def) return { config, def: null };
+  }
+  if (def.mode === "subagent") {
+    // Programmatic subagents are fine; warn only when this came from user selection.
+    ui.warn(`agent "${def.name}" is a subagent — it runs via the task tool; using it as primary anyway (scoder --agent).`);
+  }
+  const out: AgentConfig = { ...config, agent: def.name };
+  const modelRef = config.routing?.[def.name as "plan" | "build" | "review"] ?? def.model;
+  if (modelRef && modelRef.trim()) {
+    const [prov, id] = splitProviderModel(modelRef.trim());
+    if (prov && prov !== out.provider) {
+      const rcProviders = parseCustomProviders(loadRcFile(out.workdir).providers);
+      const resolved = resolveProvider(prov, rcProviders);
+      if ("def" in resolved) {
+        out.provider = prov as "openai" | "anthropic";
+        out.providerDef = resolved.def;
+        out.model = id;
+        out.baseUrl = resolved.def.baseUrl || out.baseUrl;
+        out.apiKey = process.env[resolved.def.apiKeyEnv] || out.apiKey;
+      } else {
+        ui.warn(`agent "${def.name}": provider "${prov}" not resolvable (${resolved.error}) — keeping ${out.model}`);
+      }
+    } else {
+      out.model = id ?? modelRef.trim();
+    }
+  }
+  if (def.temperature !== undefined) out.temperature = def.temperature;
+  if (def.maxTokens !== undefined) out.maxTokens = def.maxTokens;
+  if (def.reasoning) out.reasoning = def.reasoning;
+  if (def.steps !== undefined && Number.isFinite(def.steps) && def.steps >= 1) out.maxSteps = Math.floor(def.steps);
+  if (def.permission) out.permissionMode = def.permission;
+  return { config: out, def };
+}
+
+/** Filter tool specs for the resolved def; warn about unknown whitelist names. */
+function applyToolFilter(specs: ToolSpec[], def: AgentDef | null): ToolSpec[] {
+  if (!def) return specs;
+  const before = specs.length;
+  const names = filterToolNamesForDef(specs.map((s) => s.function.name), def);
+  if (def.tools?.length) {
+    const known = new Set(specs.map((s) => s.function.name.toLowerCase()));
+    const unknown = def.tools.filter((t) => !known.has(t.toLowerCase()) && !t.startsWith("mcp__"));
+    if (unknown.length > 0) ui.warn(`agent "${def.name}": unknown tools in definition dropped: ${unknown.join(", ")}`);
+  }
+  if (names.length === before) return specs;
+  const allow = new Set(names);
+  return specs.filter((s) => allow.has(s.function.name));
+}
+
 export class Agent {
   /** v2 event schema: stable id for the run — links agent_start/agent_end. */
   readonly id = randomUUID();
   private client: import("./provider-registry.js").ProviderRuntimeContract;
+  private config: AgentConfig;
+  /** v2: the def resolved at construction (primary agent) — prompt override, skills. */
+  private primaryDef: AgentDef | null = null;
   private messages: ChatMessage[] = [];
   private tools: ToolSpec[] = allToolSpecs();
   private ctx: ToolContext;
@@ -177,7 +254,15 @@ export class Agent {
     this.emit({ type: "guardrail", rule: d.rule, action: kind, reason: d.reason });
   }
 
-  constructor(private config: AgentConfig) {
+  constructor(config: AgentConfig) {
+    // v2 (3.1): resolve the primary agent FIRST — model routing, tool filter,
+    // permission mode and prompt override all derive from it. The local
+    // `config` alias below keeps the rest of the body readable.
+    const resolved = resolvePrimaryConfig(config);
+    this.config = resolved.config;
+    this.primaryDef = resolved.def;
+    config = this.config;
+    this.tools = applyToolFilter(allToolSpecs(), resolved.def);
     this.guardrails = createGuardrailEngine(config.guardrails ?? {}, (d) => this.logGuardrailDecision(d));
     const commonOpts = {
       baseUrl: config.baseUrl,
@@ -250,11 +335,11 @@ export class Agent {
         const child = new Agent({
           ...config,
           allowSubagents: false,
-          model: def?.model ?? config.model,
+          // v2: the child resolves this def itself (tools filter, permission,
+          // model via routing + def.model, prompt) — no manual overrides here.
+          agent: def?.name ?? "build",
           maxSteps: def?.steps ?? Math.min(config.maxSteps, 20),
           noSave: true, // subagent runs are ephemeral — no session pollution
-          // plan/explore agents stay read-only regardless of parent mode.
-          permissionMode: def?.name === "plan" || def?.name === "explore" ? "readonly" : config.permissionMode,
         });
         // Abort cascade: parent abort kills child's in-flight LLM calls.
         this.runSignal.signal.addEventListener("abort", () => child.abort(), { once: true });
@@ -298,6 +383,11 @@ export class Agent {
     }
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.skills = discoverSkills(config.workdir);
+    // v2: a def may declare skills to pre-stage for every task of this agent.
+    for (const s of this.primaryDef?.skills ?? []) {
+      const r = this.stageSkill(s);
+      this.logger.log({ type: "stage_skill", name: s, ok: r.ok });
+    }
     // M4: hot-reload — .scoderrc (MCP servers) + .scoder/skills/ đổi giữa
     // session → reload ở turn sau (debounced, không watcher trong test).
     if (config.noSave !== true && process.env.SCODER_NO_WATCH !== "1") {
@@ -461,7 +551,7 @@ export class Agent {
   }
 
   /** I-09: tools safe to run concurrently (pure reads, no permission ask). */
-  private static READONLY_TOOLS = new Set(["read_file", "list_files", "grep", "glob", "load_skill"]);
+  private static READONLY_TOOLS = new Set(["read_file", "list_files", "grep", "glob", "load_skill", "repo_map", "web_fetch"]);
 
   /**
    * I-09: bounded-concurrency map preserving input order.
@@ -509,6 +599,20 @@ export class Agent {
 
     if (!tool && !this.mcp?.hasTool(tc.name)) {
       this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${allToolSpecs().map((t) => t.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
+      return {};
+    }
+
+    // v2 (3.1): enforce the def tool filter at dispatch too. An LLM can emit
+    // a tool name it was never advertised (spec filter hides it — it may still
+    // hallucinate it), so the runtime must reject it as well. MCP tools are
+    // merged into this.tools on connect, so they pass membership naturally.
+    if (!this.tools.some((t) => t.function.name === tc.name)) {
+      this.rejectToolCall(
+        steps,
+        tc,
+        `ERROR: tool "${tc.name}" is not available to this agent (tool filter). Available: ${this.tools.map((t) => t.function.name).join(", ")}`,
+        { error: "tool filter" },
+      );
       return {};
     }
 
@@ -778,7 +882,9 @@ export class Agent {
     await this.mcp.connectAll();
     const mcpSpecs = this.mcp.toToolSpecs();
     if (mcpSpecs.length > 0) {
-      this.tools = [...allToolSpecs(), ...mcpSpecs];
+      // Re-apply the primary def's tool filter — never leak mutating specs
+      // back into a readonly agent just because MCP connected.
+      this.tools = [...applyToolFilter(allToolSpecs(), this.primaryDef), ...mcpSpecs];
     }
   }
 
@@ -829,6 +935,11 @@ export class Agent {
     this.filesModified = false;
     this.plan = [];
     const skillsBlock = buildSkillsBlock(this.skills); // I3
+    // v2: AGENTS.md conventions + repo map (bounded token budget each).
+    const agentsGuideBlock = buildAgentGuideBlock(this.config.workdir, task);
+    const repoMapBlock = this.config.repoMap === false ? "" : `\n\n${buildRepoMap(this.config.workdir)}`;
+    // v2: a primary/subagent def with a custom prompt replaces the built-in base.
+    const baseOverride = this.primaryDef?.prompt?.trim() ? this.primaryDef.prompt : undefined;
     this.messages = [
       {
         role: "system",
@@ -838,6 +949,10 @@ export class Agent {
           envInfo: buildEnvInfo(this.config.workdir),
           skillsBlock,
           mcpBlock: buildMcpBlock(this.config),
+          agentsGuideBlock,
+          repoMapBlock,
+          base: baseOverride,
+          promptVersion: this.config.promptVersion,
         }) + buildAgentsBlock(discoverAgents(this.config.workdir), this.config.allowSubagents !== false),
       },
       ...this.pendingContext.map((content) => ({ role: "user" as const, content })),
