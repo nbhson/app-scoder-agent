@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [0.9.0] — TBD
+## [0.9.0] — 2026-11-05
 
 Scoder 0.9→1.0 upgrade milestone. Agent C, MCP A/B, custom commands,
 TUI transcript features, backward-compat guarantees. __No breaking config
