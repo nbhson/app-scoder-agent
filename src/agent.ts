@@ -257,6 +257,8 @@ export class Agent {
   private watcher: ReloadWatcher | null = null;
   /** Content staged via /skill — injected before the next run/turn. */
   private pendingContext: string[] = [];
+  /** Skills 2.0: allowed-tools enforced for the next run when a skill is staged. */
+  private pendingAllowedTools: string[] | null = null;
   /** Session plan (write_todos tool). */
   private plan: TodoItem[] = [];
   /** v2: working memory ledger (see src/memory.ts) — kept across compaction. */
@@ -1188,10 +1190,17 @@ export class Agent {
     };
     await this.mcp.connectAll();
     const mcpSpecs = [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()];
+    let base = applyToolFilter(allToolSpecs(), this.primaryDef);
+    if (this.pendingAllowedTools && this.pendingAllowedTools.length > 0) {
+      const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
+      base = base.filter((s) => allow.has(s.function.name.toLowerCase()));
+      // MCP specs only if their (stripped) name is allowed
+      // (skill allowlists usually name built-in tools; keep MCP out by default)
+    }
     if (mcpSpecs.length > 0) {
-      // Re-apply the primary def's tool filter — never leak mutating specs
-      // back into a readonly agent just because MCP connected.
-      this.tools = [...applyToolFilter(allToolSpecs(), this.primaryDef), ...mcpSpecs];
+      this.tools = [...base, ...mcpSpecs];
+    } else {
+      this.tools = base;
     }
   }
 
@@ -1247,6 +1256,14 @@ export class Agent {
     this.selfReviewDone = false;
     this.verifyStrikes = 0;
     this.lastVerifySignature = "";
+    // Skills 2.0: rebuild tool list honouring a staged skill's allowed-tools.
+    let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef);
+    if (this.pendingAllowedTools && this.pendingAllowedTools.length > 0) {
+      const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
+      baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
+    }
+    const mcpSpecs = this.mcp ? [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()] : [];
+    this.tools = [...baseTools, ...mcpSpecs];
     const skillsBlock = buildSkillsBlock(this.skills); // I3
     // v2: AGENTS.md conventions + repo map (bounded token budget each).
     const agentsGuideBlock = buildAgentGuideBlock(this.config.workdir, task);
@@ -1272,6 +1289,7 @@ export class Agent {
       { role: "user", content: task },
     ];
     this.pendingContext = [];
+    this.pendingAllowedTools = null;
     // Phiên bản system prompt được ghi vào log — giúp so sánh chất lượng
     // giữa các phiên bản prompt khi phân tích JSONL.
     this.logger.log({ type: "prompt_version", version: PROMPT_VERSION });
@@ -1838,6 +1856,10 @@ export class Agent {
   getSkills(): Skill[] {
     return this.skills;
   }
+  /** Skills 2.0: hot-reload skills. */
+  reloadSkills(): void {
+    this.skills = discoverSkills(this.config.workdir);
+  }
 
   /**
    * Stage a skill's content for injection before the next run/turn (/skill).
@@ -1850,6 +1872,7 @@ export class Agent {
       return { ok: false, message: `skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered (try /skills)"}` };
     }
     this.pendingContext.push(`[User loaded skill "${skill.name}" — follow these instructions for the upcoming task]\n\n${skill.body}`);
+    if (skill.allowedTools && skill.allowedTools.length > 0) this.pendingAllowedTools = skill.allowedTools;
     return { ok: true, message: `skill "${skill.name}" staged — it will apply to your next task` };
   }
 

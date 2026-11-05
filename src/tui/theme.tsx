@@ -69,6 +69,8 @@ export const THEMES: Record<string, Theme> = {
 };
 
 export function defaultThemeName(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.SCODER_THEME && THEMES[env.SCODER_THEME]) return env.SCODER_THEME;
+  if (env.SCODER_PLAIN === "1" || env.NO_COLOR === "1" || process.env.NO_COLOR === "1") return "mono";
   if (env.TERM === "dumb" || !env.TERM) return "mono";
   if (env.COLOR_COUNT && Number(env.COLOR_COUNT) < 16) return "mono";
   return "mission";

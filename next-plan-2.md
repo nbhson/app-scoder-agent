@@ -1488,9 +1488,9 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
 - [x] Phase 6 — Command/Skill MVP
   - [x] Custom `.scoder/commands/*.md` (global + project, YAML frontmatter, $1/$ARGUMENTS)
   - [x] `/commands` listing + inspect
-  - [ ] Unified `CommandDef` registry (deferred — scope trimmed)
-  - [ ] Skills 2.0 (progressive disclosure + enforce allowed-tools) (deferred)
-  - [ ] Completion v2 (deferred)
+  - [x] Unified `CommandDef` registry (args/visibility/source + completion hints)
+  - [x] Skills 2.0 (progressive disclosure + enforce allowed-tools)
+  - [x] Completion v2 (provider registry + fuzzy + ranking)
 - [x] Phase 7 — TUI (transcript features)
   - [x] SubagentSection in sidebar (running/ok/failed + summary)
   - [x] `/export [md|json]` — exports transcript to workdir/scoder-export.{md|json}
@@ -1499,9 +1499,9 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
   - [x] toolPhase: mcp__* → "mcp", repo_map → "explore", ask_user → "clear", task → "delegate"
   - [x] CommandHost transcriptItems + selectTranscriptItem (TUI host)
   - [x] Reducer event coverage for steer_queued/steer_delivered/compaction/agent_start/end/tool_progress (already covered in existing state.ts)
-  - [ ] Command palette / help overlay / diff nav / subagent tree (deferred — scope trimmed)
-  - [ ] Permission queue / ask_user modal / risk level (deferred)
-  - [ ] NO_COLOR / --no-motion / --plain / high-contrast (deferred)
+  - [x] Command palette / help overlay / diff nav / subagent tree
+  - [x] Permission queue / ask_user modal / risk level
+  - [x] NO_COLOR / --no-motion / --plain / high-contrast
 - [x] Phase 8 — Hardening
   - [x] Docs + CHANGELOG [0.9.0] section
   - [x] Migration/backward-compat test (9 tests: config + event + skill)

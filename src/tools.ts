@@ -6,7 +6,7 @@ import { unifiedDiff } from "./diff.js";
 import { detectImageBytes } from "./tui/image.js";
 import type { DiffResult } from "./diff.js";
 import type { PermissionChecker, PermissionMode } from "./permissions.js";
-import { discoverSkills, findSkill } from "./skills.js";
+import { discoverSkills, findSkill, loadSkillSection } from "./skills.js";
 import { redactSecrets } from "./llm.js";
 import { loadRcFile } from "./config.js";
 import { resolveSandbox, type SandboxConfig } from "./sandbox.js";
@@ -1000,7 +1000,10 @@ export const AGENT_TOOLS: AgentTool[] = [
         description:
           "Load the full instructions of a named skill from the AVAILABLE SKILLS index (project + global). Call this at the start of a task when it matches a skill, then follow the returned instructions exactly.",
         parameters: obj(
-          { name: str("Skill name from the AVAILABLE SKILLS index, e.g. 'prompt-gate-workflow'") },
+          {
+            name: str("Skill name from the AVAILABLE SKILLS index, e.g. 'prompt-gate-workflow'"),
+            section: str("Optional section heading to load (progressive disclosure). Omit for full body."),
+          },
           ["name"],
         ),
       },
@@ -1013,7 +1016,10 @@ export const AGENT_TOOLS: AgentTool[] = [
         const names = discoverSkills(ctx.workdir).map((s) => s.name).join(", ");
         return { ok: false, output: `ERROR: skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered"}.` };
       }
-      return { ok: true, output: `# skill: ${skill.name} (${skill.scope})\n\n${skill.body}` };
+      const section = (args as { section?: unknown }).section;
+      const body = section ? loadSkillSection(skill, String(section)) : skill.body;
+      const refs = skill.references?.length ? `\n\nReferences: ${skill.references.join(", ")}` : "";
+      return { ok: true, output: `# skill: ${skill.name} (${skill.scope})${skill.version ? ` v${skill.version}` : ""}\n\n${body}${refs}` };
     },
   },
   {

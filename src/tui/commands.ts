@@ -28,6 +28,14 @@ export interface CommandDef {
   usage: string;
   visibility: CommandVisibility;
   source: CommandSource;
+  /** Optional positional arg names (Completion v2 / help). */
+  args?: string[];
+  /** Optional JSON-schema-ish arg spec for validation. */
+  argsSchema?: Record<string, unknown>;
+  /** Optional completion provider id hint. */
+  completion?: string;
+  /** Handler capability hint (host method name) for unified registry. */
+  handler?: string;
 }
 
 /** Built-in commands — the single catalog both help and completion read. */
@@ -252,47 +260,101 @@ export function runCustomCommand(cmd: CustomCommand, argStr: string): string {
 
 /** Build providers from runtime context (called once per keystroke burst). */
 export function completionProviders(sources: {
-  skills: string[];
-  agents: string[];
-  files: string[];
+  skills?: string[];
+  agents?: string[];
+  files?: string[];
+  commands?: Array<{ cmd: string; desc: string }>;
+  mcpServers?: Array<{ name: string; tools?: string[] }>;
+  sessions?: string[];
+  limit?: number;
 }): CompletionProvider[] {
-  return [
+  const limit = sources.limit ?? 8;
+  const skills = sources.skills ?? [];
+  const agents = sources.agents ?? [];
+  const files = sources.files ?? [];
+  const commands = sources.commands ?? SLASH_COMMANDS;
+  const out: CompletionProvider[] = [
     {
       id: "commands",
       match: (t) => t.startsWith("/") && !t.slice(1).includes(" "),
-      candidates: (t) =>
-        SLASH_COMMANDS.filter((c) => c.cmd.startsWith(t.toLowerCase()))
-          .map((c) => ({ label: c.cmd, desc: c.desc, insert: c.cmd + " " })),
+      candidates: (t) => {
+        const q = t.toLowerCase();
+        return commands
+          .filter((c) => c.cmd.toLowerCase().startsWith(q) || c.cmd.toLowerCase().includes(q.slice(1)))
+          .slice(0, limit)
+          .map((c) => ({ label: c.cmd, desc: c.desc, insert: c.cmd + " " }));
+      },
     },
-    {
+  ];
+  if (files.length > 0) {
+    out.push({
       id: "files",
       match: (t) => t.startsWith("@") && t.length > 1,
-      candidates: (t) =>
-        suggest(sources.files, t.slice(1)).map((f) => ({ label: f, insert: "@" + f + (f.endsWith("/") ? "" : " ") })),
-    },
-    {
+      candidates: (t) => suggest(files, t.slice(1), limit).map((f) => ({ label: f, insert: "@" + f + (f.endsWith("/") ? "" : " ") })),
+    });
+  }
+  if (skills.length > 0) {
+    out.push({
       id: "skills",
       match: (t) => t.startsWith("@") && t.length > 1,
       candidates: (t) => {
         const q = t.slice(1).toLowerCase();
-        return sources.skills
-          .filter((s) => s.toLowerCase().includes(q))
-          .slice(0, 4)
-          .map((s) => ({ label: `@${s}`, desc: "skill", insert: `@${s} ` }));
+        return skills.filter((s) => s.toLowerCase().includes(q)).slice(0, limit).map((s) => ({ label: `@${s}`, desc: "skill", insert: `@${s} ` }));
       },
-    },
-    {
+    });
+  }
+  if (agents.length > 0) {
+    out.push({
       id: "agents",
       match: (t) => t.startsWith("@") && t.length > 1,
       candidates: (t) => {
         const q = t.slice(1).toLowerCase();
-        return sources.agents
-          .filter((a) => a.toLowerCase().includes(q))
-          .slice(0, 4)
-          .map((a) => ({ label: `@${a}`, desc: "agent", insert: `@${a} ` }));
+        return agents.filter((a) => a.toLowerCase().includes(q)).slice(0, limit).map((a) => ({ label: `@${a}`, desc: "agent", insert: `@${a} ` }));
       },
-    },
-  ];
+    });
+  }
+  if (sources.mcpServers && sources.mcpServers.length > 0) {
+    out.push({
+      id: "mcp",
+      match: (t) => t.startsWith("@") && t.length > 1,
+      candidates: (t) => {
+        const q = t.slice(1).toLowerCase();
+        const res: CompletionCandidate[] = [];
+        for (const s of sources.mcpServers ?? []) {
+          if (s.name.toLowerCase().includes(q)) res.push({ label: `@${s.name}`, desc: "mcp server", insert: `@${s.name} ` });
+          for (const tool of s.tools ?? []) {
+            if (tool.toLowerCase().includes(q)) res.push({ label: `@${tool}`, desc: `mcp:${s.name}`, insert: `@${tool} ` });
+          }
+        }
+        return res.slice(0, limit);
+      },
+    });
+  }
+  if (sources.sessions && sources.sessions.length > 0) {
+    out.push({
+      id: "sessions",
+      match: (t) => t.startsWith("@") && t.length > 1,
+      candidates: (t) => {
+        const q = t.slice(1).toLowerCase();
+        return (sources.sessions ?? []).filter((s) => s.toLowerCase().includes(q)).slice(0, limit).map((s) => ({ label: `@${s}`, desc: "session", insert: `@${s} ` }));
+      },
+    });
+  }
+  return out;
+}
+
+/** Fuzzy score helper (Completion v2 ranking). Higher = better. */
+export function fuzzyScore(query: string, target: string): number {
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  if (!q) return 0;
+  if (t.startsWith(q)) return 1000 - (t.length - q.length);
+  const idx = t.indexOf(q);
+  if (idx >= 0) return 500 - idx;
+  // subsequence
+  let qi = 0;
+  for (let i = 0; i < t.length && qi < q.length; i++) if (t[i] === q[qi]) qi++;
+  return qi === q.length ? 100 : 0;
 }
 
 /**

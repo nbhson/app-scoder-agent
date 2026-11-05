@@ -19,7 +19,7 @@ import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
 import { resolveSessionId } from "../session.js";
 import { applyEvent, initialState, markAborted, estimateItemRows, type ChatItem, type TuiState } from "./state.js";
-import { parseSlashCommand } from "./commands.js";
+import { parseSlashCommand, SLASH_COMMANDS, formatSlashHelp } from "./commands.js";
 import { dispatchCommand, type CommandHost } from "./command-registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar, SIDEBAR_MIN_COLS } from "./chrome.js"; // T2
@@ -63,6 +63,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   permPromptRef.current = permPrompt;
   // Session picker modal state (open via Ctrl+S)
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {
@@ -583,6 +585,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       }
       return;
     }
+    // ── Ctrl+P: command palette ──
+    if (key.ctrl && _input === "p") {
+      setPaletteOpen((o) => !o);
+      return;
+    }
+    // ── ?: help overlay (when input empty) ──
+    if (_input === "?" && !inputRef.current.trim()) {
+      setHelpOpen((o) => !o);
+      return;
+    }
 
     // T-10: ctrl+t toggles the thinking stream visibility.
     if (key.ctrl && _input === "t") {
@@ -714,6 +726,20 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           onSelect={handleSessionSelect}
           onClose={() => setSessionPickerOpen(false)}
         />
+      )}
+      {paletteOpen && (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} paddingY={1}>
+          <Text color={theme.accent} bold>Command palette (Ctrl+P to close)</Text>
+          {SLASH_COMMANDS.slice(0, 40).map((c) => (
+            <Text key={c.cmd}>{c.cmd.padEnd(12)} {c.desc}</Text>
+          ))}
+        </Box>
+      )}
+      {helpOpen && (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.dim} paddingX={1} paddingY={1}>
+          <Text color={theme.brand} bold>Help (?)</Text>
+          <Text>{formatSlashHelp("scoder tui")}</Text>
+        </Box>
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}

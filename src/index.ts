@@ -32,6 +32,10 @@ interface CliArgs {
   workdir?: string;
   maxSteps?: number;
   yes: boolean;
+  noColor?: boolean;
+  noMotion?: boolean;
+  plain?: boolean;
+  highContrast?: boolean;
   agent?: string;
   permission?: string;
   provider?: string;
@@ -153,6 +157,18 @@ function parseArgs(argv: string[]): CliArgs {
       }
       case "--no-save":
         args.noSave = true;
+        break;
+      case "--no-color":
+        args.noColor = true;
+        break;
+      case "--no-motion":
+        args.noMotion = true;
+        break;
+      case "--plain":
+        args.plain = true;
+        break;
+      case "--high-contrast":
+        args.highContrast = true;
         break;
       case "--log-file":
         args.logFile = true;
@@ -619,6 +635,11 @@ async function main(): Promise<void> {
     console.log(HELP);
     return;
   }
+
+  if (args.noColor) process.env.NO_COLOR = "1";
+  if (args.noMotion) process.env.SCODER_NO_MOTION = "1";
+  if (args.plain) process.env.SCODER_PLAIN = "1";
+  if (args.highContrast) process.env.SCODER_THEME = "high-contrast";
 
   const cfg = loadConfig({
     model: args.model,

@@ -13,7 +13,7 @@ import type { Agent, AgentRunResult, UsageTotals } from "../agent.js";
 import type { ChatItem } from "./state.js";
 import type { AgentConfig } from "../config.js";
 import { listSessions, resolveSessionId, type SessionFile, type SessionSummary } from "../session.js";
-import { discoverSkills, type Skill } from "../skills.js";
+import { discoverSkills, skillWarnings, type Skill } from "../skills.js";
 import { selectableAgents } from "../agents.js";
 import { agentsMdTemplate } from "../agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
@@ -182,9 +182,51 @@ export function coreCommands(): CommandEntry[] {
     },
     {
       name: "/skills",
-      description: "list discovered skills (SKILL.md)",
-      run(_slash, host, notice) {
-        notice(formatSkills(host.agent()?.getSkills() ?? discoverSkills(host.config.workdir)));
+      description: "list/info/lint/reload skills — /skills [info <name>|lint|reload]",
+      run(slash, host, notice) {
+        const arg = slash.arg.trim();
+        const skills = host.agent()?.getSkills() ?? discoverSkills(host.config.workdir);
+        if (!arg) { notice(formatSkills(skills)); return; }
+        const parts = arg.split(/\s+/);
+        const sub = parts[0].toLowerCase();
+        if (sub === "info") {
+          const name = parts.slice(1).join(" ").trim();
+          if (!name) return notice("usage: /skills info <name>", "warn");
+          const skill = skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
+          if (!skill) return notice(`skill "${name}" not found`, "error");
+          const lines = [
+            `# ${skill.name}${skill.version ? ` v${skill.version}` : ""}`,
+            `description: ${skill.description}`,
+            `scope: ${skill.scope}`,
+            skill.tags?.length ? `tags: ${skill.tags.join(", ")}` : null,
+            skill.allowedTools?.length ? `allowed-tools: ${skill.allowedTools.join(", ")}` : null,
+            skill.references?.length ? `references: ${skill.references.join(", ")}` : null,
+            skill.whenToUse ? `when-to-use: ${skill.whenToUse}` : null,
+            "",
+            skill.body,
+          ].filter(Boolean);
+          notice(lines.join("\\n"));
+          return;
+        }
+        if (sub === "lint") {
+          const warnings = skillWarnings.filter((w) => !host.config.workdir || w.path.includes(host.config.workdir) || true);
+          if (warnings.length === 0) return notice("skills lint: ok (no warnings)", "info");
+          notice(warnings.map((w) => `${w.path}: ${w.message}`).join("\\n"), "warn");
+          return;
+        }
+        if (sub === "reload") {
+          const ag = host.agent();
+          if (ag) ag.reloadSkills?.();
+          notice(formatSkills(host.agent()?.getSkills() ?? discoverSkills(host.config.workdir)));
+          return;
+        }
+        // default: treat arg as skill name → show info
+        const skill = skills.find((s) => s.name.toLowerCase() === arg.toLowerCase());
+        if (skill) {
+          notice(`# ${skill.name}\\n${skill.description}\\n${skill.body.slice(0, 500)}`, "info");
+          return;
+        }
+        notice(`unknown /skills subcommand: ${arg}`, "error");
       },
     },
     {
