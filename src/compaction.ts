@@ -101,12 +101,17 @@ export function extractSummaryInput(task: string, messages: ChatMessage[]): stri
   return lines.join("\n");
 }
 
-/** Message sent to the summarizer LLM. */
+/** Message sent to the summarizer LLM (v2: structured template, not prose). */
 export const COMPACTION_INSTRUCTION =
   "Summarize the conversation above for a coding agent that will CONTINUE this task. " +
-  "Include: (1) the original task, (2) what has been done so far and why, " +
-  "(3) files created/modified, (4) current build/test state, (5) exact next steps. " +
-  "Be factual and terse. Max 300 words.";
+  "Use a STRUCTURED template with exactly these sections (skip a section only if empty):\n" +
+  "GOAL: one line — the original task.\n" +
+  "STATE: what is done and what is not (build/test status).\n" +
+  "CHANGED: files created/modified and why.\n" +
+  "DECISIONS: decisions made and their rationale (keep every decision).\n" +
+  "FAILURES: errors hit and what did NOT work (so they are not repeated).\n" +
+  "NEXT: the exact next steps, in order.\n" +
+  "Be factual and terse — max 400 words. Preserve file paths, commands and error codes verbatim.";
 
 /** Build the post-compaction message list. */
 export function applyCompaction(

@@ -25,6 +25,18 @@ import { discoverSkills, findSkill, type Skill } from "./skills.js";
 import { discoverAgents, findAgent, filterToolNamesForDef, type AgentDef } from "./agents.js";
 import { buildRepoMap } from "./repo-map.js";
 import { buildAgentGuideBlock } from "./agents-guide.js";
+import {
+  emptyWorkingMemory,
+  memoryFromMessages,
+  memoryIsMeaningful,
+  formatWorkingMemory,
+  noteFileRead,
+  noteFileChanged,
+  noteFailure,
+  notePlan,
+  scanDecisions,
+  type WorkingMemory,
+} from "./memory.js";
 
 import { SteeringInbox } from "./steering.js";
 import { randomUUID } from "node:crypto";
@@ -244,10 +256,74 @@ export class Agent {
   private pendingContext: string[] = [];
   /** Session plan (write_todos tool). */
   private plan: TodoItem[] = [];
+  /** v2: working memory ledger (see src/memory.ts) — kept across compaction. */
+  private memory: WorkingMemory = emptyWorkingMemory();
+  /** v2: one-shot guardrail nudge for editing without a plan. */
+  private planNudged = false;
   /** Guardrail Engine — khởi tạo trong constructor (cần this.config). */
   private guardrails: ReturnType<typeof createGuardrailEngine>;
 
   /** Log một quyết định guardrail ra JSONL + event (quan sát được, không ồn ào UI). */
+  /** v2: single plan-update path — ledger + UI + event + log. */
+  private setPlan(items: TodoItem[]): void {
+    this.plan = items;
+    notePlan(this.memory, items);
+    const done = items.filter((t) => t.status === "completed").length;
+    ui.info(`plan: ${done}/${items.length} completed`);
+    this.emit({ type: "todo", items: [...items] });
+    this.logger.log({ type: "todo", items });
+  }
+
+  /** Frontend-facing: current plan snapshot (for /plan). */
+  getPlan(): TodoItem[] {
+    return [...this.plan];
+  }
+
+  /** Frontend-facing: mark a plan step from the REPL/TUI (/plan done|start). */
+  markPlanStep(status: "completed" | "in_progress", ref: string): { ok: boolean; message: string } {
+    if (this.plan.length === 0) {
+      return { ok: false, message: "no plan yet — the agent has not called write_todos" };
+    }
+    const r = ref.trim();
+    let idx = /^\d+$/.test(r) ? Number(r) - 1 : this.plan.findIndex((t) => t.id === r);
+    if (idx < 0) {
+      const sub = r.toLowerCase();
+      idx = this.plan.findIndex((t) => t.content.toLowerCase().includes(sub));
+    }
+    if (idx < 0 || idx >= this.plan.length) {
+      return { ok: false, message: `step not found: "${ref}" — ids: ${this.plan.map((t) => t.id).join(", ")}` };
+    }
+    const next = this.plan.map((t, i) => {
+      if (i === idx) return { ...t, status };
+      if (status === "in_progress" && t.status === "in_progress") return { ...t, status: "pending" as const };
+      return t;
+    });
+    this.setPlan(next);
+    return { ok: true, message: `step ${idx + 1} (${next[idx].id}) → ${status}: ${next[idx].content}` };
+  }
+
+  /**
+   * Compaction helper (v2): fold the working-memory ledger into the summary
+   * instruction and into the kept summary text, then snapshot it to the log.
+   */
+  private memoryBlock(taskNote?: string): { instruction: string; suffix: string } {
+    if (!memoryIsMeaningful(this.memory)) return { instruction: "", suffix: "" };
+    const ledger = formatWorkingMemory(this.memory);
+    return {
+      instruction: `\n\nWorking memory ledger accumulated so far (keep ALL of it in the summary):\n${ledger}`,
+      suffix: `\n\n${ledger}${taskNote ?? ""}`,
+    };
+  }
+
+  /** Log the ledger into the event log (observability; resume rebuilds it). */
+  private snapshotMemory(trigger: string): void {
+    try {
+      this.events.append({ type: "memory.snapshot", trigger, memory: { ...this.memory } });
+    } catch {
+      // observability must never break the run
+    }
+  }
+
   private logGuardrailDecision(d: GuardrailDecision): void {
     const kind = d.action.kind;
     this.logger.log({ type: "guardrail", rule: d.rule, action: kind, reason: d.reason });
@@ -300,13 +376,7 @@ export class Agent {
       onToolOutput: this.handleToolOutput,
       plan: {
         get: () => this.plan,
-        set: (items) => {
-          this.plan = items;
-          const done = items.filter((t) => t.status === "completed").length;
-          ui.info(`plan: ${done}/${items.length} completed`);
-          this.emit({ type: "todo", items: [...items] });
-          this.logger.log({ type: "todo", items });
-        },
+        set: (items) => this.setPlan(items),
       },
       formatter: config.formatter,
       sandbox: config.sandbox,
@@ -531,6 +601,20 @@ export class Agent {
     };
     this.messages.push(msg);
     this.events.append({ type: "message.added", message: msg });
+    // v2: working memory — file usage + failures (cheap, best-effort).
+    try {
+      const args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
+      if (tc.name === "read_file" && typeof args.path === "string") noteFileRead(this.memory, args.path);
+      else if ((tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch") && typeof args.path === "string") {
+        noteFileChanged(this.memory, args.path);
+      }
+      if (/\b(error|fail(ed|ure)|fatal)\b/i.test(content.slice(0, 120))) {
+        const first = content.split("\n").find((l) => l.trim().length > 0) ?? content;
+        noteFailure(this.memory, `${tc.name}: ${first.trim().slice(0, 160)}`);
+      }
+    } catch {
+      // memory must never break a run
+    }
   }
 
   /**
@@ -934,6 +1018,8 @@ export class Agent {
     this.resetUsageTotals();
     this.filesModified = false;
     this.plan = [];
+    this.planNudged = false;
+    this.memory = emptyWorkingMemory(task);
     const skillsBlock = buildSkillsBlock(this.skills); // I3
     // v2: AGENTS.md conventions + repo map (bounded token budget each).
     const agentsGuideBlock = buildAgentGuideBlock(this.config.workdir, task);
@@ -1040,6 +1126,28 @@ export class Agent {
     this.filesModified = false;
     this.skills = discoverSkills(this.config.workdir);
     this.messages = session.messages ?? [];
+    // v2: rebuild the working memory from history (files/decisions/failures/plan)
+    // and restore the last write_todos plan so resumed runs keep their ledger.
+    this.memory = memoryFromMessages(this.messages, session.task);
+    this.planNudged = false;
+    let restoredPlan: TodoItem[] | null = null;
+    for (const m of this.messages) {
+      if (m.role !== "assistant" || !m.tool_calls) continue;
+      for (const tc of m.tool_calls) {
+        if (tc.name !== "write_todos") continue;
+        try {
+          const args = JSON.parse(tc.arguments) as { todos?: TodoItem[] };
+          if (Array.isArray(args.todos)) restoredPlan = args.todos;
+        } catch {
+          // skip malformed args
+        }
+      }
+    }
+    if (restoredPlan) {
+      this.plan = restoredPlan;
+      this.emit({ type: "todo", items: [...this.plan] });
+      ui.info(`restored plan: ${this.plan.length} step(s)`);
+    }
 
     ui.header(`RESUME ${session.id}`);
     ui.info(`previous task: ${session.task} (${session.steps} step(s) done)`);
@@ -1125,6 +1233,11 @@ export class Agent {
         ui.info(`steer: +${steered.length} user message(s) delivered`);
       }
 
+      // v2 (3.4): fold the ledger into the conversation every 6 steps.
+      if (steps > 0 && steps % 6 === 0 && memoryIsMeaningful(this.memory)) {
+        this.messages.push({ role: "user", content: formatWorkingMemory(this.memory) });
+      }
+
       steps++;
       ui.step(steps, this.config.maxSteps, "thinking...");
       this.events.claimExecution(steps);
@@ -1173,6 +1286,7 @@ export class Agent {
         this.messages.push({ role: "assistant", content: text });
         this.events.append({ type: "message.added", message: { role: "assistant", content: text } });
         ui.llm("agent", text);
+        scanDecisions(this.memory, text);
       } else {
         this.messages.push({
           role: "assistant",
@@ -1180,8 +1294,20 @@ export class Agent {
           tool_calls: message.tool_calls,
         });
         this.events.append({ type: "message.added", message: this.messages[this.messages.length - 1] });
+        if (typeof message.content === "string") scanDecisions(this.memory, message.content);
       }
 
+      // v2 (3.3): soft guardrail — editing without a plan gets a reminder.
+      const batchMayWriteEarly = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file");
+      if (batchMayWriteEarly && this.plan.length === 0 && !this.planNudged) {
+        this.planNudged = true;
+        this.messages.push({
+          role: "user",
+          content:
+            "[system] You modified files without a plan. Call write_todos now with the full remaining plan " +
+            "(steps with verify + acceptance), then continue. One step in_progress at a time.",
+        });
+      }
       // Execute each tool call (validate args before running)
       const stepToolResults = new Map<string, { ok: boolean; output: string }>();
       // H-11: checkpoint before any batch that may write files.
@@ -1304,23 +1430,27 @@ export class Agent {
           ui.info("compaction: summarizing older history…");
           const tokensBefore = estimateTokens(this.messages);
           const summaryInput = extractSummaryInput(this.currentTask, this.messages);
+          const mem = this.memoryBlock();
           const summaryRes = await this.client.chat(
             [
               ...this.messages,
-              { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}` },
+              { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}${mem.instruction}` },
             ],
             [], // no tools for the summarizer call
             { signal: this.runSignal.signal },
           );
           this.recordLlmUsage(summaryRes.usage);
-          this.messages = applyCompaction(this.messages, redactSecrets(summaryRes.message.content ?? "History summarized."), compactionCfg);
+          const summary =
+            redactSecrets(summaryRes.message.content ?? "History summarized.") + mem.suffix;
+          this.messages = applyCompaction(this.messages, summary, compactionCfg);
           const tokensAfter = estimateTokens(this.messages);
           this.events.append({
             type: "compaction.ran",
             tokensBefore,
             tokensAfter,
-            summary: (summaryRes.message.content ?? "").slice(0, 2000),
+            summary: summary.slice(0, 2000),
           });
+          this.snapshotMemory("compaction");
           ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${this.messages.length} messages)`);
           this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: false });
           this.emitContextEvent(true);
@@ -1420,6 +1550,7 @@ export class Agent {
     const tokensBefore = estimateTokens(this.messages);
     const messagesBefore = this.messages.length;
     const summaryInput = extractSummaryInput(this.currentTask, this.messages);
+    const mem = this.memoryBlock();
     ui.info("compaction: summarizing older history…");
     try {
       // A previous run interrupted with Esc leaves the shared signal aborted.
@@ -1427,13 +1558,13 @@ export class Agent {
       const summaryRes = await this.client.chat(
         [
           ...this.messages,
-          { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}` },
+          { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}${mem.instruction}` },
         ],
         [], // no tools for the summarizer call
         { signal: this.runSignal.signal },
       );
       this.recordLlmUsage(summaryRes.usage);
-      const summary = redactSecrets(summaryRes.message.content ?? "History summarized.");
+      const summary = redactSecrets(summaryRes.message.content ?? "History summarized.") + mem.suffix;
       this.messages = applyCompaction(this.messages, summary, cfg);
       const tokensAfter = estimateTokens(this.messages);
       this.events.append({
@@ -1446,6 +1577,7 @@ export class Agent {
       ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens)`);
       this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: true });
       this.emitContextEvent(true);
+      this.snapshotMemory("compaction-manual");
       return {
         ok: true,
         message: `compaction done: ${messagesBefore} → ${this.messages.length} messages · ~${tokensBefore} → ~${tokensAfter} tokens`,

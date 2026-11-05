@@ -33,6 +33,7 @@ export interface CommandDef {
 /** Built-in commands — the single catalog both help and completion read. */
 export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/help", aliases: [], description: "show this command list", usage: "/help", visibility: "public", source: "builtin" },
+  { name: "/plan", aliases: [], description: "show the current plan — /plan done|start <id|n> to mark steps", usage: "/plan [done|start <id|n|text>]", visibility: "public", source: "builtin" },
   { name: "/agent", aliases: [], description: "list selectable agents — /agent <name> to switch (idle only)", usage: "/agent [name]", visibility: "public", source: "builtin" },
   { name: "/init", aliases: [], description: "create an AGENTS.md template in this project", usage: "/init", visibility: "public", source: "builtin" },
   { name: "/sessions", aliases: [], description: "list saved sessions — /sessions resume <id|last>", usage: "/sessions [resume <id|last>]", visibility: "public", source: "builtin" },

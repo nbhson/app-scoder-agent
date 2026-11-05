@@ -215,6 +215,37 @@ export function coreCommands(): CommandEntry[] {
       },
     },
     {
+      name: "/plan",
+      description: "show the current plan — /plan done|start <id|n|text> to mark steps",
+      run(slash, host, notice) {
+        const agent = host.agent();
+        const plan = agent?.getPlan() ?? [];
+        if (!slash.arg) {
+          if (plan.length === 0) return notice("no plan yet — multi-step tasks get one via write_todos");
+          const icon = (s: string) => (s === "completed" ? "✓" : s === "in_progress" ? "▸" : "○");
+          notice(
+            "Plan:\n" +
+              plan
+                .map((t, i) => {
+                  let line = `  ${icon(t.status)} ${String(i + 1).padStart(2)}. ${t.content}`;
+                  if (t.verify) line += `\n       verify: ${t.verify}`;
+                  if (t.acceptance) line += `\n       acceptance: ${t.acceptance}`;
+                  if (t.files?.length) line += `\n       files: ${t.files.join(", ")}`;
+                  return line;
+                })
+                .join("\n") +
+              "\nmark: /plan done <id|n> · /plan start <id|n>",
+          );
+          return;
+        }
+        const m = /^(done|start)\s+(.+)$/.exec(slash.arg.trim());
+        if (!agent) return notice("agent not ready", "warn");
+        if (!m) return notice("usage: /plan [done|start <id|n|text>]", "warn");
+        const r = agent.markPlanStep(m[1] === "done" ? "completed" : "in_progress", m[2]);
+        notice(r.message, r.ok ? "info" : "warn");
+      },
+    },
+    {
       name: "/agent",
       description: "list selectable agents — /agent <name> to switch (idle only)",
       run(slash, host, notice) {

@@ -850,8 +850,18 @@ export interface ToolContext {
 
 /** One row of the agent's session plan (write_todos). */
 export interface TodoItem {
+  /** Stable id — auto-assigned (t1…tn) when missing. Needed for depends_on. */
+  id?: string;
   content: string;
   status: "pending" | "in_progress" | "completed";
+  /** v2: how to verify the step (build/test command or observable behavior). */
+  verify?: string;
+  /** v2: ids of steps that must complete before this one. */
+  depends_on?: string[];
+  /** v2: files this step is expected to touch. */
+  files?: string[];
+  /** v2: acceptance criteria for the step to count as done. */
+  acceptance?: string;
 }
 
 export interface AgentTool {
@@ -900,7 +910,8 @@ export const AGENT_TOOLS: AgentTool[] = [
       function: {
         name: "write_todos",
         description:
-          "Write the full task plan (replaces the previous list). Use at the start of a multi-step task and update as you go: mark items completed IMMEDIATELY after finishing them, set exactly one item in_progress, and add newly discovered steps. The user sees this list live.",
+          "Write the full task plan (replaces the previous list). Use at the start of a multi-step task and update as you go: mark items completed IMMEDIATELY after finishing them, set exactly one item in_progress, and add newly discovered steps. " +
+          "v2: each item may carry verify (how you will know it's done), depends_on (earlier step ids), files (expected paths) and acceptance (criteria). The user sees this list live.",
         parameters: obj(
           {
             todos: {
@@ -909,8 +920,13 @@ export const AGENT_TOOLS: AgentTool[] = [
               items: {
                 type: "object",
                 properties: {
+                  id: { type: "string", description: "Stable step id (e.g. 't1'). Auto-assigned when omitted." },
                   content: { type: "string", description: "Imperative step, e.g. 'Fix null check in UserService'" },
                   status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+                  verify: { type: "string", description: "How to verify the step — command or observable behavior" },
+                  depends_on: { type: "array", items: { type: "string" }, description: "Ids of steps that must complete first" },
+                  files: { type: "array", items: { type: "string" }, description: "Files this step is expected to touch" },
+                  acceptance: { type: "string", description: "Criteria for the step to count as done" },
                 },
                 required: ["content", "status"],
                 additionalProperties: false,
@@ -925,18 +941,40 @@ export const AGENT_TOOLS: AgentTool[] = [
       const todos = (args as { todos?: TodoItem[] }).todos;
       if (!Array.isArray(todos)) return { ok: false, output: "ERROR: todos must be an array of {content, status}." };
       const clean: TodoItem[] = [];
-      for (const t of todos) {
+      for (const [i, t] of todos.entries()) {
         if (typeof t?.content !== "string" || !t.content.trim()) {
           return { ok: false, output: "ERROR: every todo needs a non-empty content string." };
         }
         if (!["pending", "in_progress", "completed"].includes(t.status)) {
           return { ok: false, output: `ERROR: invalid status "${String(t.status)}" (pending|in_progress|completed).` };
         }
-        clean.push({ content: t.content.trim().slice(0, 200), status: t.status });
+        const item: TodoItem = {
+          id: typeof t.id === "string" && t.id.trim() ? t.id.trim().slice(0, 32) : `t${i + 1}`,
+          content: t.content.trim().slice(0, 200),
+          status: t.status,
+        };
+        if (typeof t.verify === "string" && t.verify.trim()) item.verify = t.verify.trim().slice(0, 300);
+        if (typeof t.acceptance === "string" && t.acceptance.trim()) item.acceptance = t.acceptance.trim().slice(0, 300);
+        if (Array.isArray(t.depends_on)) item.depends_on = t.depends_on.filter((x): x is string => typeof x === "string").slice(0, 10);
+        if (Array.isArray(t.files)) item.files = t.files.filter((x): x is string => typeof x === "string").slice(0, 20);
+        clean.push(item);
+      }
+      // v2 rule: exactly one in_progress at a time.
+      const inProgress = clean.filter((t) => t.status === "in_progress");
+      if (inProgress.length > 1) {
+        return { ok: false, output: `ERROR: exactly one in_progress step allowed (got ${inProgress.length}: ${inProgress.map((t) => t.content).join(" | ")}). Mark the others pending or completed.` };
+      }
+      // v2 rule: depends_on must reference earlier ids in the SAME plan.
+      const ids = new Set(clean.map((t) => t.id));
+      for (const t of clean) {
+        for (const dep of t.depends_on ?? []) {
+          if (!ids.has(dep)) return { ok: false, output: `ERROR: step "${t.content}" depends_on unknown id "${dep}" — ids in this plan: ${[...ids].join(", ")}` };
+        }
       }
       ctx.plan?.set(clean);
       const done = clean.filter((t) => t.status === "completed").length;
-      return { ok: true, output: `Plan updated: ${done}/${clean.length} completed.` };
+      const next = clean.find((t) => t.status === "in_progress");
+      return { ok: true, output: `Plan updated: ${done}/${clean.length} completed.${next ? ` In progress: ${next.content}` : " (none in progress)"}` };
     },
   },
   {

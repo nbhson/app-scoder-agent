@@ -453,10 +453,10 @@ Việc làm:
   - [x] `AGENTS.md` hierarchy + `/init`
   - [x] Repo map + `read_file` range + `grep` context
   - [x] Prompt V5 + version log
-- [ ] Phase 2 — Agent B
-  - [ ] `write_todos` 2.0 (verify/acceptance/depends_on)
-  - [ ] `src/memory.ts` + inject ledger
-  - [ ] Compaction v2 + resume test
+- [x] Phase 2 — Agent B
+  - [x] `write_todos` 2.0 (verify/acceptance/depends_on)
+  - [x] `src/memory.ts` + inject ledger
+  - [x] Compaction v2 + resume test
 - [ ] Phase 3 — Agent C
   - [ ] Diagnostics parser + verify commands
   - [ ] Self-review pass + completion gate
