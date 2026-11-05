@@ -31,6 +31,8 @@ export interface ToolResult {
   diff?: ToolDiff;
   /** T7: data URL khi tool đọc được ảnh — TUI render halfblock, LLM nhận text. */
   image?: string;
+  /** Phase 5: true for MCP tool/resource output (untrusted, third-party data). */
+  untrusted?: boolean;
 }
 
 /**

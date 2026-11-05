@@ -1468,7 +1468,7 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
   - [x] `ask_user` (tool contract + event + timeout)
   - [x] `task` batch + edit fuzzy/apply_patch
   - [x] Eval gate CI
-- [ ] Phase 4 — MCP A
+- [x] Phase 4 — MCP A
   - [x] Protocol version + capabilities + instructions (from initialize)
   - [x] `tools/list_changed` notification → reregisterTools
   - [x] HTTP SSE incremental + consumeSseStream (ReadableStream, no body buffer)
@@ -1482,9 +1482,9 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
   - [x] Per-server trust/enabled config (enabled, trust: auto/ask/readonly/deny)
   - [x] Readonly no-spawn (trust:readonly → skip, state=disabled)
   - [x] `scoder mcp` CLI (list/add/remove/test + config read/write)
-  - [ ] Config import from ~/.claude.json, opencode.json, .mcp.json
-  - [ ] Audit log tool call + untrusted output flag
-  - [ ] Eval gate CI
+  - [x] Config import from ~/.claude.json, opencode.json, .mcp.json
+  - [x] Audit log tool call + untrusted output flag
+  - [x] Eval gate CI
 - [ ] Phase 6 — Command/Skill MVP
   - [x] Custom `.scoder/commands/*.md` (global + project, YAML frontmatter, $1/$ARGUMENTS)
   - [x] `/commands` listing + inspect

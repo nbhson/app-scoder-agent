@@ -441,11 +441,26 @@ export class PermissionChecker {
   /**
    * G5: unified MCP tool decision — policy floor → rules → null (caller
    * falls back to mode). Every mcp__* call goes through here; no bypass.
+   *
+   * Phase 5: `trust` (per-server configured trust for MCP tools) is layered
+   * on top — it is the strictest check except for policy hard floors:
+   *   - "deny"     → always deny (explicit user intent, beats rules/ask)
+   *   - "ask"      → force a confirmation even when mode would auto-allow
+   *   - "readonly" → deny execution (tools aren't spawned, defense in depth)
+   *   - "auto"|undefined → no override (existing policy/rules/mode fallback)
    */
-  classifyMcpTool(fullName: string): { decision: CommandDecision; reason: string } | null {
+  classifyMcpTool(
+    fullName: string,
+    trust?: "auto" | "ask" | "readonly" | "deny",
+  ): { decision: CommandDecision; reason: string } | null {
     const policy = this.policyEffect(fullName, "*");
     if (policy === "deny") return { decision: "deny", reason: "denied by policy (hard floor)" };
+    // Per-server trust: deny beats allow-rules (user intent trumps automation).
+    if (trust === "deny") return { decision: "deny", reason: "server trust: deny" };
+    if (trust === "readonly") return { decision: "deny", reason: "server trust: readonly — tools not spawned" };
+    // Policy allow still bypasses trust:ask (enterprise hard floor wins).
     if (policy === "allow") return { decision: "allow", reason: "allowed by policy" };
+    if (trust === "ask") return { decision: "ask", reason: "requires approval by server trust (ask)" };
     return this.classifyAction(fullName, "*");
   }
 

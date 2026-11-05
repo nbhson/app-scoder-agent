@@ -35,6 +35,13 @@ changes__: 0.8.x `.scoderrc.json`, event streams and skill files keep loading.
 - Generic agent tools `mcp_list_resources`, `mcp_read_resource`
   (optional `subscribe`), `mcp_list_prompts`, `mcp_get_prompt` — advertised
   only when a connected server supports them.
+- Per-server `trust` enforcement in the permission classifier
+  (`auto`/`ask`/`readonly`/`deny`); `readonly` servers are never spawned.
+- Config import from Claude Desktop (`~/.claude.json`), OpenCode
+  (`opencode.json`), and `.mcp.json` via `scoder mcp import`.
+- Audit log (`mcp_audit` JSONL entries) for MCP tool calls and resource
+  reads; MCP output flagged `untrusted: true` in the event stream and
+  wrapped with an `[UNTRUSTED]` marker in the LLM conversation.
 - HTTP SSE incremental streaming (`consumeSseStream`, no body buffering)
   + AbortSignal cancellation.
 - Per-server tool filters (`tools.include`/`exclude` + glob) approved on the

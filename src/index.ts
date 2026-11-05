@@ -38,7 +38,7 @@ interface CliArgs {
   noSave?: boolean;
   logFile?: boolean;
   subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init" | "models" | "mcp";
-  mcpCmd?: "list" | "add" | "remove" | "test";
+  mcpCmd?: "list" | "add" | "remove" | "test" | "import";
   mcpArgs?: string[]; // rest args for the mcp subcommand
   resumeId?: string;
   logsId?: string;
@@ -252,7 +252,7 @@ function parseArgs(argv: string[]): CliArgs {
     // e.g. scoder mcp add github --command "npx mcp-github" --url "..." --trust readonly
     args.subcommand = "mcp";
     const m = rest[1];
-    if (m === "list" || m === "add" || m === "remove" || m === "test") {
+    if (m === "list" || m === "add" || m === "remove" || m === "test" || m === "import") {
       args.mcpCmd = m;
     } else if (m) {
       args.mcpCmd = "list";
@@ -442,7 +442,7 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
   process.exit(0);
 }
 
-async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | "test", restArgs: string[]): Promise<void> {
+async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | "test" | "import", restArgs: string[]): Promise<void> {
   const { McpManager } = await import("./mcp.js");
   const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
   const { join, dirname } = await import("node:path");
@@ -526,6 +526,75 @@ async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | 
       }
     } finally {
       m.killAll();
+    }
+    return;
+  }
+
+  if (cmd === "import") {
+    // scoder mcp import [path] [--dry-run] [--force]
+    const { loadConfigFile, discoverConfigs, mergeConfigs } = await import("./mcp-import.js");
+    const dryRun = restArgs.includes("--dry-run");
+    const force = restArgs.includes("--force");
+    const paths = restArgs.filter((a) => !a.startsWith("--"));
+
+    let discovered: Awaited<ReturnType<typeof discoverConfigs>> = [];
+    try { discovered = discoverConfigs(); } catch { /* ignore */ }
+
+    if (paths.length === 0 && discovered.length === 0) {
+      console.log("No config files found. Provide a path or ensure one of these exists:");
+      console.log("  ~/.claude/config.json  — Claude Desktop MCP servers");
+      console.log("  opencode.json         — OpenCode MCP config");
+      console.log("  .mcp.json             — standard MCP server list");
+      console.log("\nUsage: scoder mcp import [path] [--dry-run] [--force]");
+      return;
+    }
+
+    // Auto-discover when no path given
+    const toCheck: string[] = paths.length > 0 ? paths : discovered.map((d) => d.source);
+    if (paths.length === 0 && discovered.length > 0) {
+      console.log("Auto-discovered MCP config files:");
+      for (const d of discovered) {
+        console.log(`  ${d.format}: ${d.source} (${d.serverCount} server${d.serverCount === 1 ? "" : "s"})`);
+      }
+      console.log();
+    }
+
+    const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
+    const { mkdirSync } = await import("node:fs");
+
+    let totalAdded = 0;
+    let totalSkipped = 0;
+    for (const srcPath of toCheck) {
+      const servers = loadConfigFile(srcPath);
+      if (!servers) { console.log(`  skip: ${srcPath} not found`); continue; }
+      const { added, skipped } = mergeConfigs(existing, servers, { force, dryRun });
+      totalAdded += added.length;
+      totalSkipped += skipped.length;
+      console.log(`${srcPath}:`);
+      for (const s of added) {
+        const target = s.config.url ?? s.config.command ?? "?";
+        console.log(`  + ${s.name}: ${target} (from ${s.originalKey})`);
+      }
+      for (const s of skipped) {
+        console.log(`  ~ ${s.name}: skipped (already exists; use --force to overwrite)`);
+      }
+      if (added.length === 0 && skipped.length === 0) {
+        console.log(`    (no servers found)`);
+      }
+    }
+
+    if (dryRun) {
+      console.log(`\n[DRY RUN] Would import ${totalAdded} server${totalAdded === 1 ? "" : "s"} (${totalSkipped} skipped).`);
+      return;
+    }
+
+    if (totalAdded > 0) {
+      const rc = existsSync(rcPath) ? JSON.parse(readFileSync(rcPath, "utf8")) : {};
+      mkdirSync(dirname(rcPath) || ".", { recursive: true });
+      writeFileSync(rcPath, JSON.stringify({ ...rc, mcpServers: existing }, null, 2) + "\n", "utf8");
+      console.log(`\nImported ${totalAdded} server${totalAdded === 1 ? "" : "s"} into ${rcPath} (${totalSkipped} skipped).`);
+    } else {
+      console.log(`\nNothing to import.`);
     }
     return;
   }
