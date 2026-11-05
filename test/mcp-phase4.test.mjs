@@ -141,3 +141,125 @@ describe("McpManager — tools/list_changed notification", () => {
     m.killAll();
   });
 });
+
+// ── Phase 4: resources / prompts / notifications ───────────────────────────
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+describe("McpManager — resources + prompts", () => {
+  const cfg = { command: "node", args: [MOCK] };
+
+  it("caches resources + templates and advertises resource tools", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    assert.strictEqual(m.hasResources(), true);
+    assert.strictEqual(m.hasPrompts(), true);
+    const rows = m.listResourcesByServer();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].server, "srv");
+    assert.deepStrictEqual(rows[0].resources.map((r) => r.uri), ["mock://readme"]);
+    assert.deepStrictEqual(rows[0].templates.map((t) => t.uriTemplate), ["mock://items/{id}"]);
+    const names = m.resourceToolSpecs().map((s) => s.function.name);
+    assert.deepStrictEqual(names, [
+      "mcp_list_resources",
+      "mcp_read_resource",
+      "mcp_list_prompts",
+      "mcp_get_prompt",
+    ]);
+    assert.ok(m.isResourceTool("mcp_read_resource"));
+    assert.ok(!m.isResourceTool("mcp__srv__echo"));
+    m.killAll();
+  });
+
+  it("reads a resource (text) and reports unknown servers", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    const r = await m.readResource("srv", "mock://readme");
+    assert.equal(r.ok, true, r.output);
+    assert.match(r.output, /RESOURCE: mock:\/\/readme/);
+
+    const missing = await m.readResource("nope", "mock://readme");
+    assert.equal(missing.ok, false);
+    assert.match(missing.output, /not connected/);
+    m.killAll();
+  });
+
+  it("lists + renders prompts with arguments", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    const rows = m.listPromptsByServer();
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].prompts[0].name, "greet");
+    assert.strictEqual(rows[0].prompts[0].arguments[0].name, "name");
+
+    const r = await m.getPrompt("srv", "greet", { name: "Ada" });
+    assert.equal(r.ok, true, r.output);
+    assert.match(r.output, /Greeting prompt/);
+    assert.match(r.output, /\[user\] Hello Ada/);
+    m.killAll();
+  });
+
+  it("invokeResourceTool routes list/read/get", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    const list = await m.invokeResourceTool("mcp_list_resources", {});
+    assert.equal(list.ok, true);
+    assert.match(list.output, /mock:\/\/readme/);
+    assert.match(list.output, /template: mock:\/\/items\/\{id\}/);
+
+    const read = await m.invokeResourceTool("mcp_read_resource", { server: "srv", uri: "mock://readme" });
+    assert.equal(read.ok, true, read.output);
+    assert.match(read.output, /RESOURCE: mock:\/\/readme/);
+
+    const prompts = await m.invokeResourceTool("mcp_list_prompts", {});
+    assert.match(prompts.output, /greet \(name\)/);
+
+    const prompt = await m.invokeResourceTool("mcp_get_prompt", {
+      server: "srv",
+      name: "greet",
+      arguments: { name: "Grace" },
+    });
+    assert.equal(prompt.ok, true, prompt.output);
+    assert.match(prompt.output, /Hello Grace/);
+
+    const bad = await m.invokeResourceTool("mcp_read_resource", { server: "srv" });
+    assert.equal(bad.ok, false);
+    m.killAll();
+  });
+
+  it("serverStates reports resource + prompt counts", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    const s = m.serverStates()[0];
+    assert.strictEqual(s.resourceCount, 1);
+    assert.strictEqual(s.promptCount, 1);
+    m.killAll();
+  });
+
+  it("subscribes and surfaces resources/updated notifications", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    const seen = [];
+    m.onResourceUpdated = (server, uri) => seen.push([server, uri]);
+    const r = await m.readResource("srv", "mock://readme", { subscribe: true });
+    assert.equal(r.ok, true, r.output);
+    await sleep(100);
+    assert.deepStrictEqual(seen, [["srv", "mock://readme"]]);
+    m.killAll();
+  });
+
+  it("surfaces progress notifications", async () => {
+    const m = new McpManager({ srv: cfg });
+    await m.connectAll();
+    const seen = [];
+    m.onProgress = (server, params) => seen.push({ server, params });
+    const conn = [...m["conns"].values()][0];
+    await conn.callTool("echo", { message: "hi" });
+    await sleep(100);
+    assert.ok(
+      seen.some((p) => p.server === "srv" && p.params.progress === 1),
+      `expected progress notification, got ${JSON.stringify(seen)}`,
+    );
+    m.killAll();
+  });
+});

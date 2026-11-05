@@ -864,7 +864,7 @@ export class Agent {
     this.currentToolCall = { step: steps, id: tc.id, name: tc.name };
     this.emit({ type: "tool_call", step: steps, id: tc.id, name: tc.name, args });
 
-    if (!tool && !this.mcp?.hasTool(tc.name)) {
+    if (!tool && !this.mcp?.hasTool(tc.name) && !this.mcp?.isResourceTool(tc.name)) {
       this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${allToolSpecs().map((t) => t.function.name).join(", ")}${this.mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
       return {};
     }
@@ -907,6 +907,9 @@ export class Agent {
       // Route MCP tools first (they carry the mcp__ prefix, not in AGENT_TOOLS)
       if (tool) {
         result = await tool.run(this.ctx, args);
+      } else if (this.mcp?.isResourceTool(tc.name)) {
+        // Phase 4: generic resource/prompt tools are read-only; no permission ask.
+        result = await this.mcp.invokeResourceTool(tc.name, args);
       } else {
         // MCP tools — G5: đi qua permission engine như tool thường
         // (policy floor → rules → mode fallback). Không có nhánh bypass.
@@ -1151,7 +1154,7 @@ export class Agent {
       this.emit({ type: "mcp_status", line, server: name, state: st });
     };
     await this.mcp.connectAll();
-    const mcpSpecs = this.mcp.toToolSpecs();
+    const mcpSpecs = [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()];
     if (mcpSpecs.length > 0) {
       // Re-apply the primary def's tool filter — never leak mutating specs
       // back into a readonly agent just because MCP connected.
@@ -1818,12 +1821,12 @@ export class Agent {
   }
 
   /** MCP server overview (for /mcp): config always; tools once connected. */
-  async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }>; serverInfo: { name?: string; version?: string }; capabilities: Record<string, unknown> }>> {
+  async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }>; serverInfo: { name?: string; version?: string }; capabilities: Record<string, unknown>; resourceCount: number; promptCount: number }>> {
     const configs = (this.config.mcpServers ?? {}) as Record<string, { command?: string; url?: string }>;
     // M3: http server hiển thị url thay vì command.
     const target = (cfg: { command?: string; url?: string }) => cfg.url ?? cfg.command ?? "(unknown)";
     if (!this.mcp) {
-      return Object.entries(configs).map(([name, cfg]) => ({ name, command: target(cfg), connected: false, tools: [], serverInfo: {}, capabilities: {} }));
+      return Object.entries(configs).map(([name, cfg]) => ({ name, command: target(cfg), connected: false, tools: [], serverInfo: {}, capabilities: {}, resourceCount: 0, promptCount: 0 }));
     }
     await this.connectMcp();
     // MCP A: connected = actual connection state, not tool count (0-tool servers
@@ -1840,6 +1843,8 @@ export class Agent {
         tools: byServer.get(name) ?? [],
         serverInfo: st?.serverInfo ?? {},
         capabilities: st?.capabilities ?? {},
+        resourceCount: st?.resourceCount ?? 0,
+        promptCount: st?.promptCount ?? 0,
       };
     });
   }

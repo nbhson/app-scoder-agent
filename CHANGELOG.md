@@ -28,6 +28,13 @@ changes__: 0.8.x `.scoderrc.json`, event streams and skill files keep loading.
 ### MCP
 - Protocol version + capabilities + instructions (from `initialize`);
   `tools/list_changed` notification → live tool re-registration.
+- Full resources/prompts support: `resources/list|templates/list|read|subscribe`
+  and `prompts/list|get`, cached per server and refreshed on
+  `resources/list_changed` / `prompts/list_changed`; `resources/updated`
+  and `progress` notifications surface through hooks.
+- Generic agent tools `mcp_list_resources`, `mcp_read_resource`
+  (optional `subscribe`), `mcp_list_prompts`, `mcp_get_prompt` — advertised
+  only when a connected server supports them.
 - HTTP SSE incremental streaming (`consumeSseStream`, no body buffering)
   + AbortSignal cancellation.
 - Per-server tool filters (`tools.include`/`exclude` + glob) approved on the

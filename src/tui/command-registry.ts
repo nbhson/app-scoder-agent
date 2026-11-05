@@ -118,6 +118,8 @@ export function formatMcpStatus(
     tools: Array<{ name: string; description?: string }>;
     serverInfo?: { name?: string; version?: string };
     capabilities?: Record<string, unknown>;
+    resourceCount?: number;
+    promptCount?: number;
   }>,
 ): string {
   if (status.length === 0) return "no MCP servers configured — add mcpServers to .scoderrc.json";
@@ -130,10 +132,15 @@ export function formatMcpStatus(
       if (srv.capabilities?.resources) capParts.push("resources");
       if (srv.capabilities?.prompts) capParts.push("prompts");
       const capTag = capParts.length > 0 ? ` [${capParts.join(", ")}]` : "";
+      const counts = [
+        `${srv.tools.length} tools`,
+        ...(srv.resourceCount ? [`${srv.resourceCount} resources`] : []),
+        ...(srv.promptCount ? [`${srv.promptCount} prompts`] : []),
+      ].join(", ");
       return (
         `${srv.connected ? "✓" : "·"} ${srv.name} — ${srv.command}${capTag}` +
         (srv.connected
-          ? ` (${srv.tools.length} tools)\n` +
+          ? ` (${counts})\n` +
             srv.tools.map((t) => `    mcp__${srv.name}__${t.name}  ${t.description ?? ""}`).join("\n")
           : " (not connected)")
       );

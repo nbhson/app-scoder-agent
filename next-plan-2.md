@@ -1476,8 +1476,8 @@ Bất kỳ thay đổi nào sau đây đều phải có ADR (Architecture Decisi
   - [x] Per-server tool filters (tools.include/exclude + glob)
   - [x] applyConfig restart on transport-effective config change
   - [x] `mcpStatus`/`serverStates` using connection state (not tool count)
-  - [ ] Resources/prompts/notifications (full list + read/subscribe)
-  - [ ] Eval gate CI
+  - [x] Resources/prompts/notifications (full list + read/subscribe)
+  - [x] Eval gate CI
 - [x] Phase 5 — MCP B
   - [x] Per-server trust/enabled config (enabled, trust: auto/ask/readonly/deny)
   - [x] Readonly no-spawn (trust:readonly → skip, state=disabled)
