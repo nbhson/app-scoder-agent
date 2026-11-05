@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.1] — 2026-11-05
+
+### Changed
+- Documentation sync with latest features (slash commands, CLI flags/env vars, TUI keybinds/themes, MCP governance/resources/prompts/import, custom commands, architecture modules).
+- Lint clean (removed 4 `any` warnings in `src/skills.ts`).
+- Synced `package-lock.json` to the current version.
+
 ## [0.9.0] — 2026-11-05
 
 Scoder 0.9→1.0 upgrade milestone. Agent C, MCP A/B, custom commands,
