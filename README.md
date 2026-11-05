@@ -1,5 +1,7 @@
 # scoder — Autonomous Coding Agent CLI
 
+**Current version: 0.9.2**
+
 [![CI](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
@@ -52,6 +54,9 @@ scoder "add a ping function to src/network.ts"
 
 # Interactive REPL (supports /help, /clear, /compact, /cost, /model, /skills, /skill, /mcp, /review, /permission)
 scoder
+
+# Full-screen TUI with rich agent display
+scoder tui
 ```
 
 ## How It Works

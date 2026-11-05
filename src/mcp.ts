@@ -580,7 +580,10 @@ export class McpConnection {
     const parts = (res.content ?? []).map((c) => c.text ?? "").filter(Boolean);
     // H-13: MCP servers are third-party — redact secret shapes from output
     // before it enters the conversation or logs.
-    return { ok: !isErr, output: redactSecrets(parts.join("\n")) || "(empty result)", structured: res.structuredContent };
+    const structured = res.structuredContent
+      ? JSON.parse(redactSecrets(JSON.stringify(res.structuredContent))) as Record<string, unknown>
+      : undefined;
+    return { ok: !isErr, output: redactSecrets(parts.join("\n")) || "(empty result)", structured };
   }
 
   kill(): void {
@@ -706,6 +709,9 @@ export class McpManager {
           .catch(() => {});
         void this.refreshResources(name, conn);
         void this.refreshPrompts(name, conn);
+        for (const uri of this.subscriptions.get(name) ?? []) {
+          void conn.subscribeResource(uri).catch(() => {});
+        }
       }
     };
     // MCP A: react to server notifications — tools/list_changed re-registers
@@ -1080,7 +1086,7 @@ export class McpManager {
     // A server's transport-effective config changed → restart it (kill + reconnect).
     const configChanged = (prev: McpServerConfig, next: McpServerConfig): boolean => {
       const pick = (c: McpServerConfig) =>
-        JSON.stringify([c.command, c.url, c.type, c.args, c.env ?? {}, c.headers ?? {}, c.timeoutMs ?? null, c.tools ?? {}]);
+        JSON.stringify([c.command, c.url, c.type, c.args, c.env ?? {}, c.headers ?? {}, c.timeoutMs ?? null, c.tools ?? {}, c.enabled ?? true, c.trust ?? "auto"]);
       return pick(prev) !== pick(next);
     };
     // Server bị xóa hoặc đổi config → kill + unregister.

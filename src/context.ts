@@ -1,7 +1,7 @@
 import type { ChatMessage } from "./llm.js";
 import { encode } from "gpt-tokenizer";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { resolve, relative, isAbsolute } from "node:path";
 
 const MAX_MESSAGES = 120; // keep history under control for long runs
 /**
@@ -149,7 +149,18 @@ export function expandMentions(task: string, workdir: string): string {
     const idx = out.indexOf(token);
     if (idx >= 0) out = (out.slice(0, idx) + " " + out.slice(idx + token.length)).replace(/ {2,}/g, " ");
     const abs = resolve(workdir, path);
-    if (!abs.startsWith(resolve(workdir))) {
+    const root = resolve(workdir);
+    const lexical = relative(root, abs);
+    let contained = !lexical.startsWith("..") && !isAbsolute(lexical);
+    try {
+      const realRoot = realpathSync(root);
+      const realAbs = realpathSync(abs);
+      const realRel = relative(realRoot, realAbs);
+      contained = contained && !realRel.startsWith("..") && !isAbsolute(realRel);
+    } catch {
+      // Missing paths are retained as a diagnostic; existing paths are checked above.
+    }
+    if (!contained) {
       blocks.push(`@${path}: path escapes working directory — skipped.`);
       continue;
     }

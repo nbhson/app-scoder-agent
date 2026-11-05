@@ -19,7 +19,7 @@ import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 import { loadRcFile } from "./config.js";
-import { McpManager, MCP_TOOL_PREFIX, type McpServerConfig } from "./mcp.js";
+import { McpManager, type McpServerConfig } from "./mcp.js";
 import { validateSchema } from "./json-schema.js";
 import { watchWorkdir, type ReloadWatcher } from "./watch.js";
 import { discoverSkills, findSkill, type Skill } from "./skills.js";
@@ -424,6 +424,7 @@ export class Agent {
     const allOk = outputs.every((o) => o.res.success);
     const combined = outputs.map((o) => `$ ${o.cmd}\n${o.res.output}`).join("\n\n");
     this.lastBuildResult = { success: allOk, command: outputs.map((o) => o.cmd).join(" && "), output: combined };
+    this.events.append({ type: "build.checked", success: allOk, command: this.lastBuildResult.command, output: combined.slice(0, 10_000) });
     return this.lastBuildResult;
   }
 
@@ -656,7 +657,8 @@ export class Agent {
           // MCP servers mới: merge vào manager hiện tại (turn sau advertise).
           const rc = loadRcFile(config.workdir);
           const servers = rc.mcpServers ?? {};
-          if (this.mcp && Object.keys(servers).length > 0) {
+          this.config.mcpServers = servers;
+          if (this.mcp) {
             void this.mcp.applyConfig(servers);
           }
         }
@@ -860,7 +862,9 @@ export class Agent {
     try {
       args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
     } catch {
-      this.pushToolResult(tc, `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`);
+      const output = `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`;
+      this.rejectToolCall(steps, tc, output, { error: "invalid json" });
+      stepToolResults.set(tc.id, { ok: false, output });
       return {};
     }
 
@@ -887,7 +891,7 @@ export class Agent {
       return {};
     }
 
-    let result: ToolResult;
+    let result: ToolResult = { ok: false, output: "ERROR: tool execution did not produce a result" };
     try {
       // Permission gate for shell commands
       if (tc.name === "run_command" && typeof args.command === "string") {
@@ -929,9 +933,7 @@ export class Agent {
         // Phase 5: extract server name from mcp__server__tool and enforce
         // per-server trust before permission rules (trust: deny blocks even
         // when policy would allow; trust: ask forces confirm even in auto).
-        const serverName = tc.name.startsWith(MCP_TOOL_PREFIX)
-          ? tc.name.slice(MCP_TOOL_PREFIX.length).split("__")[0]
-          : "";
+        const serverName = this.mcp?.getTool(tc.name)?.serverName ?? "";
         const serverTrust = (this.config.mcpServers as Record<string, McpServerConfig>)[serverName]?.trust;
         const mcpDecision = this.permissions.classifyMcpTool(tc.name, serverTrust);
         if (mcpDecision?.decision === "deny") {
@@ -939,12 +941,17 @@ export class Agent {
           this.rejectToolCall(steps, tc, output, { args, denied: mcpDecision.reason });
           return {};
         }
-        if (this.config.permissionMode === "readonly" && mcpDecision?.decision !== "allow") {
+        const effectiveDecision = mcpDecision ?? (this.config.permissionMode === "readonly"
+          ? { decision: "deny" as const, reason: "readonly mode" }
+          : this.config.permissionMode === "ask"
+            ? { decision: "ask" as const, reason: "requires user confirmation" }
+            : { decision: "allow" as const, reason: "auto mode" });
+        if (effectiveDecision.decision === "deny") {
           result = {
             ok: false,
-            output: `ERROR: readonly mode — MCP tool "${tc.name}" is disabled. Allow it explicitly with a permission rule (mcp__${tc.name.replace(/^mcp__/, "").replace(/__/, "__")} or a wildcard).`,
+            output: `ERROR: MCP tool "${tc.name}" denied (${effectiveDecision.reason}).`,
           };
-        } else if (mcpDecision?.decision === "ask" && !this.config.yes) {
+        } else if (effectiveDecision.decision === "ask" && !this.config.yes) {
           const allowed = await this.confirmMcpTool(tc.name);
           if (!allowed) {
             const output = `ERROR: user denied permission to call MCP tool: ${tc.name}`;
@@ -952,7 +959,7 @@ export class Agent {
             return {};
           }
         }
-        result = await this.invokeMcpTool(tc.name, args);
+        if (effectiveDecision.decision !== "deny") result = await this.invokeMcpTool(tc.name, args);
       }
       this.logger.log({ type: "tool", step: steps, tool: tc.name, args, ok: result.ok, elapsedMs: Date.now() - t0 });
     } catch (err) {
@@ -1189,18 +1196,19 @@ export class Agent {
       this.emit({ type: "mcp_status", line, server: name, state: st });
     };
     await this.mcp.connectAll();
-    const mcpSpecs = [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()];
+    this.rebuildToolList();
+  }
+
+  /** Rebuild built-in and connected MCP tool specs for the current skill scope. */
+  private rebuildToolList(): void {
+    const mcpSpecs = this.mcp ? [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()] : [];
     let base = applyToolFilter(allToolSpecs(), this.primaryDef);
     if (this.pendingAllowedTools && this.pendingAllowedTools.length > 0) {
       const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
       base = base.filter((s) => allow.has(s.function.name.toLowerCase()));
-      // MCP specs only if their (stripped) name is allowed
-      // (skill allowlists usually name built-in tools; keep MCP out by default)
-    }
-    if (mcpSpecs.length > 0) {
-      this.tools = [...base, ...mcpSpecs];
+      this.tools = [...base, ...mcpSpecs.filter((s) => allow.has(s.function.name.toLowerCase()))];
     } else {
-      this.tools = base;
+      this.tools = [...base, ...mcpSpecs];
     }
   }
 
@@ -1263,7 +1271,12 @@ export class Agent {
       baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
     }
     const mcpSpecs = this.mcp ? [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()] : [];
-    this.tools = [...baseTools, ...mcpSpecs];
+    if (this.pendingAllowedTools?.length) {
+      const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
+      this.tools = [...baseTools, ...mcpSpecs.filter((s) => allow.has(s.function.name.toLowerCase()))];
+    } else {
+      this.tools = [...baseTools, ...mcpSpecs];
+    }
     const skillsBlock = buildSkillsBlock(this.skills); // I3
     // v2: AGENTS.md conventions + repo map (bounded token budget each).
     const agentsGuideBlock = buildAgentGuideBlock(this.config.workdir, task);
@@ -1289,7 +1302,6 @@ export class Agent {
       { role: "user", content: task },
     ];
     this.pendingContext = [];
-    this.pendingAllowedTools = null;
     // Phiên bản system prompt được ghi vào log — giúp so sánh chất lượng
     // giữa các phiên bản prompt khi phân tích JSONL.
     this.logger.log({ type: "prompt_version", version: PROMPT_VERSION });
@@ -1306,6 +1318,7 @@ export class Agent {
     });
 
     await this.connectMcp();
+    this.pendingAllowedTools = null;
     return this.runLoop(0, buildCmd, null);
   }
 
@@ -1354,7 +1367,9 @@ export class Agent {
     for (const content of this.pendingContext) this.messages.push({ role: "user", content });
     this.pendingContext = [];
     this.messages.push({ role: "user", content: task });
+    this.rebuildToolList();
     await this.connectMcp();
+    this.pendingAllowedTools = null;
     return this.runLoop(0, buildCmd, null);
   }
 
@@ -1547,7 +1562,7 @@ export class Agent {
       }
 
       // v2 (3.3): soft guardrail — editing without a plan gets a reminder.
-      const batchMayWriteEarly = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file");
+      const batchMayWriteEarly = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch");
       if (batchMayWriteEarly && this.plan.length === 0 && !this.planNudged) {
         this.planNudged = true;
         this.messages.push({
@@ -1560,7 +1575,7 @@ export class Agent {
       // Execute each tool call (validate args before running)
       const stepToolResults = new Map<string, { ok: boolean; output: string }>();
       // H-11: checkpoint before any batch that may write files.
-      const batchMayWrite = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file");
+      const batchMayWrite = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch");
       if (batchMayWrite) this.snapshots.capture(`step ${steps}: ${(message.tool_calls ?? []).map((t) => t.name).join(",")}`);
       // I-09: parallelize read-only tool calls (concurrency cap 4); mutating
       // calls (and any batch containing an ask-gated call) run sequentially.
@@ -1579,7 +1594,7 @@ export class Agent {
       if (calls.length > 1 && !needsAsk) {
         const readOnly = calls.every((tc) => Agent.READONLY_TOOLS.has(tc.name));
         if (readOnly) {
-          const results = await this.parallelMap(calls, (tc) => this.executeToolCall(tc, steps, stepToolResults), this.config.limits?.toolConcurrency ?? 4);
+          const results = await this.parallelMap(calls, (tc) => this.executeToolCall(tc, steps, stepToolResults), Math.max(1, this.config.limits?.toolConcurrency ?? 4));
           for (const r of results) {
             if (r.post) r.post();
           }
@@ -1872,7 +1887,7 @@ export class Agent {
       return { ok: false, message: `skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered (try /skills)"}` };
     }
     this.pendingContext.push(`[User loaded skill "${skill.name}" — follow these instructions for the upcoming task]\n\n${skill.body}`);
-    if (skill.allowedTools && skill.allowedTools.length > 0) this.pendingAllowedTools = skill.allowedTools;
+    this.pendingAllowedTools = skill.allowedTools?.length ? skill.allowedTools : null;
     return { ok: true, message: `skill "${skill.name}" staged — it will apply to your next task` };
   }
 
@@ -1907,13 +1922,19 @@ export class Agent {
 
   /** Call one MCP tool directly by its full name (mcp__server__tool) (/mcp exec). */
   async callMcpTool(fullName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string; structured?: Record<string, unknown> }> {
-    if (this.config.permissionMode === "readonly") {
-      return { ok: false, output: "ERROR: readonly mode — MCP tools are disabled (they bypass the permission policy)." };
-    }
     await this.connectMcp();
     const reg = this.mcp?.getTool(fullName);
     if (!reg) {
       return { ok: false, output: `ERROR: unknown MCP tool "${fullName}" — run /mcp to list servers and tools.` };
+    }
+    const trust = (this.config.mcpServers as Record<string, McpServerConfig>)[reg.serverName]?.trust;
+    const decision = this.permissions.classifyMcpTool(fullName, trust) ??
+      (this.config.permissionMode === "readonly" ? { decision: "deny" as const, reason: "readonly mode" } :
+        this.config.permissionMode === "ask" ? { decision: "ask" as const, reason: "requires user confirmation" } :
+          { decision: "allow" as const, reason: "auto mode" });
+    if (decision.decision === "deny") return { ok: false, output: `ERROR: MCP tool denied (${decision.reason}).` };
+    if (decision.decision === "ask" && !this.config.yes && !(await this.confirmMcpTool(fullName))) {
+      return { ok: false, output: `ERROR: user denied permission to call MCP tool: ${fullName}` };
     }
     // Text shorthand (`/mcp exec <tool> free text`): bind to the tool's first
     // required string property from its inputSchema, so users don't have to

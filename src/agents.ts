@@ -100,9 +100,9 @@ const parsePermissions = (v: string | undefined): PermissionMode | undefined =>
   v === "auto" || v === "ask" || v === "readonly" ? v : undefined;
 const parseReasoning = (v: string | undefined): "off" | "on" | undefined =>
   v === "off" || v === "on" ? v : undefined;
-const parseList = (v: string | undefined): string[] | undefined => {
+const parseList = (v: string | string[] | undefined): string[] | undefined => {
   if (!v) return undefined;
-  const out = v.split(",").map((s) => s.trim()).filter(Boolean);
+  const out = (Array.isArray(v) ? v : v.split(",")).map((s) => String(s).trim()).filter(Boolean);
   return out.length > 0 ? out : undefined;
 };
 const parseNumber = (v: string | undefined): number | undefined => {
@@ -174,7 +174,7 @@ export function filterToolNamesForDef(names: string[], def: AgentDef | null): st
   }
   if (def.permission === "readonly") {
     const blocked = new Set(MUTATING_TOOL_SPECS);
-    return names.filter((n) => !blocked.has(n));
+    return names.filter((n) => !blocked.has(n.toLowerCase()));
   }
   return names;
 }

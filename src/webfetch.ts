@@ -38,7 +38,7 @@ function isPrivateAddress(ip: string): boolean {
   if (v === 6) {
     const lower = ip.toLowerCase();
     if (lower === "::1" || lower === "::") return true;
-    if (lower.startsWith("fe80")) return true; // link-local
+    if (/^fe[89ab][0-9a-f]{2}:/.test(lower)) return true; // link-local fe80::/10
     if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true; // unique local fc00::/7
     // IPv4-mapped ::ffff:10.0.0.1
     const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
@@ -169,6 +169,9 @@ export async function toolWebFetch(ctx: ToolContext, args: WebFetchArgs): Promis
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       if (signal.aborted) {
         return { ok: false, output: `ERROR: fetch aborted (${(signal.reason as Error)?.message ?? "aborted"})` };
+      }
+      if (current.protocol !== "http:" && current.protocol !== "https:") {
+        return { ok: false, output: `ERROR: redirect target uses unsupported protocol ${current.protocol}` };
       }
       await assertPublicHost(current.hostname);
 

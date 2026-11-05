@@ -81,7 +81,7 @@ function safePath(workdir: string, p: string): string {
   for (;;) {
     try {
       const real = realpathSync(probe);
-      const reconstructed = real + missing.map((s) => `/${s}`).join("");
+      const reconstructed = real + [...missing].reverse().map((s) => `/${s}`).join("");
       const rel = relative(realWorkdir, reconstructed.length > 0 ? reconstructed : real);
       if (rel.startsWith("..") || isAbsolute(rel)) {
         throw new Error(`Path escapes working directory: ${p}`);
@@ -134,7 +134,9 @@ function toolReadFile(workdir: string, args: { path: string; offset?: number | s
   const abs = safePath(workdir, args.path);
   // H-04: .env read policy — ask trước khi trả nội dung (secrets hygiene).
   const rel = relative(workdir, abs);
-  const envPolicy = isProtectedEnvFile(rel);
+  let policyPath = rel;
+  try { policyPath = relative(workdir, realpathSync(abs)); } catch { /* handled by safePath */ }
+  const envPolicy = isProtectedEnvFile(policyPath.toLowerCase());
   if (envPolicy === "ask") {
     return {
       ok: false,
@@ -165,6 +167,9 @@ function toolReadFile(workdir: string, args: { path: string; offset?: number | s
   }
   if (image) {
     return { ok: true, output: `[image: ${args.path}]`, image };
+  }
+  if (statSync(abs).size > MAX_FILE_SIZE_BYTES) {
+    return { ok: false, output: `ERROR: ${args.path} exceeds the ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB edit limit.` };
   }
   const content = readFileSync(abs, "utf8");
   const lines = content.split("\n");
@@ -345,6 +350,9 @@ async function toolApplyPatch(
   }
   let content: string;
   try {
+    if (statSync(abs).size > MAX_FILE_SIZE_BYTES) {
+      return { ok: false, output: `ERROR: ${args.path} exceeds the ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB patch limit.` };
+    }
     content = readFileSync(abs, "utf8");
   } catch (err) {
     return { ok: false, output: `ERROR: cannot read ${args.path}: ${(err as Error).message}` };
@@ -418,6 +426,7 @@ function toolListFiles(
       const full = join(dir, e);
       let st;
       try {
+        safePath(workdir, relative(workdir, full));
         st = statSync(full);
       } catch {
         continue;
@@ -857,12 +866,12 @@ export async function toolRunCommand(
 
     child.stdout?.on("data", (c: Buffer) => {
       const s = c.toString("utf8");
-      stdout += s;
+       if (stdout.length < MAX_OUTPUT_CHARS) stdout += s.slice(0, MAX_OUTPUT_CHARS - stdout.length);
       onOutput?.("stdout", redactSecrets(s)); // G3
     });
     child.stderr?.on("data", (c: Buffer) => {
       const s = c.toString("utf8");
-      stderr += s;
+       if (stderr.length < MAX_OUTPUT_CHARS) stderr += s.slice(0, MAX_OUTPUT_CHARS - stderr.length);
       onOutput?.("stderr", redactSecrets(s)); // G3
     });
 

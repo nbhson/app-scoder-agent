@@ -56,8 +56,9 @@ function previewLines(output: string): string[] {
   return lines.slice(-OUTPUT_PREVIEW_LINES);
 }
 
-function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): React.JSX.Element {
+function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" }>; width?: number }): React.JSX.Element {
   const running = item.ok === null;
+  const outputWidth = Math.max(24, (width ?? 100) - 6);
 
   // One meaningful arg per tool type keeps the line scannable.
   const keyArg =
@@ -103,7 +104,7 @@ function ToolItemView({ item }: { item: Extract<ChatItem, { kind: "tool" }> }): 
       {/* Output preview */}
       {preview.map((line, i) => (
         <Text key={i} dimColor>
-          {"  └ "}{line.length > 140 ? line.slice(0, 140) + "…" : line}
+          {"  └ "}{line.length > outputWidth ? line.slice(0, outputWidth - 1) + "…" : line}
         </Text>
       ))}
 
@@ -139,10 +140,11 @@ const MAX_DIFF_RENDER_LINES = 20;
  * Header row: [step] ✎ [+/− stats] [path]
  * Body: up to MAX_DIFF_RENDER_LINES of colored diff lines.
  */
-function DiffItemView({ item }: { item: Extract<ChatItem, { kind: "diff" }> }): React.JSX.Element {
+function DiffItemView({ item, width }: { item: Extract<ChatItem, { kind: "diff" }>; width?: number }): React.JSX.Element {
   const lines = item.text.length > 0 ? item.text.split("\n") : [];
   const shown = lines.slice(0, MAX_DIFF_RENDER_LINES);
   const hidden = lines.length - shown.length;
+  const diffWidth = Math.max(24, (width ?? 100) - 6);
   const addedColor = item.added > 0 ? theme.success : undefined;
   const removedColor = item.removed > 0 ? theme.error : undefined;
 
@@ -170,7 +172,7 @@ function DiffItemView({ item }: { item: Extract<ChatItem, { kind: "diff" }> }): 
 
       {/* Diff body */}
       {shown.map((line, i) => (
-        <DiffLine key={i} line={line.length > 160 ? line.slice(0, 160) + "…" : line} />
+        <DiffLine key={i} line={line.length > diffWidth ? line.slice(0, diffWidth - 1) + "…" : line} />
       ))}
       {hidden > 0 && (
         <Text dimColor>  … +{hidden} more diff lines</Text>
@@ -188,7 +190,7 @@ function TodoItemView(): null {
   return null;
 }
 
-export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | null {
+export function ChatItemView({ item, width }: { item: ChatItem; width?: number }): React.JSX.Element | null {
   switch (item.kind) {
     case "user":
       // User messages stand out with a full colored border + bold label so they're
@@ -230,7 +232,7 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
       return (
         <Box marginTop={1} paddingLeft={2}>
           <AgentMark />
-          <Markdown text={item.text} />
+          <Markdown text={item.text} width={width} />
         </Box>
       );
     }
@@ -244,9 +246,9 @@ export function ChatItemView({ item }: { item: ChatItem }): React.JSX.Element | 
         </Box>
       );
     case "tool":
-      return <ToolItemView item={item} />;
+      return <ToolItemView item={item} width={width} />;
     case "diff":
-      return <DiffItemView item={item} />;
+      return <DiffItemView item={item} width={width} />;
     case "todo":
       return <TodoItemView />;
     case "build":

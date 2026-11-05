@@ -1,5 +1,7 @@
 # Scoder — Autonomous Coding Agent CLI
 
+**Current version: 0.9.2**
+
 **Scoder** là một CLI agent tự động chạy trong terminal. Nó không chỉ suggest code — nó **thực thi** code. Scoder tự động viết, sửa, chạy test và debug cho đến khi project build thành công.
 
 Giống workflow của *Cline*, *Claude Code*, và *OpenCode*, nhưng chạy như một standalone CLI tool duy nhất.
@@ -16,6 +18,8 @@ Giống workflow của *Cline*, *Claude Code*, và *OpenCode*, nhưng chạy nh�
 - **Autonomous Loop**: Viết code → Chạy build → Sửa lỗi → Lặp lại đến khi thành công
 - **Tool-augmented Intelligence**: File system, Shell, Web fetch, MCP tools
 - **Rich TUI**: Terminal UI với real-time token streaming, diff cards, build rail
+- **Rich display**: Responsive Markdown tables, terminal-native bar/line/pie charts,
+  timeline/event rails, responsive code/diff/tool output, and narrow-terminal fallbacks
 - **Granular Permissions**: Kiểm soát chính xác agent được làm gì
 - **MCP Support**: Tích hợp Model Context Protocol cho tools mở rộng
 - **Guardrail Engine**: An toàn tự động, chống doom-loop, text-only streak breaker

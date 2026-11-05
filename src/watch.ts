@@ -39,6 +39,11 @@ export function watchWorkdir(
       watchers.push(watch(p, () => fire("config")));
     } catch { /* race — file removed between existsSync and watch */ }
   }
+  // Watch the parent too so a skills directory created after startup is seen.
+  const scoderDir = join(workdir, ".scoder");
+  if (existsSync(scoderDir)) {
+    try { watchers.push(watch(scoderDir, () => fire("skills"))); } catch { /* ignore */ }
+  }
   // .scoder/skills/ — skill files added/removed/edited.
   const skillsDir = join(workdir, ".scoder", "skills");
   if (existsSync(skillsDir)) {

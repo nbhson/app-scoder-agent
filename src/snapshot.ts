@@ -160,6 +160,9 @@ export class SnapshotManager {
           if (e.isDirectory()) walk(abs, r);
           else if (!treeFiles.has(r)) rmSync(abs, { force: true });
         }
+        try {
+          if (dir !== this.workdir && readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true });
+        } catch { /* best effort */ }
       };
       walk(this.workdir, "");
       return true;

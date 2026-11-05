@@ -13,6 +13,7 @@ import { render } from "ink";
 import { BuildRail, StatusBar, fuelGauge, gaugeColor, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "../dist/tui/chrome.js";
 import { Sidebar } from "../dist/tui/sidebar.js";
 import { ChatItemView } from "../dist/tui/chat-views.js";
+import { parseChartSpec, parseTimelineSpec, Markdown } from "../dist/tui/markdown.js";
 import { applyEvent, initialState, latestPlan } from "../dist/tui/state.js";
 
 function stripAnsi(s) {
@@ -217,6 +218,42 @@ describe("tui chat-views — todo chuyển sidebar", () => {
       { kind: "todo", items: [{ content: "new", status: "in_progress" }] },
     ]);
     assert.equal(plan.items[0].content, "new");
+  });
+});
+
+describe("tui rich display — chart/timeline/width", () => {
+  it("parses chart JSON and line-oriented chart data", () => {
+    assert.deepEqual(parseChartSpec('{"type":"line","data":[{"label":"Jan","value":4}]}'), {
+      type: "line", data: [{ label: "Jan", value: 4 }],
+    });
+    assert.deepEqual(parseChartSpec("Alpha | 10\nBeta | 20", "chart:bar")?.data, [
+      { label: "Alpha", value: 10 }, { label: "Beta", value: 20 },
+    ]);
+  });
+
+  it("parses timeline JSON and pipe rows", () => {
+    assert.deepEqual(parseTimelineSpec("2026-01-01 | Started | setup | done"), [
+      { time: "2026-01-01", title: "Started", detail: "setup", status: "done" },
+    ]);
+    assert.equal(parseTimelineSpec('[{"time":"10:00","title":"Deploy","status":"active"}]')[0].title, "Deploy");
+  });
+
+  it("renders chart and timeline fences without overflowing a narrow pane", async () => {
+    const out = await renderOnce(React.createElement(Markdown, {
+      width: 42,
+      text: [
+        "```chart:bar",
+        "Alpha | 10",
+        "Beta | 20",
+        "```",
+        "```timeline",
+        "10:00 | Deploy | production | active",
+        "```",
+      ].join("\n"),
+    }), 50);
+    assert.match(out, /chart/);
+    assert.match(out, /Deploy/);
+    assert.ok(out.split("\n").every((line) => line.length <= 50), "rich blocks stay within terminal width");
   });
 });
 

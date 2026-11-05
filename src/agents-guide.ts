@@ -59,7 +59,9 @@ function nearestGuide(workdir: string, focusFile: string): AgentGuide | null {
   let dir = dirname(resolve(workdir, focusFile));
   const rootAbs = resolve(workdir);
   for (;;) {
-    if (!normalize(dir).startsWith(normalize(rootAbs))) return null;
+    const root = normalize(rootAbs);
+    const current = normalize(dir);
+    if (current !== root && !current.startsWith(`${root}${sep}`)) return null;
     for (const name of ROOT_NAMES) {
       const f = join(dir, name);
       const content = readBudget(f, NESTED_BUDGET);

@@ -441,6 +441,14 @@ async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder inter
     if (handled) {
       if (outcome?.quit) break;
       if (outcome?.notice) ui.info(outcome.notice);
+      if (!outcome?.task) continue;
+      try {
+        const result = first ? await agent.run(outcome.task) : await agent.runTurn(outcome.task);
+        first = false;
+        if (!result.success) ui.warn("task did not complete — try refining it");
+      } catch (err) {
+        ui.error((err as Error).message);
+      }
       continue;
     }
 

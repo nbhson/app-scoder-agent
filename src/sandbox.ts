@@ -48,8 +48,9 @@ export function buildSandboxArgv(
     // /private/var/folders, nên subpath phải phủ cả hai dạng.
     let realWs = workdir;
     try { realWs = realpathSync(workdir); } catch { /* nonexistent — raw path đủ */ }
+    const escapeSbp = (p: string) => p.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
     const wsSubpaths = [...new Set([workdir, realWs])]
-      .map((p) => `(subpath "${p}/")`)
+      .map((p) => `(subpath "${escapeSbp(p)}/")`)
       .join(" ");
     const allowWrites = profile === "workspace-write"
       ? `(allow file-write* ${wsSubpaths} (subpath "/tmp") (subpath "/private/tmp"))`
@@ -68,8 +69,9 @@ export function buildSandboxArgv(
       "--dev-bind", "/", "/", // giữ root — sandbox theo write-permission, không chroot
       "--ro-bind", "/", "/", // override: mọi mount ro
     ];
-    for (const w of writes) args.push("--bind", w, w);
-    if (profile === "readonly") args.pop(); // readOnly: bỏ rw workspace
+    if (profile === "workspace-write") {
+      for (const w of writes) args.push("--bind", w, w);
+    }
     args.push("--", "/bin/sh", "-c", command);
     return args;
   }

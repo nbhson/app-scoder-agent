@@ -8,7 +8,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, extname } from "node:path";
+import { join, extname, resolve, relative, isAbsolute } from "node:path";
 
 export interface Skill {
   name: string;
@@ -188,7 +188,8 @@ function scanRoot(root: string, scope: Skill["scope"]): Skill[] {
 export function discoverSkills(workdir: string): Skill[] {
   const byName = new Map<string, Skill>();
   for (const root of [...globalSkillsRoots(), ...projectSkillsRoots(workdir)]) {
-    const scope: Skill["scope"] = root.includes(workdir) ? "project" : "global";
+    const relRoot = relative(resolve(workdir), resolve(root));
+    const scope: Skill["scope"] = !relRoot.startsWith("..") && !isAbsolute(relRoot) ? "project" : "global";
     for (const s of scanRoot(root, scope)) {
       if (byName.has(s.name)) {
         skillWarnings.push({ path: s.path, message: `skill "${s.name}" trùng tên (${s.scope} overrides ${byName.get(s.name)?.scope})` });
@@ -217,7 +218,13 @@ export function readSkillReference(skill: Skill, ref: string): string | null {
   if (!skill.dir) return null;
   const candidates = [join(skill.dir, ref), join(skill.dir, "references", ref)];
   for (const c of candidates) {
-    try { if (existsSync(c)) return readFileSync(c, "utf8"); } catch { /* ignore */ }
+    try {
+      const root = resolve(skill.dir);
+      const abs = resolve(c);
+      const rel = relative(root, abs);
+      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      if (existsSync(abs)) return readFileSync(abs, "utf8");
+    } catch { /* ignore */ }
   }
   return null;
 }
@@ -249,7 +256,7 @@ export function scoreSkills(task: string, skills: Skill[]): Array<{ skill: Skill
     let score = 0;
     for (const t of tokens) if (haystack.includes(t)) score += 1;
     // name match bonus
-    if (tokens.has(s.name.toLowerCase())) score += 3;
+    if (task.toLowerCase().includes(s.name.toLowerCase())) score += 3;
     return { skill: s, score };
   }).sort((a, b) => b.score - a.score);
 }

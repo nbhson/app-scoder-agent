@@ -94,7 +94,7 @@ export function wildcardMatch(pattern: string, value: string): boolean {
   if (!pattern.includes("*") && !pattern.includes("?")) {
     // Literal match — also accept prefix semantics for shell resources
     // ("npm " allows "npm run build") to stay compatible with legacy lists.
-    return value === pattern || value.startsWith(pattern);
+    return value === pattern || (pattern.endsWith(" ") ? value.startsWith(pattern) : value.startsWith(`${pattern} `));
   }
   const rx = new RegExp(
     "^" +
@@ -575,7 +575,7 @@ export class PermissionChecker {
    * In non-interactive mode, always returns false for "ask" decisions.
    */
   async confirm(command: string): Promise<boolean> {
-    const result = this.classify(command);
+    const result = this.classifyShell(command);
 
     if (result.decision === "allow") return true;
     if (result.decision === "deny") return false;

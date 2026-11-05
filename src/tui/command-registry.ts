@@ -18,7 +18,7 @@ import { selectableAgents } from "../agents.js";
 import { agentsMdTemplate } from "../agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
+import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, runCustomCommand, type SlashCommand, type CommandDef, type CommandVisibility } from "./commands.js";
 import { exportTranscript, findInTranscript, type TranscriptMatch } from "./transcript.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────
@@ -31,6 +31,8 @@ export interface CommandOutcome {
   level?: "info" | "warn" | "error";
   /** REPL: thoát vòng lặp. TUI: exit(). */
   quit?: boolean;
+  /** Prompt produced by a custom command; the frontend submits it normally. */
+  task?: string;
 }
 
 /**
@@ -205,13 +207,13 @@ export function coreCommands(): CommandEntry[] {
             "",
             skill.body,
           ].filter(Boolean);
-          notice(lines.join("\\n"));
+          notice(lines.join("\n"));
           return;
         }
         if (sub === "lint") {
-          const warnings = skillWarnings.filter((w) => !host.config.workdir || w.path.includes(host.config.workdir) || true);
+          const warnings = skillWarnings.filter((w) => !host.config.workdir || w.path.startsWith(host.config.workdir));
           if (warnings.length === 0) return notice("skills lint: ok (no warnings)", "info");
-          notice(warnings.map((w) => `${w.path}: ${w.message}`).join("\\n"), "warn");
+          notice(warnings.map((w) => `${w.path}: ${w.message}`).join("\n"), "warn");
           return;
         }
         if (sub === "reload") {
@@ -223,7 +225,7 @@ export function coreCommands(): CommandEntry[] {
         // default: treat arg as skill name → show info
         const skill = skills.find((s) => s.name.toLowerCase() === arg.toLowerCase());
         if (skill) {
-          notice(`# ${skill.name}\\n${skill.description}\\n${skill.body.slice(0, 500)}`, "info");
+          notice(`# ${skill.name}\n${skill.description}\n${skill.body.slice(0, 500)}`, "info");
           return;
         }
         notice(`unknown /skills subcommand: ${arg}`, "error");
@@ -511,6 +513,18 @@ export async function dispatchCommand(
     host.agent()?.abort();
     host.replaceAgent(null);
     return { handled: true, outcome: { notice: "conversation cleared — context reset" } };
+  }
+  const custom = discoverCustomCommands(host.config.workdir);
+  const customMatch = custom.find((c) => `/${c.name.toLowerCase()}` === cmd || c.aliases.some((a) => `/${a.toLowerCase().replace(/^\//, "")}` === cmd));
+  if (customMatch) {
+    if (customMatch.exec === "shell") {
+      notice(`custom command "${customMatch.name}" declares shell execution; run it explicitly through a reviewed agent task`, "warn");
+    } else {
+      const prompt = runCustomCommand(customMatch, arg);
+      notice(`custom command "${customMatch.name}"`, "info");
+      return { handled: true, outcome: { task: prompt } };
+    }
+    return { handled: true, outcome: {} };
   }
   const entry = [...extra, ...coreCommands()].find((c) => c.name === cmd);
   if (!entry) {

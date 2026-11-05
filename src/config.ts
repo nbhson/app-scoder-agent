@@ -219,6 +219,7 @@ function mergeRc(global: RcFile, project: RcFile): RcFile {
       mode: project.permissions?.mode ?? global.permissions?.mode,
       allowCommands: concat(global.permissions?.allowCommands, project.permissions?.allowCommands) as string[] | undefined,
       denyCommands: concat(global.permissions?.denyCommands, project.permissions?.denyCommands) as string[] | undefined,
+      rules: concat(global.permissions?.rules, project.permissions?.rules) as PermissionRule[] | undefined,
     };
   }
   return merged;
@@ -343,7 +344,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       process.env.OPENAI_API_KEY ??
       rc.apiKey ??
       "",
-    model: overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (modelFromSlash || (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL)),
+    model: modelFromSlash || (overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL)),
     providerDef,
     contextWindow: (providerDef as { contextWindow?: number } | undefined)?.contextWindow,
     workdir,
@@ -446,7 +447,11 @@ export function loadSavedApprovals(workdir: string): PermissionRule[] {
   const p = savedApprovalsPath(workdir);
   if (!existsSync(p)) return [];
   try {
-    return parsePermissionRules(JSON.parse(readFileSync(p, "utf8")), p) ?? [];
+    const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
+    const rules = raw && typeof raw === "object" && !Array.isArray(raw) && "rules" in raw
+      ? (raw as { rules?: unknown }).rules
+      : raw;
+    return parsePermissionRules(rules, p) ?? [];
   } catch {
     return [];
   }

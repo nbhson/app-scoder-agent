@@ -184,7 +184,12 @@ export function discoverCustomCommands(workdir: string): CustomCommand[] {
       try { stat = statSync(filePath); } catch { continue; }
       if (!stat.isFile()) continue;
       const content = readFileSync(filePath, "utf8");
-      const parsed = parseCustomCommandFile(basename(file, ".md"), filePath, content);
+      const parsed = parseCustomCommandFile(
+        basename(file, ".md"),
+        filePath,
+        content,
+        dir === resolve(workdir, ".scoder", "commands") ? "project" : "global",
+      );
       if (parsed) results.push(parsed);
     }
   }
@@ -196,10 +201,9 @@ function parseCustomCommandFile(
   defaultName: string,
   filePath: string,
   content: string,
+  source: CommandSource,
 ): CustomCommand | null {
-  const source: CommandSource = /[\\/]\.scoder[\\/]commands[\\/]/.test(filePath) ? "project" : "global";
-
-  const frontMatch = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(content.trim());
+  const frontMatch = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(content.trim());
   if (!frontMatch) {
     // No frontmatter: body is the entire file, name is filename.
     return {
@@ -232,7 +236,7 @@ function parseCustomCommandFile(
     name: String(front.name ?? defaultName),
     description: String(front.description ?? body.split("\n")[0].slice(0, 80)),
     visibility: (front.visibility as CommandVisibility) ?? "public",
-    aliases: Array.isArray(front.aliases) ? front.aliases.map(String) : [],
+    aliases: parseFrontList(front.aliases),
     exec: (front.exec as CustomCommandExecMode) ?? "prompt",
     agent: front.agent ? String(front.agent) : undefined,
     model: front.model ? String(front.model) : undefined,
@@ -251,6 +255,14 @@ function parseCustomCommandFile(
     source,
     filePath,
   };
+}
+
+/** Parse the small YAML list subset used by command aliases/args metadata. */
+function parseFrontList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).map((s) => s.trim()).filter(Boolean);
+  if (typeof value !== "string") return [];
+  const raw = value.trim().replace(/^\[|\]$/g, "");
+  return raw.split(",").map((s) => s.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean);
 }
 
 /** Substitute + execute a custom command; returns the prompt text to inject. */

@@ -259,4 +259,19 @@ describe("/commands dispatch", () => {
     await dispatchCommand("/commands nonexistent-xyz-cmd", host, s.fn);
     assert.equal(s.lines[0].level, "warn");
   });
+
+  it("custom prompt command returns a task for the frontend to submit", async () => {
+    const tmp = mkdirSync(join(tmpdir(), "cmd-test-" + Math.random()), { recursive: true });
+    try {
+      const cmdDir = join(tmp, ".scoder", "commands");
+      mkdirSync(cmdDir, { recursive: true });
+      writeFileSync(join(cmdDir, "fix.md"), "---\ndescription: Fix it\naliases: [repair]\n---\nFix $1.\n");
+      const s = sink();
+      const r = await dispatchCommand("/repair src/app.ts", fakeHost({ config: { workdir: tmp, permissionMode: "auto" } }), s.fn);
+      assert.equal(r.handled, true);
+      assert.equal(r.outcome?.task, "Fix src/app.ts.");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });

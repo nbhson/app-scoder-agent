@@ -1,5 +1,7 @@
 # TUI Guide — Mission Control
 
+**Version 0.9.2** — rich display, responsive rendering, chart and timeline support.
+
 Full-screen terminal UI built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals).
 
 ## Starting TUI
@@ -72,6 +74,33 @@ scoder tui "fix the bug"       # auto-submit initial task
 - Diff cards (`✎`) for file writes/edits
 - Flight-recorder step prefix (`03▸`)
 - Live command output (dimmed block)
+- Rich assistant display is terminal-native and dependency-free:
+  - GFM tables use measured pane width, bounded cells, Unicode borders, and
+    remain readable on narrow terminals instead of forcing horizontal overflow.
+  - ` ```chart ` fences render bar charts by default; use `chart:line` or
+    `chart:pie` for alternate views. Data accepts JSON or one `label | value`
+    row per line.
+  - ` ```timeline ` (also ` ```events `) renders a vertical event rail. Data
+    accepts JSON arrays/`{"events": [...]}` or `time | title | detail | status`
+    rows. Status values are `done`, `active`, `pending`, or `error`.
+  - Empty/invalid rich blocks show a compact fallback instead of crashing the
+    transcript. All rich content is capped and clipped to the current pane.
+
+#### Rich display examples
+
+```chart:bar
+{"title":"Weekly builds","data":[{"label":"Mon","value":4},{"label":"Tue","value":7}]}
+```
+
+```timeline
+2026-11-06 09:00 | Plan | inspect repository | done
+2026-11-06 09:12 | Implement | update renderer | active
+2026-11-06 09:30 | Verify | run tests | pending
+```
+
+The renderer intentionally uses Ink primitives and Unicode rather than a web
+chart package: it works in SSH/PTY/CI terminals, respects the existing theme,
+and avoids increasing startup cost or introducing a browser-only dependency.
 
 ### Phase Breadcrumb
 `plan › explore › edit › build › verify` — current phase highlighted

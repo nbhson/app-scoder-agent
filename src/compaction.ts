@@ -137,6 +137,9 @@ export function applyCompaction(
           arguments: tc.arguments.length > 120 ? tc.arguments.slice(0, 120) + "…" : tc.arguments,
         })),
       });
+      for (const tc of m.tool_calls) {
+        skeletons.push({ role: "tool", tool_call_id: tc.id, content: "[compacted — tool result omitted]" });
+      }
     }
   }
   const summaryMsg: ChatMessage = {

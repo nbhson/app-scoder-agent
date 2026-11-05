@@ -79,11 +79,17 @@ function sessionsDir(workdir: string): string {
 }
 
 function eventLogPath(workdir: string, id: string): string {
+  validateSessionId(id);
   return join(sessionsDir(workdir), id, "events.jsonl");
 }
 
 function manifestPath(workdir: string, id: string): string {
+  validateSessionId(id);
   return join(sessionsDir(workdir), id, "manifest.json");
+}
+
+function validateSessionId(id: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new Error(`Invalid session id: ${id}`);
 }
 
 /** Atomic write: write to .tmp then rename. */
@@ -310,10 +316,14 @@ export class SessionStore {
 // ---------------------------------------------------------------------------
 
 export function loadSession(workdir: string, id: string): SessionFile | null {
+  try { validateSessionId(id); } catch { return null; }
   // v2 event-sourced session directory first
   const v2Dir = join(sessionsDir(workdir), id);
   if (existsSync(v2Dir) && statSync(v2Dir).isDirectory()) {
-    return sessionFromEventLog(workdir, id);
+    try {
+      const projected = sessionFromEventLog(workdir, id);
+      if (projected) return projected;
+    } catch { /* fall through to v1 snapshot */ }
   }
   const path = join(sessionsDir(workdir), `${id}.json`);
   if (!existsSync(path)) return null;
@@ -342,9 +352,10 @@ export function sessionFromEventLog(workdir: string, id: string): SessionFile | 
       lastBuild = { success: Boolean(ev.success), command: String(ev.command ?? ""), output: String(ev.output ?? "") };
     }
   }
-  const manifest = existsSync(manifestPath(workdir, id))
-    ? (JSON.parse(readFileSync(manifestPath(workdir, id), "utf8")) as { model?: string; provider?: string; buildCmd?: string | null; steps?: number; maxSteps?: number; usage?: SessionFile["usage"] })
-    : {};
+  let manifest: { model?: string; provider?: string; buildCmd?: string | null; steps?: number; maxSteps?: number; usage?: SessionFile["usage"] } = {};
+  try {
+    if (existsSync(manifestPath(workdir, id))) manifest = JSON.parse(readFileSync(manifestPath(workdir, id), "utf8"));
+  } catch { /* malformed manifest — event log remains usable */ }
   return {
     id,
     createdAt,
@@ -376,14 +387,15 @@ export function listSessions(workdir: string): SessionSummary[] {
   // v2 event-sourced sessions (directories with manifest.json), newest first
   const v2: Array<{ id: string; task: string; steps: number; updatedAt: string }> = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isDirectory()) continue;
+    if (!e.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(e.name)) continue;
     const mf = join(dir, e.name, "manifest.json");
-    if (!existsSync(mf)) continue;
+    const evf = join(dir, e.name, "events.jsonl");
+    if (!existsSync(mf) && !existsSync(evf)) continue;
     try {
-      const m = JSON.parse(readFileSync(mf, "utf8")) as {
+      const m = existsSync(mf) ? JSON.parse(readFileSync(mf, "utf8")) as {
         id: string; task: string; steps: number; updatedAt: string;
-      };
-      v2.push({ id: m.id, task: (m.task ?? "").slice(0, 60), steps: m.steps ?? 0, updatedAt: m.updatedAt ?? "" });
+      } : { id: e.name, task: "", steps: 0, updatedAt: new Date(statSync(evf).mtimeMs).toISOString() };
+      v2.push({ id: m.id || e.name, task: (m.task ?? "").slice(0, 60), steps: m.steps ?? 0, updatedAt: m.updatedAt ?? "" });
     } catch {
       // skip malformed
     }

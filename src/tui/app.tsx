@@ -379,7 +379,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
 
   const submit = useCallback(
     async (text: string) => {
-      const task = text.trim();
+      let task = text.trim();
       if (!task) return;
       // Prompt-gate review in progress — numeric replies drive the flow.
       if (reviewRef.current) {
@@ -516,7 +516,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           agentRef.current?.abort();
           exit();
         }
-        return;
+        if (handled && outcome?.task) {
+          task = outcome.task;
+        } else {
+          return;
+        }
       }
       if (runningRef.current) {
         // Steer: user input while the agent runs — deliver at next step
@@ -706,7 +710,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               </Text>
             </Box>
           ) : (
-            state.items.map((item, i) => <ChatItemView key={i} item={item} />)
+            state.items.map((item, i) => <ChatItemView key={i} item={item} width={(columns ?? 100) - (showSidebar ? 42 : 4)} />)
           )}
           {lastSummary && (
             <Box marginTop={1}>
