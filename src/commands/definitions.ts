@@ -129,7 +129,7 @@ export interface CompletionProvider {
 import { readdirSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, basename, extname } from "node:path";
-import { suggest } from "../file-index.js";
+import { suggest } from "../workspace/file-index.js";
 
 // ── Custom commands discovery (Phase 6) ──────────────────────────────────────
 

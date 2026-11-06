@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../config/config.js";
 import type { ChatMessage } from "../llm.js";
-import type { BuildResult } from "../build.js";
+import type { BuildResult } from "../workspace/build.js";
 import { EventSessionStore, SessionStore, type SessionFile } from "../session/session.js";
 import { memoryFromMessages, type WorkingMemory } from "../memory.js";
 import type { TodoItem } from "../tools.js";

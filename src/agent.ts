@@ -4,21 +4,21 @@ import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, 
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
-import { detectBuildCommand, type BuildResult } from "./build.js";
+import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
 import { expandMentions } from "./context.js";
 import { createGuardrailEngine, type GuardrailDecision } from "./guardrails.js";
-import type { VerifyCommands } from "./diagnostics.js";
+import type { VerifyCommands } from "./workspace/diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session/session.js";
 import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
-import { SnapshotManager } from "./snapshot.js";
+import { SnapshotManager } from "./workspace/snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./session/logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 import { loadRcFile } from "./config/config.js";
 import { McpManager } from "./mcp.js";
-import { watchWorkdir, type ReloadWatcher } from "./watch.js";
+import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./skills.js";
 import { discoverAgents, findAgent, type AgentDef } from "./agents.js";
 import {

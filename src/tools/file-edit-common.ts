@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { DiffResult } from "../diff.js";
+import type { DiffResult } from "../workspace/diff.js";
 import type { ToolContext, ToolResult, ToolDiff } from "./types.js";
 import type { PermissionMode } from "../security/permissions.js";
 import { consoleReporter } from "../io/console-reporter.js";

@@ -1,14 +1,14 @@
 import type { AgentConfig } from "../config/config.js";
-import type { BuildResult } from "../build.js";
+import type { BuildResult } from "../workspace/build.js";
 import { trimHistory, summariseOutput, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context.js";
 import { CHAT_DONE_MARKER } from "../guardrails.js";
-import { parseDiagnostics, formatDiagnostics, classifyError } from "../diagnostics.js";
+import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
 import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../compaction.js";
 import { redactSecrets, type ChatMessage, type ChatResult } from "../llm.js";
 import type { ProviderRuntimeContract } from "../provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
 import type { EventSessionStore } from "../session/session.js";
-import type { SnapshotManager } from "../snapshot.js";
+import type { SnapshotManager } from "../workspace/snapshot.js";
 import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 import { createGuardrailEngine } from "../guardrails.js";

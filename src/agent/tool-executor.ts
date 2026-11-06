@@ -1,7 +1,7 @@
 import type { AgentConfig } from "../config/config.js";
 import { redactSecrets, type ToolCall, type ToolSpec } from "../llm.js";
 import { getTool, allToolSpecs, type ToolContext, type ToolResult } from "../tools.js";
-import { invalidateFileIndex } from "../file-index.js";
+import { invalidateFileIndex } from "../workspace/file-index.js";
 import { PermissionChecker } from "../security/permissions.js";
 import { McpManager, type McpServerConfig } from "../mcp.js";
 import { summariseOutput } from "../context.js";

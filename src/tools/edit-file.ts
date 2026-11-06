@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { unifiedDiff } from "../diff.js";
+import { unifiedDiff } from "../workspace/diff.js";
 import { safePath } from "./path-safety.js";
 import { gateWrite, toToolDiff, formatFile, applyOneEdit } from "./file-edit-common.js";
 import type { ToolContext, ToolResult } from "./types.js";
