@@ -1,4 +1,4 @@
-import { redactSecrets, type ToolSpec } from "../llm.js";
+import { redactSecrets, type ToolSpec } from "../llm/llm.js";
 import type { McpConnState, McpPrompt, McpResource, McpResourceTemplate, McpServerConfig, McpTool } from "./types.js";
 import { MCP_RESOURCE_TOOL_NAMES, mcpToolKey } from "./types.js";
 import { McpConnection } from "./connection.js";
@@ -449,7 +449,7 @@ export class McpManager {
   }
 
   /** Convert all discovered MCP tools to OpenAI function-calling specs. */
-  toToolSpecs(): import("../llm.js").ToolSpec[] {
+  toToolSpecs(): import("../llm/llm.js").ToolSpec[] {
     return [...this.tools.values()].map(({ conn: _, serverName, toolName, def }) => ({
       type: "function" as const,
       function: {

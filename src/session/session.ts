@@ -13,7 +13,7 @@
  */
 import { mkdirSync, writeFileSync, appendFileSync, renameSync, readFileSync, readdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { ChatMessage } from "../llm.js";
+import type { ChatMessage } from "../llm/llm.js";
 
 export interface SessionFile {
   id: string;

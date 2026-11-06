@@ -13,7 +13,7 @@
  *
  * Không copy code từ opencode — chỉ tham khảo ý tưởng "guardrails quanh loop".
  */
-import type { AssistantMessage, ToolCall } from "./llm.js";
+import type { AssistantMessage, ToolCall } from "./llm/llm.js";
 import { claimsCompletion } from "./context/context.js";
 
 /** Marker do system prompt quy ước: lượt chat thuần, không cần build. */

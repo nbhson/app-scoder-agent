@@ -5,7 +5,7 @@ import { buildAgentGuideBlock } from "../context/agents-guide.js";
 import { buildRepoMap } from "../context/repo-map.js";
 import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "../context/prompt-builder.js";
 import { discoverSkills, findSkill, type Skill } from "../context/skills.js";
-import type { ChatMessage } from "../llm.js";
+import type { ChatMessage } from "../llm/llm.js";
 import { formatWorkingMemory, memoryIsMeaningful, type WorkingMemory } from "../context/memory.js";
 
 /** Compaction prompt fragment that preserves the working-memory ledger. */

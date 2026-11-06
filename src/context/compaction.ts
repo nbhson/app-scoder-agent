@@ -10,7 +10,7 @@
  * Invariant: an assistant tool_calls message is never separated from its tool
  * results — compaction only cuts at whole turn boundaries (user → next user).
  */
-import type { ChatMessage } from "../llm.js";
+import type { ChatMessage } from "../llm/llm.js";
 import { encode } from "gpt-tokenizer";
 
 export interface CompactionConfig {

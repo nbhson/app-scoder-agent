@@ -1,7 +1,7 @@
 import type { AgentConfig } from "../config/config.js";
 import { runBuild, type BuildResult } from "../workspace/build.js";
-import type { ProviderRuntimeContract } from "../provider-registry.js";
-import type { ChatResult } from "../llm.js";
+import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
+import type { ChatResult } from "../llm/llm.js";
 import { parseDiagnostics, detectVerifyCmds, type VerifyCommands } from "../workspace/diagnostics.js";
 import type { AgentEvent } from "./types.js";
 import type { EventSessionStore } from "../session/session.js";

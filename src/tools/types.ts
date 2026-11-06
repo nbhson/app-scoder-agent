@@ -1,4 +1,4 @@
-import type { ToolSpec } from "../llm.js";
+import type { ToolSpec } from "../llm/llm.js";
 import type { PermissionChecker, PermissionMode } from "../security/permissions.js";
 import type { SandboxConfig } from "../security/sandbox.js";
 import type { Reporter } from "../io/reporter.js";

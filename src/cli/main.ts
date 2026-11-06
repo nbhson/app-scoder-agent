@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   }
 
   if (args.subcommand === "models") {
-    const { loadCatalog, cacheAgeHours } = await import("../model-catalog.js");
+    const { loadCatalog, cacheAgeHours } = await import("../llm/model-catalog.js");
     const filter = args.modelsProvider ?? null;
     const { models, source } = await loadCatalog(args.modelsRefresh === true);
     const age = cacheAgeHours();

@@ -1,6 +1,6 @@
 import { type ChildProcess } from "node:child_process";
 import { CLIENT_NAME, getVersion } from "../shared/version.js";
-import { redactSecrets } from "../llm.js";
+import { redactSecrets } from "../llm/llm.js";
 import type { McpConnState, McpPrompt, McpPromptMessage, McpResource, McpResourceContents, McpResourceTemplate, McpServerConfig, McpTool, McpTransport } from "./types.js";
 import { HttpTransport } from "./transport-http.js";
 import { StdioTransport } from "./transport-stdio.js";

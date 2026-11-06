@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../llm.js";
+import type { ChatMessage } from "../llm/llm.js";
 import { encode } from "gpt-tokenizer";
 import { readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";

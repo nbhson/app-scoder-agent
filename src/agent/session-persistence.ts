@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../config/config.js";
-import type { ChatMessage } from "../llm.js";
+import type { ChatMessage } from "../llm/llm.js";
 import type { BuildResult } from "../workspace/build.js";
 import { EventSessionStore, SessionStore, type SessionFile } from "../session/session.js";
 import { memoryFromMessages, type WorkingMemory } from "../context/memory.js";

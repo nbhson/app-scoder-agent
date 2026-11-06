@@ -1,8 +1,8 @@
 import type { AgentConfig } from "./config/config.js";
 import { loadPermissionLists, loadPolicyRules, loadSavedApprovals } from "./config/config.js";
-import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
+import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
 import type { ToolResult } from "./tools.js";
-import { AnthropicClient } from "./provider-anthropic.js";
+import { AnthropicClient } from "./llm/provider-anthropic.js";
 import { allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
 import { expandMentions } from "./context/context.js";
@@ -13,9 +13,9 @@ import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from
 import { SessionStore, EventSessionStore, type SessionFile } from "./session/session.js";
 import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./context/compaction.js";
 import { SnapshotManager } from "./workspace/snapshot.js";
-import { contextWindowFor } from "./model-catalog.js";
+import { contextWindowFor } from "./llm/model-catalog.js";
 import { JsonlLogger } from "./session/logger.js";
-import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
+import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
 import { loadRcFile } from "./config/config.js";
 import { McpManager } from "./mcp.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
@@ -77,7 +77,7 @@ export type { AgentEvent, AgentRunResult, ResolvedPrimary, UsageTotals, Verifica
 export class Agent {
   /** v2 event schema: stable id for the run — links agent_start/agent_end. */
   readonly id = randomUUID();
-  private client: import("./provider-registry.js").ProviderRuntimeContract;
+  private client: import("./llm/provider-registry.js").ProviderRuntimeContract;
   private config: AgentConfig;
   /** v2: the def resolved at construction (primary agent) — prompt override, skills. */
   private primaryDef: AgentDef | null = null;

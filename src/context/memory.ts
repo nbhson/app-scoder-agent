@@ -10,7 +10,7 @@
  * Budget: formatWorkingMemory() is capped (~≤1.5k tokens); callers should
  * inject it on compaction and every N steps, never the raw accumulators.
  */
-import type { ChatMessage } from "../llm.js";
+import type { ChatMessage } from "../llm/llm.js";
 import type { TodoItem } from "../tools/types.js";
 
 export interface WorkingMemory {

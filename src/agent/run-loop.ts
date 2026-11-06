@@ -4,8 +4,8 @@ import { trimHistory, summariseOutput, MAX_HISTORY_TOKENS, historyTokenBudget } 
 import { CHAT_DONE_MARKER } from "../guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
 import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
-import { redactSecrets, type ChatMessage, type ChatResult } from "../llm.js";
-import type { ProviderRuntimeContract } from "../provider-registry.js";
+import { redactSecrets, type ChatMessage, type ChatResult } from "../llm/llm.js";
+import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
 import type { EventSessionStore } from "../session/session.js";
 import type { SnapshotManager } from "../workspace/snapshot.js";

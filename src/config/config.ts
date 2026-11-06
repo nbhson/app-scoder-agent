@@ -2,7 +2,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import type { PermissionMode, PermissionRule, PermissionEffect } from "../security/permissions.js";
-import { parseCustomProviders, resolveProvider, splitProviderModel } from "../provider-registry.js";
+import { parseCustomProviders, resolveProvider, splitProviderModel } from "../llm/provider-registry.js";
 import type { Reporter } from "../io/reporter.js";
 
 export interface AgentConfig {
@@ -70,7 +70,7 @@ export interface AgentConfig {
    * scripted client instead of consuming the parent's transcript.
    * @internal
    */
-  clientFactory?: () => import("../provider-registry.js").ProviderRuntimeContract;
+  clientFactory?: () => import("../llm/provider-registry.js").ProviderRuntimeContract;
   /** Disable session auto-save */
   noSave?: boolean;
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */
@@ -82,7 +82,7 @@ export interface AgentConfig {
   /** Rule engine v2 (from rc permissions.rules). */
   permissionRules?: PermissionRule[];
   /** Resolved provider definition (I-01 registry — built-in or custom). */
-  providerDef?: import("../provider-registry.js").ProviderDef;
+  providerDef?: import("../llm/provider-registry.js").ProviderDef;
   /** Model context window in tokens (from catalog I-02 or provider default). */
   contextWindow?: number;
   /** Streaming LLM responses */

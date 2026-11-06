@@ -35,7 +35,7 @@ export async function runInit(): Promise<void> {
   // I-03: probe local engines first — suggest when found (no auto-switch when
   // a cloud key exists; user always decides).
   ui.info("probing local engines (ollama :11434, lmstudio :1234, vllm :8000)…");
-  const { discoverLocalEngines } = await import("../provider-registry.js");
+  const { discoverLocalEngines } = await import("../llm/provider-registry.js");
   const locals = await discoverLocalEngines();
   for (const e of locals) {
     ui.info(`  found ${e.provider.id} at ${e.provider.baseUrl} — ${e.models.length} model(s), e.g. ${e.models[0]}`);
@@ -74,8 +74,8 @@ export async function runInit(): Promise<void> {
   }
   ui.info(`connecting to ${baseUrl} (${provider}) …`);
   try {
-    const { LlmClient } = await import("../llm.js");
-    const { AnthropicClient } = await import("../provider-anthropic.js");
+    const { LlmClient } = await import("../llm/llm.js");
+    const { AnthropicClient } = await import("../llm/provider-anthropic.js");
     const client =
       provider === "anthropic"
         ? new AnthropicClient({ baseUrl, apiKey, model, maxTokens: 16, temperature: 0 })

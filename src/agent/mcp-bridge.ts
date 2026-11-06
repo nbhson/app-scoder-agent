@@ -1,5 +1,5 @@
 import { saveApproval } from "../config/config.js";
-import { redactSecrets, type ToolSpec } from "../llm.js";
+import { redactSecrets, type ToolSpec } from "../llm/llm.js";
 import { allToolSpecs } from "../tools.js";
 import { applyToolFilter } from "./types.js";
 import { McpManager, type McpServerConfig } from "../mcp.js";

@@ -10,7 +10,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { AgentConfig } from "../config/config.js";
-import { contextWindowFor } from "../model-catalog.js";
+import { contextWindowFor } from "../llm/model-catalog.js";
 import { resolveModelPricing } from "../shared/constants.js";
 import { latestPlan, type ChatItem, type TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
