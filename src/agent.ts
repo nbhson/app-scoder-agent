@@ -23,7 +23,6 @@ import type { Skill } from "./skills.js";
 import { discoverAgents, findAgent, type AgentDef } from "./agents.js";
 import {
   emptyWorkingMemory,
-  memoryFromMessages,
   memoryIsMeaningful,
   formatWorkingMemory,
   noteFileRead,
@@ -60,6 +59,7 @@ import {
 import { InteractionBroker, type InteractionRuntime } from "./agent/interaction.js";
 import { ToolExecutor, READONLY_TOOLS, type ToolExecutorRuntime } from "./agent/tool-executor.js";
 import { PromptContext, buildRunMessages, memoryBlock } from "./agent/prompt-context.js";
+import { persistSession, restoreSessionState } from "./agent/session-persistence.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
 
@@ -941,30 +941,18 @@ export class Agent {
     this.resetUsageTotals();
     this.filesModified = false;
     this.promptContext.reloadSkills();
-    this.messages = session.messages ?? [];
+    const restored = restoreSessionState(session);
+    this.messages = restored.messages;
     // v2: rebuild the working memory from history (files/decisions/failures/plan)
     // and restore the last write_todos plan so resumed runs keep their ledger.
-    this.memory = memoryFromMessages(this.messages, session.task);
+    this.memory = restored.memory;
     this.planNudged = false;
     this.runDiffs = [];
     this.selfReviewDone = false;
     this.verifyStrikes = 0;
     this.lastVerifySignature = "";
-    let restoredPlan: TodoItem[] | null = null;
-    for (const m of this.messages) {
-      if (m.role !== "assistant" || !m.tool_calls) continue;
-      for (const tc of m.tool_calls) {
-        if (tc.name !== "write_todos") continue;
-        try {
-          const args = JSON.parse(tc.arguments) as { todos?: TodoItem[] };
-          if (Array.isArray(args.todos)) restoredPlan = args.todos;
-        } catch {
-          // skip malformed args
-        }
-      }
-    }
-    if (restoredPlan) {
-      this.plan = restoredPlan;
+    if (restored.plan) {
+      this.plan = restored.plan;
       this.emit({ type: "todo", items: [...this.plan] });
       this.reporter.info(`restored plan: ${this.plan.length} step(s)`);
     }
@@ -982,9 +970,7 @@ export class Agent {
       });
     }
 
-    const lastBuild: BuildResult | null = session.lastBuild
-      ? { success: session.lastBuild.success, command: session.lastBuild.command, output: session.lastBuild.output }
-      : null;
+    const lastBuild = restored.lastBuild;
     // v2: opening a resumed run stamps a fresh run.started (event log continuity).
     this.events.append({ type: "run.started", task: this.currentTask });
 
@@ -1326,43 +1312,16 @@ export class Agent {
   /** Persist current agent state (v2 event log + manifest; crash-resumable). */
   private saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null): void {
     this.lastBuildResult = lastBuild;
-    // v2: durable event log is authoritative; JSON manifest is a cheap summary.
-    this.events.writeManifest({
-      task: this.currentTask,
-      model: this.client.model,
-      provider: this.config.provider,
-      buildCmd,
-      steps,
-      maxSteps: this.config.maxSteps,
-      usage: {
-        llmCalls: this.usageTotals.calls,
-        inputTokens: this.usageTotals.inputTokens,
-        outputTokens: this.usageTotals.outputTokens,
-        cachedTokens: this.usageTotals.cachedTokens,
-      },
-    });
-    // v1 snapshot kept in sync (back-compat for /sessions readers, cost, resume).
-    this.session.save(
-      {
-        task: this.currentTask,
-        model: this.client.model,
-        provider: this.config.provider,
-        buildCmd,
-        steps,
-        maxSteps: this.config.maxSteps,
-        messages: this.messages,
-        lastBuild: lastBuild
-          ? { success: lastBuild.success, command: lastBuild.command, output: lastBuild.output.slice(0, 10_000) }
-          : null,
-        usage: {
-          llmCalls: this.usageTotals.calls,
-          inputTokens: this.usageTotals.inputTokens,
-          outputTokens: this.usageTotals.outputTokens,
-          cachedTokens: this.usageTotals.cachedTokens,
-        },
-      },
-      this.sessionCreatedAt,
-    );
+    persistSession({
+      config: this.config,
+      events: this.events,
+      session: this.session,
+      currentTask: this.currentTask,
+      client: this.client,
+      messages: this.messages,
+      usageTotals: this.usageTotals,
+      sessionCreatedAt: this.sessionCreatedAt,
+    }, steps, buildCmd, lastBuild);
   }
 
   // ── Frontend-facing APIs (REPL/TUI slash commands) ─────────────────────────

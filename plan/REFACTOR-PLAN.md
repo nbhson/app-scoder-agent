@@ -504,6 +504,8 @@ io/    ──▶ ui.ts (chỉ adapter)
    - `saveSession`, phần load/resume projection, `compactHistory` persistence.
    - Không đổi JSON shape/atomic write.
 
+   **Status:** Hoàn tất bước move-only cho save/resume projection. `persistSession` giữ nguyên thứ tự manifest rồi legacy snapshot, `createdAt`, usage shape và giới hạn build output 10.000 ký tự; `restoreSessionState` giữ nguyên phục hồi messages, working memory, todo plan và build result. `compactHistory` vẫn nằm trong `Agent` vì chỉ phát durable compaction/memory events, không ghi snapshot trực tiếp.
+
 8. **`agent/run-loop.ts` (bước cuối, optional nếu risk cao)**
    - Extract `runLoop` với `RunLoopDeps` interface tường minh (messages, tools, emit, guardrails, compaction, verification, steering).
    - `Agent.run/runTurn/resume` vẫn là public API, delegate vào loop.
