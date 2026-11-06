@@ -1,0 +1,51 @@
+{
+  "commit": "dec14e1",
+  "date": "2026-11-06T18:07:13.173Z",
+  "results": [
+    {
+      "label": "buildRepoMap cold",
+      "medianMs": 42.885,
+      "iters": 3
+    },
+    {
+      "label": "buildRepoMap warm (cache hit)",
+      "medianMs": 7.113,
+      "iters": 10
+    },
+    {
+      "label": "repoMapKey",
+      "medianMs": 6.934,
+      "iters": 5
+    },
+    {
+      "label": "renderRepoMap (no cache)",
+      "medianMs": 32.557,
+      "iters": 3
+    },
+    {
+      "label": "buildEnvInfo",
+      "medianMs": 10.458,
+      "iters": 10
+    },
+    {
+      "label": "discoverSkills (100 skills)",
+      "medianMs": 1.76,
+      "iters": 10
+    },
+    {
+      "label": "findSkill (100 skills)",
+      "medianMs": 1.71,
+      "iters": 10
+    },
+    {
+      "label": "cold start: --help",
+      "medianMs": 106.909,
+      "iters": 3
+    },
+    {
+      "label": "cold start: --version exit",
+      "medianMs": 0,
+      "iters": 1
+    }
+  ]
+}

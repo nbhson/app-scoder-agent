@@ -567,11 +567,15 @@ Tách hooks theo trách nhiệm:
 
 **Lưu ý:** không đổi thứ tự render, key, text, ANSI output. Test `tui-render`, `tui-progress`, `tui-sidebar`, `tui-vim`, `permission-modal`, `review-flow`.
 
+**Status:** Hoàn tất. `app.tsx` 800 → 303 dòng (composition + layout). Sáu hook move-only trong `src/tui/hooks/`: `use-scroll.ts`, `use-event-queue.ts`, `use-session-resume.ts`, `use-command-host.ts`, `use-review.ts`, `use-keybinds.ts`, `use-submit.ts`. Thứ tự hook call/effect giữ nguyên; `review-flow.test.mjs` cập nhật trỏ đúng module wiring mới (cùng contract).
+
 #### 5.4 `tui/state.ts` (530 → ≤ 400, optional)
 
 - Tách selectors thuần (`latestPlan`, `visibleWindow`, `toolPhase`, `estimateItemRows`) sang `tui/selectors.ts` + facade re-export.
 - Giữ nguyên `applyEvent` mutation semantics (bug/docs mismatch xử lý riêng).
 - Không đổi state shape.
+
+**Status:** Hoàn tất. `tui/selectors.ts` chứa 4 selector thuần (verbatim); `state.ts` còn 451 dòng, re-export để giữ mọi import site. Helper nội bộ (`appendItem`, `lastItem`, `capTail`, `applyGuardrail`, `MAX_*`) giữ nguyên trong `state.ts`.
 
 **Gate:** full suite + TUI tests + `tui-render` snapshot; `parseArgs` contract; CLI smoke `node dist/index.js --help`.
 
@@ -585,13 +589,13 @@ Tách hooks theo trách nhiệm:
 
 | # | Việc | Kỳ vọng | Rủi ro | Ghi chú |
 |---|---|---|---|---|
-| P1 | `buildRepoMap`: walk một lần, dùng lại `WalkedFile[]` cho key + render | giảm ~30–50% cold path | thấp | public `renderRepoMap` vẫn walk riêng; chỉ internal path dùng chung |
-| P2 | `buildEnvInfo`: memoize theo `(workdir, ngày, platform, node version)` trong một run | ~13ms → ~0 khi lặp | thấp | không cache qua ngày; prompt build 1 lần/run |
-| P3 | `discoverSkills`: chỉ discover 1 lần cho mỗi lần build prompt; `findSkill` dùng index trong cùng run | ~4.8ms → ~0.2ms | trung bình | hot-reload có thể cần invalidate; test `/skill` sau reload |
-| P4 | TUI: dùng `visibleWindow(items, viewportRows)` thay vì render toàn bộ | render bounded theo viewport | **cao** | thay đổi output terminal ngoài viewport; cần user approve + test scroll; nếu không chắc thì để lại |
-| P5 | `fileIndex`: key cache theo `workdir` | sửa bug + tránh sai dữ liệu | trung bình | đây là bug fix, tách PR riêng (§9) |
+| P1 | `buildRepoMap`: walk một lần, dùng lại `WalkedFile[]` cho key + render | giảm ~30–50% cold path | thấp | **REVERTED sau đo:** cold chỉ -11..-16% (< ngưỡng 20%) — walk ≈ 7ms, render ≈ 32ms chiếm chủ đạo; kỳ vọng ban đầu sai |
+| P2 | `buildEnvInfo`: memoize theo `(workdir, ngày, platform, node version)` trong một run | ~13ms → ~0 khi lặp | thấp | **DONE** — đo: 10.5ms → 0.001ms; key chứa ngày nên không cache qua ngày |
+| P3 | `discoverSkills`: chỉ discover 1 lần cho mỗi lần build prompt; `findSkill` dùng index trong cùng run | ~4.8ms → ~0.2ms | trung bình | **SKIP:** đo thực tế chỉ ~1.8ms; `findSkill` re-scan là freshness semantics của `/skill` — đổi = behavior change |
+| P4 | TUI: dùng `visibleWindow(items, viewportRows)` thay vì render toàn bộ | render bounded theo viewport | **cao** | **DEFER:** plan yêu cầu user approve + test scroll; giữ nguyên |
+| P5 | `fileIndex`: key cache theo `workdir` | sửa bug + tránh sai dữ liệu | trung bình | **OUT OF SCOPE:** bug fix, tách PR riêng (§9/B1) |
 | P6 | `estimateTokens`/`trimHistory` | không làm | — | baseline đã đủ nhanh; tránh micro-optimize |
-| P7 | Benchmark workload thật: repo tổng hợp 5.000 file, 100 skill, session TUI 400 item, agent step không gọi LLM | có baseline + budget, CI chặn regression | thấp | microbench hiện tại không đại diện workload thật |
+| P7 | Benchmark workload thật: repo tổng hợp 5.000 file, 100 skill, session TUI 400 item, agent step không gọi LLM | có baseline + budget, CI chặn regression | thấp | **DONE:** `scripts/bench.mjs` + `plan/baseline/bench-dec14e1.json`; `--compare` fail khi regression >5% và >1ms (noise floor cho case <10ms) |
 
 **Quy trình**
 

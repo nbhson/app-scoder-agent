@@ -8,8 +8,17 @@ import { formatSkillIndex, type Skill } from "./skills.js";
 import type { AgentDef } from "./agents.js";
 import type { AgentConfig } from "./config.js";
 
+// P2: memoize per (workdir, date, platform, node version) — the git probe is a
+// spawned process and the output cannot change for a given key within a run.
+// The date is part of the key, so nothing is cached across a day boundary.
+const envInfoCache = new Map<string, string>();
+
 /** One-line environment snapshot for the system prompt (cache-stable per run). */
 export function buildEnvInfo(workdir: string): string {
+  const today = new Date().toISOString().slice(0, 10);
+  const cacheKey = `${workdir}|${process.platform}|${process.version}|${today}`;
+  const hit = envInfoCache.get(cacheKey);
+  if (hit !== undefined) return hit;
   let git = "";
   try {
     const branch = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workdir, encoding: "utf8" });
@@ -17,7 +26,9 @@ export function buildEnvInfo(workdir: string): string {
   } catch {
     /* git unavailable */
   }
-  return `Environment: ${process.platform} · node ${process.version}${git} · today ${new Date().toISOString().slice(0, 10)}`;
+  const info = `Environment: ${process.platform} · node ${process.version}${git} · today ${today}`;
+  envInfoCache.set(cacheKey, info);
+  return info;
 }
 
 /** Skills advertised in system prompt (passive listing only — agent does NOT auto-load). */
