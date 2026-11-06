@@ -678,6 +678,10 @@ Di chuyển các module core còn lại vào domain rõ nghĩa. Mỗi domain là
 
 > Khuyến nghị: **Option B** nếu package không cam kết public internal modules; **Option A** nếu cần tương thích tuyệt đối.
 
+**Quyết định: Option A** — constraint số 1 của effort này là bảo toàn legacy public paths + `dist/*.js` exports; Option B cần user approve vì ảnh hưởng consumer bên ngoài.
+
+**Status 8.1:** Hoàn tất. Mọi module core đã vào domain: `shared/` (constants, version, json-schema), `config/`, `security/` (permissions, sandbox, shell-scanner), `session/` (session, logger, steering, cost), `workspace/` (build, diff, snapshot, diagnostics, file-index, watch), `context/` (context, compaction, prompt, prompt-builder, repo-map, memory, skills, agents, agents-guide), `llm/` (llm, provider-anthropic, provider-registry, model-catalog, retry), `io/` (terminal ← ui), `server/`, `mcp/mcp-import.ts`, `agent/guardrails.ts`, `tools/webfetch.ts`. Root chỉ còn `index.ts`, `agent.ts`, `tools.ts`, `mcp.ts` + facade shim `LEGACY PUBLIC PATH`. `version.ts` điều chỉnh độ sâu `../../package.json` (bắt buộc theo move). Mỗi domain một commit; 867/867 test + 11/11 eval xanh ở mỗi bước.
+
 #### 8.2 Clean-code pass theo domain
 
 Sau khi move (không trộn commit), làm một pass chất lượng riêng cho từng domain:
