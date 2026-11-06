@@ -1,6 +1,6 @@
 # Scoder — Autonomous Coding Agent CLI
 
-**Current version: 0.9.2**
+**Current version: 0.9.3**
 
 **Scoder** là một CLI agent tự động chạy trong terminal. Nó không chỉ suggest code — nó **thực thi** code. Scoder tự động viết, sửa, chạy test và debug cho đến khi project build thành công.
 
@@ -63,6 +63,11 @@ scoder
 | [HTTP API](api.md) | Server mode & SSE API |
 | [Sessions](sessions.md) | Session persistence & resume |
 | [Testing](testing.md) | Running tests & coverage |
+| [Onboarding](onboarding.md) | 10 main flows — where each feature lives |
+| [Performance](performance.md) | Benchmark harness, baseline & decisions |
+| [Refactor decisions](refactor/decisions.md) | ADR log for the domain refactor |
+| [Skills](skills.md) | Skill discovery & loading |
+| [Architecture graph](architecture-graph.md) | Generated dependency graph (check-layers) |
 
 ---
 
@@ -78,4 +83,4 @@ scoder
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT — see [LICENSE](../LICENSE)

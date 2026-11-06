@@ -1,6 +1,6 @@
 # Refactor Plan — app-scoder-agent
 
-> **Trạng thái:** ĐANG THỰC HIỆN — Phase 0, Phase 1.1–1.4, Phase 2, Phase 3 và toàn bộ Phase 4 đã hoàn tất; các phase còn lại tiếp tục theo commit nhỏ, tương thích ngược.
+> **Trạng thái:** HOÀN TẤT (ngoại trừ mục defer có lý do) — Phase 0–5, 6 (P2 + P7), 8.1 (Option A), 8.3, 8.4, 9, 10 đã land. Defer có ghi rõ: P1 (đo không đạt ngưỡng), P3/P4/P5 (behavior/risk), Phase 7 (optional), 8.2 (không phải move-only).
 >
 > **Ngày lập:** 06/11/2026  
 > **Baseline commit:** `110e6020f3a5` — `feat(tui): show application version in header` (2026-11-06). Working tree hiện có các thay đổi refactor chưa commit.  
@@ -696,6 +696,8 @@ Sau khi move (không trộn commit), làm một pass chất lượng riêng cho 
 
 Mỗi pass phải có characterization test trước; nếu không chứng minh được tương đương thì để nguyên và ghi backlog.
 
+**Status:** DEFER có chủ đích. 8.2 không phải move-only (đổi cấu trúc hàm nội bộ) — plan tự yêu cầu characterization test trước từng thay đổi. Làm wholesale sẽ vi phạm constraint an toàn; từng item nên là PR riêng có test đặc thù. Lint budget (8.3) đã chặn tái phình cho code mới.
+
 #### 8.3 Lint budget chống tái phình
 
 Thêm rule ESLint (có baseline override cho file legacy, sau đó giảm dần về 0):
@@ -723,6 +725,9 @@ Thêm rule ESLint (có baseline override cho file legacy, sau đó giảm dần 
 
 **Gate:** full test; lint budget pass; graph fresh; root shim đúng chuẩn; orientation test pass; không còn file > ngưỡng ngoại lệ.
 
+**Status 8.3:** DONE — `max-lines` 500, `max-lines-per-function` 150, `complexity` 15, `max-depth` 4, `max-params` 5, `consistent-type-imports` ở mức warn; baseline override 40 file hiện tại trong `eslint.config.mjs`; `npm run lint` 0 error.
+**Status 8.4:** DONE — `src/README.md` + 15 domain README + `docs/onboarding.md` (10 luồng chính) + graph sinh tự động. Orientation test với người thật là bước manual, ghi nhận khi có người mới onboard.
+
 **Thời lượng ước tính:** 5–8 ngày (Option A nhanh hơn Option B khoảng 1–2 ngày).
 
 ---
@@ -740,6 +745,8 @@ Phase này cập nhật docs ngay khi từng phase code land, tránh tích nợ.
 - Kiểm tra `.gitignore` (đã có `.DS_Store`), dọn file rác không tracked nếu có.
 
 **Gate:** docs build/lint không áp dụng; review link; không còn tài liệu nói sai behavior.
+
+**Status:** DONE — `docs/architecture.md` (domain map mới), `docs/testing.md` (eval + bench, ghi rõ `npm test` không chạy lint), `docs/performance.md` (baseline + quyết định P1–P7), `docs/refactor/decisions.md` (ADR-1..7), README (sơ đồ + link). `plan/README.md` giữ nguyên vì là changelog lịch sử theo ngày — sửa số liệu sẽ làm sai lệch lịch sử.
 
 **Thời lượng ước tính:** 0,5 ngày.
 

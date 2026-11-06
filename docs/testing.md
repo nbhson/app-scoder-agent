@@ -10,7 +10,11 @@ npm run build     # tsc
 npm run coverage  # build + coverage report
 npm run check:layers       # architecture dependency guard
 npm run check:layers:graph # regenerate docs/architecture-graph.md
+npm run eval               # 11 scripted end-to-end scenarios (mock LLM)
+node scripts/bench.mjs     # performance benchmark (see docs/performance.md)
 ```
+
+`npm test` does not run lint/typecheck — run them explicitly (or rely on CI).
 
 ## Test Suites
 

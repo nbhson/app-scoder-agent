@@ -552,35 +552,37 @@ scoder "upgrade express to v5 — check the official migration guide first"
 
 ## Architecture
 
+Domain-oriented source layout — see [src/README.md](src/README.md), [docs/architecture.md](docs/architecture.md) and the [refactor plan](plan/REFACTOR-PLAN.md).
+
 ```
 ┌─────────────────────────────────────────────┐
-│  CLI (src/index.ts)                         │
+│  CLI (src/index.ts → src/cli/)              │
 │   arg parsing, REPL, serve, tui, SIGINT     │
 └───────┬─────────────────────┬───────────────┘
         │                     │
 ┌───────▼───────────┐  ┌──────▼─────────────────────┐
-│  TUI (src/tui/)   │  │  Agent (src/agent.ts)      │
+│  TUI (src/tui/)   │  │  Agent (src/agent.ts + src/agent/) │
 │  Ink/React alt-   │  │  Closed-loop orchestrator  │
 │  screen UI,       │─▶│  + Guardrail Engine        │
-│  renders the same │  │  (src/guardrails.ts)       │
+│  renders the same │  │  (src/agent/guardrails.ts) │
 │  AgentEvent stream│  │  emits AgentEvent          │
 └───────────────────┘  └──┬──────────┬──────────────┘
                           │          │
                           │          └────────────────────┐
                           ▼                               ▼
 ┌───────────────────────────────┐   ┌──────────────────────────┐
-│  LLM Client (src/llm.ts)      │   │  Server (src/server.ts)  │
+│  LLM (src/llm/)               │   │  Server (src/server/)    │
 │  OpenAI-compatible + native   │   │  HTTP API + SSE          │
 │  Anthropic provider           │   │  runs in background      │
 └──────────────┬────────────────┘   └──────────────────────────┘
                ▼
 ┌────────────────────────────────────────┐
-│  Tool Registry (src/tools.ts)          │
-│  + web_fetch (src/webfetch.ts)         │
+│  Tool Registry (src/tools/)            │
+│  + web_fetch (src/tools/webfetch.ts)   │
 └──────────────┬─────────────────────────┘
                ▼
 ┌───────────────────────────────┐
-│  Build Checker (src/build.ts) │
+│  Build Checker (src/workspace/build.ts) │
 │  run build → exit 0 = stop    │
 └───────────────────────────────┘
 ```
