@@ -25,8 +25,9 @@ function makeAgent(workdir) {
 describe("Agent.steer/queue — inbox (H-08)", () => {
   it("steer() accepts input; enqueued events persisted in the event log", () => {
     const wd = mkdtempSync(join(tmpdir(), "steer-"));
+    let agent;
     try {
-      const agent = makeAgent(wd);
+      agent = makeAgent(wd);
       const events = [];
       agent.onEvent = (ev) => events.push(ev);
 
@@ -34,14 +35,16 @@ describe("Agent.steer/queue — inbox (H-08)", () => {
       agent.steer(""); // empty ignored
       assert.ok(events.some((e) => e.type === "steer_queued" && e.text === "also check the tests"));
     } finally {
+      agent?.dispose();
       rmSync(wd, { recursive: true, force: true });
     }
   });
 
   it("steer before any run() does not throw and is persisted in the event log", async () => {
     const wd = mkdtempSync(join(tmpdir(), "steer2-"));
+    let agent;
     try {
-      const agent = makeAgent(wd);
+      agent = makeAgent(wd);
       agent.steer("hello");
       // events.jsonl should contain steer.enqueued
       
@@ -52,33 +55,38 @@ describe("Agent.steer/queue — inbox (H-08)", () => {
       assert.match(log, /"type":"steer\.enqueued"/);
       assert.match(log, /"mode":"steer"/);
     } finally {
+      agent?.dispose();
       rmSync(wd, { recursive: true, force: true });
     }
   });
 
   it("queue() same inbox, mode=queue", async () => {
     const wd = mkdtempSync(join(tmpdir(), "steer3-"));
+    let agent;
     try {
-      const agent = makeAgent(wd);
+      agent = makeAgent(wd);
       const seen = [];
       agent.onEvent = (ev) => seen.push(ev);
       agent.queue("queued text");
       assert.ok(seen.some((e) => e.type === "steer_queued" && e.mode === "queue" && e.text === "queued text"));
     } finally {
+      agent?.dispose();
       rmSync(wd, { recursive: true, force: true });
     }
   });
 
   it("empty/whitespace input ignored", () => {
     const wd = mkdtempSync(join(tmpdir(), "steer4-"));
+    let agent;
     try {
-      const agent = makeAgent(wd);
+      agent = makeAgent(wd);
       const seen = [];
       agent.onEvent = (ev) => seen.push(ev);
       agent.steer("   ");
       agent.queue("");
       assert.ok(!seen.some((e) => e.type === "steer_queued"), "no events for empty input");
     } finally {
+      agent?.dispose();
       rmSync(wd, { recursive: true, force: true });
     }
   });
@@ -89,8 +97,9 @@ describe("drainSteerInbox — delivery at step boundary", () => {
     // Integration-level delivery is covered by e2e; here we verify the drain
     // helper via the event log + that steer → drain → empty ordering holds.
     const wd = mkdtempSync(join(tmpdir(), "steer5-"));
+    let agent;
     try {
-      const agent = makeAgent(wd);
+      agent = makeAgent(wd);
       agent.steer("one");
       agent.steer("two");
       // delivery happens inside runLoop; not directly testable without an LLM.
@@ -102,6 +111,7 @@ describe("drainSteerInbox — delivery at step boundary", () => {
       );
       assert.equal(log.split("\n").filter((l) => l.includes("steer.enqueued")).length, 2);
     } finally {
+      agent?.dispose();
       rmSync(wd, { recursive: true, force: true });
     }
   });

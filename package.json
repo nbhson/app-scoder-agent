@@ -15,6 +15,8 @@
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
+    "check:layers": "node scripts/check-layers.mjs",
+    "check:layers:graph": "node scripts/check-layers.mjs --graph",
     "coverage": "npm run build && node --test --experimental-test-coverage test/*.test.mjs",
     "eval": "node test/run-eval.mjs",
     "test": "npm run build && node --test test/*.test.mjs && node test/run-e2e.mjs && node test/run-mcp-test.mjs"

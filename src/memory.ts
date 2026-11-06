@@ -11,7 +11,7 @@
  * inject it on compaction and every N steps, never the raw accumulators.
  */
 import type { ChatMessage } from "./llm.js";
-import type { TodoItem } from "./tools.js";
+import type { TodoItem } from "./tools/types.js";
 
 export interface WorkingMemory {
   /** The original user task (first user message). */

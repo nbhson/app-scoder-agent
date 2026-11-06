@@ -20,6 +20,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run check:layers
       - run: npm run build
       - run: npm test
       # Eval gate (Phase 3): deterministic mock-LLM scenarios. Any regression

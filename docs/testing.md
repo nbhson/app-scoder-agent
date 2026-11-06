@@ -3,11 +3,13 @@
 ## Run Tests
 
 ```bash
-npm test          # full pipeline: lint → typecheck → build → tests
+npm test          # build + full unit suite + e2e + MCP smoke (867 tests)
 npm run lint      # ESLint flat config
 npm run typecheck # tsc --noEmit
 npm run build     # tsc
 npm run coverage  # build + coverage report
+npm run check:layers       # architecture dependency guard
+npm run check:layers:graph # regenerate docs/architecture-graph.md
 ```
 
 ## Test Suites
@@ -38,9 +40,10 @@ Tests are auto-discovered via `test/*.test.mjs`:
 ## CI Pipeline
 
 ```
-lint (eslint)
+  lint (eslint)
   → typecheck (tsc --noEmit)
-    → build (tsc)
+    → layer check
+      → build (tsc)
       → unit tests (node --test test/*.test.mjs)
         → e2e closed-loop (mock LLM server)
           → MCP smoke (mock stdio server)

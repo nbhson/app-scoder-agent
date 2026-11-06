@@ -1,5 +1,19 @@
 # Architecture
 
+## Refactor status
+
+The current refactor has completed the safety, layering, tools, and MCP extraction phases:
+
+- `src/media/image.ts` and `src/file-index.ts` contain the moved image and `@`-completion implementations.
+- `src/tui/image.ts` and `src/tui/at-complete.ts` remain compatibility facades for the historical public paths.
+- Shared tool contracts live in `src/tools/types.ts`; `webfetch.ts` and `memory.ts` import them directly.
+- Core output uses the `Reporter` port in `src/io/reporter.ts`; `console-reporter.ts` preserves the classic `ui.ts` output by default.
+- `src/tools.ts` is now a compatibility facade; implementations live under `src/tools/` (path safety, file tools, search, command execution, and registry).
+- `src/mcp.ts` is now a compatibility facade; implementations live under `src/mcp/` (types, env expansion, SSE, transports, connection, and manager).
+- `npm run check:layers` guards core/TUI boundaries; the generated graph is in `docs/architecture-graph.md`.
+
+The large agent file remains intentionally in place until Phase 4. No prompt, event, tool schema, CLI, or permission contract is changed by these moves.
+
 ## High-Level Design
 
 ```
@@ -24,7 +38,7 @@
 └──────────────┬───────────────────┘  └────────────────────────────────┘
                ▼
 ┌───────────────────────────────────┐
-│  Tool Registry (src/tools.ts)     │
+│  Tool Registry (src/tools/registry.ts) │
 │  + web_fetch (src/webfetch.ts)    │
 │  + MCP (src/mcp.ts)               │
 └───────────────┬────────────────────┘
@@ -45,7 +59,8 @@
 | `llm.ts` | OpenAI-compatible LLM client (chat, streaming) |
 | `provider-anthropic.ts` | Native Anthropic Messages API + SSE streaming |
 | `provider-registry.ts` | Provider resolution + custom provider registry |
-| `tools.ts` | Tool registry (read_file, write_file, edit_file, grep, etc.) |
+| `tools.ts` | Compatibility facade for the tool registry and tool implementations |
+| `tools/` | Tool contracts, file/search/command implementations, and ordered registry |
 | `build.ts` | Build command execution + exit code analysis |
 | `permissions.ts` | Permission checker, catastrophic deny list, rule engine |
 | `config.ts` | Config loading: rc file, env vars, CLI overrides |
@@ -81,7 +96,8 @@
 
 | File | Purpose |
 |------|---------|
-| `mcp.ts` | MCP client (stdio + HTTP transport) |
+| `mcp.ts` | Compatibility facade for the MCP client |
+| `mcp/` | MCP types, transports, connection state machine, and manager |
 | `webfetch.ts` | Web fetch with SSRF protection |
 | `server.ts` | HTTP API server with SSE events |
 | `model-catalog.ts` | Model catalog (context window, pricing) |

@@ -1,14 +1,14 @@
 import type { AgentConfig } from "./config.js";
-import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, saveApproval } from "./config.js";
+import { loadPermissionLists, loadPolicyRules, loadSavedApprovals } from "./config.js";
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
-import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type ToolDiff, type TodoItem, type AskUserRequest } from "./tools.js";
-import { invalidateFileIndex } from "./tui/at-complete.js";
-import { detectBuildCommand, runBuild, type BuildResult } from "./build.js";
+import { getTool, allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
+import { invalidateFileIndex } from "./file-index.js";
+import { detectBuildCommand, type BuildResult } from "./build.js";
 import { trimHistory, summariseOutput, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "./context.js";
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
-import { parseDiagnostics, formatDiagnostics, classifyError, detectVerifyCmds, type VerifyCommands } from "./diagnostics.js";
+import { parseDiagnostics, formatDiagnostics, classifyError, type VerifyCommands } from "./diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "./prompt-builder.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
@@ -20,10 +20,9 @@ import { JsonlLogger } from "./logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 import { loadRcFile } from "./config.js";
 import { McpManager, type McpServerConfig } from "./mcp.js";
-import { validateSchema } from "./json-schema.js";
 import { watchWorkdir, type ReloadWatcher } from "./watch.js";
 import { discoverSkills, findSkill, type Skill } from "./skills.js";
-import { discoverAgents, findAgent, filterToolNamesForDef, type AgentDef } from "./agents.js";
+import { discoverAgents, findAgent, type AgentDef } from "./agents.js";
 import { buildRepoMap } from "./repo-map.js";
 import { buildAgentGuideBlock } from "./agents-guide.js";
 import {
@@ -41,177 +40,43 @@ import {
 
 import { SteeringInbox } from "./steering.js";
 import { randomUUID } from "node:crypto";
-import * as ui from "./ui.js";
+import { consoleReporter } from "./io/console-reporter.js";
+import type { Reporter } from "./io/reporter.js";
+import {
+  resolveVerify as resolveVerificationCommands,
+  verifyAll as runVerification,
+  failureSignature as getFailureSignature,
+  collectRunDiff as collectVerificationDiff,
+  selfReviewGate as runSelfReviewGate,
+  type VerificationRuntime,
+  type SelfReviewRuntime,
+} from "./agent/verification.js";
+import {
+  callMcpTool as callMcpToolBridge,
+  confirmMcpTool as confirmMcpToolBridge,
+  connectMcp as connectMcpBridge,
+  invokeMcpTool as invokeMcpToolBridge,
+  mcpStatus as mcpStatusBridge,
+  rebuildToolList as rebuildMcpToolList,
+  shutdownMcp as shutdownMcpBridge,
+  type McpBridgeRuntime,
+} from "./agent/mcp-bridge.js";
+import { InteractionBroker, type InteractionRuntime } from "./agent/interaction.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
 
-export interface AgentRunResult {
-  success: boolean;
-  steps: number;
-  buildCmd: string | null;
-  summary: string;
-}
+import {
+  EVENT_SCHEMA_VERSION,
+  type AgentEvent,
+  type AgentRunResult,
+  type UsageTotals,
+  type VerificationInfo,
+  applyToolFilter,
+  resolvePrimaryConfig,
+} from "./agent/types.js";
 
-/**
- * Event schema version — bumped when AgentEvent changes shape.
- * v2 (additive): `run_start` gains schemaVersion/agent, `finish` gains
- * usage/verification, new event types: compaction, agent_start, agent_end,
- * tool_progress, question_request, queue, context.
- * Consumers on v1 ignore events/fields they don't know.
- */
-export const EVENT_SCHEMA_VERSION = 2;
-
-/** Verification outcome attached to `finish` — the completion gate's verdict. */
-export interface VerificationInfo {
-  /** true = build/tests pass; false = failing; null = nothing to verify. */
-  ok: boolean | null;
-  detail: string;
-}
-
-export interface UsageTotals {
-  calls: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-}
-
-/**
- * Structured run events — emitted by the Agent so alternative frontends
- * (the `scoder serve` HTTP/SSE API) can render runs without touching the UI.
- */
-export type AgentEvent =
-  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string; permission: string; schemaVersion?: number; agent?: string }
-  | { type: "step"; step: number; maxSteps: number }
-  | { type: "llm_delta"; delta: string }
-  /** I-05: reasoning/thinking stream delta (rendered dim, toggleable). */
-  | { type: "llm_reasoning"; delta: string }
-  | { type: "llm_usage"; usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number } }
-  | { type: "tool_call"; step: number; id: string; name: string; args: Record<string, unknown> }
-  | { type: "tool_output"; name: string; stream: "stdout" | "stderr"; delta: string }
-  | {
-      type: "tool_result";
-      step: number;
-      name: string;
-      /** T6: tool_call id — correlate với event tool_call (parallel calls). */
-      id: string;
-      ok: boolean;
-      output: string;
-      /** Present for file-writing tools — unified diff of the change. */
-      diff?: ToolDiff;
-      /** T7: data URL khi tool đọc được ảnh — TUI render, không gửi LLM. */
-      image?: string;
-      /** Phase 5: true when output comes from a third-party MCP tool/resource. */
-      untrusted?: boolean;
-    }
-  | { type: "build"; success: boolean; command: string; output: string }
-  | { type: "todo"; items: TodoItem[] }
-  /** User steering input accepted into the inbox (delivered at next step boundary). */
-  | { type: "steer_queued"; mode: "steer" | "queue"; text: string }
-  /** Steering batch delivered into the conversation at a step boundary. */
-  | { type: "steer_delivered"; count: number }
-  /** MCP connect/status line (routed through the event stream, not stderr). */
-  | { type: "mcp_status"; line: string; server?: string; state?: string }
-  /** Guardrail Engine kích hoạt một rule (dùng cho metrics/debug frontend). */
-  | { type: "guardrail"; rule: string; action: string; reason: string }
-  /** T-03: permission prompt — frontend renders a modal, answers via resolvePermission(). */
-  | {
-      type: "permission_request";
-      id: string;
-      kind: "shell" | "edit" | "mcp";
-      label: string;
-      command?: string;
-      diff?: string;
-      alwaysAllowPrefix?: string;
-      timeoutSecs: number;
-    }
-  /** v2: LLM compaction actually ran (manual via /compact or auto in-loop). */
-  | { type: "compaction"; tokensBefore: number; tokensAfter: number; manual?: boolean }
-  /** v2: a subagent started (parentId links to the spawning agent). */
-  | { type: "agent_start"; id: string; parentId?: string; name: string; description: string; model: string }
-  /** v2: a subagent finished. */
-  | { type: "agent_end"; id: string; ok: boolean; steps: number; summary: string }
-  /** v2: progress of a long-running tool (e.g. MCP notifications/progress). */
-  | { type: "tool_progress"; id: string; name: string; current?: number; total?: number; message?: string }
-  /** v2: agent asks the user a question (ask_user tool). */
-  | { type: "question_request"; id: string; question: string; options?: string[]; multiple?: boolean; timeoutSecs: number }
-  /** v2: pending steering/queue depth — HUD badge source. */
-  | { type: "queue"; pending: number; steering: number }
-  /** v2: context window pressure after an LLM turn. */
-  | { type: "context"; tokens: number; window: number; pct: number; compacted?: boolean }
-  | { type: "finish"; success: boolean; steps: number; summary: string; usage?: UsageTotals; verification?: VerificationInfo }
-  | { type: "error"; message: string };
-
-export interface ResolvedPrimary {
-  config: AgentConfig;
-  def: AgentDef | null;
-}
-
-/**
- * v2 (3.1): resolve the primary agent for a run — apply its tool filter
- * inputs (permission/model/routing/temperature/steps/reasoning) onto the
- * runtime config BEFORE the client, ctx and tools are built.
- *
- * Resolution order for the model: rc/CLI routing[name] → def.model →
- * config.model (unchanged). Cross-provider "provider/model" refs rebuild the
- * provider resolution exactly like setModel does.
- *
- * Subagent defs passed programmatically (task runner) are applied as well —
- * the CLI/TUI layer is responsible for not offering subagent mode to users.
- */
-export function resolvePrimaryConfig(config: AgentConfig): ResolvedPrimary {
-  const name = (config.agent ?? "build").trim() || "build";
-  let def = findAgent(config.workdir, name);
-  if (!def) {
-    ui.warn(`agent "${name}" not found — falling back to the default build agent`);
-    def = findAgent(config.workdir, "build");
-    if (!def) return { config, def: null };
-  }
-  if (def.mode === "subagent") {
-    // Programmatic subagents are fine; warn only when this came from user selection.
-    ui.warn(`agent "${def.name}" is a subagent — it runs via the task tool; using it as primary anyway (scoder --agent).`);
-  }
-  const out: AgentConfig = { ...config, agent: def.name };
-  const modelRef = config.routing?.[def.name as "plan" | "build" | "review"] ?? def.model;
-  if (modelRef && modelRef.trim()) {
-    const [prov, id] = splitProviderModel(modelRef.trim());
-    if (prov && prov !== out.provider) {
-      const rcProviders = parseCustomProviders(loadRcFile(out.workdir).providers);
-      const resolved = resolveProvider(prov, rcProviders);
-      if ("def" in resolved) {
-        out.provider = prov as "openai" | "anthropic";
-        out.providerDef = resolved.def;
-        out.model = id;
-        out.baseUrl = resolved.def.baseUrl || out.baseUrl;
-        out.apiKey = process.env[resolved.def.apiKeyEnv] || out.apiKey;
-      } else {
-        ui.warn(`agent "${def.name}": provider "${prov}" not resolvable (${resolved.error}) — keeping ${out.model}`);
-      }
-    } else {
-      out.model = id ?? modelRef.trim();
-    }
-  }
-  if (def.temperature !== undefined) out.temperature = def.temperature;
-  if (def.maxTokens !== undefined) out.maxTokens = def.maxTokens;
-  if (def.reasoning) out.reasoning = def.reasoning;
-  if (def.steps !== undefined && Number.isFinite(def.steps) && def.steps >= 1) out.maxSteps = Math.floor(def.steps);
-  if (def.permission) out.permissionMode = def.permission;
-  return { config: out, def };
-}
-
-/** Filter tool specs for the resolved def; warn about unknown whitelist names. */
-function applyToolFilter(specs: ToolSpec[], def: AgentDef | null): ToolSpec[] {
-  if (!def) return specs;
-  const before = specs.length;
-  const names = filterToolNamesForDef(specs.map((s) => s.function.name), def);
-  if (def.tools?.length) {
-    const known = new Set(specs.map((s) => s.function.name.toLowerCase()));
-    const unknown = def.tools.filter((t) => !known.has(t.toLowerCase()) && !t.startsWith("mcp__"));
-    if (unknown.length > 0) ui.warn(`agent "${def.name}": unknown tools in definition dropped: ${unknown.join(", ")}`);
-  }
-  if (names.length === before) return specs;
-  const allow = new Set(names);
-  return specs.filter((s) => allow.has(s.function.name));
-}
+export { EVENT_SCHEMA_VERSION, resolvePrimaryConfig } from "./agent/types.js";
+export type { AgentEvent, AgentRunResult, ResolvedPrimary, UsageTotals, VerificationInfo } from "./agent/types.js";
 
 export class Agent {
   /** v2 event schema: stable id for the run — links agent_start/agent_end. */
@@ -224,9 +89,8 @@ export class Agent {
   private tools: ToolSpec[] = allToolSpecs();
   private ctx: ToolContext;
   private permissions: PermissionChecker;
-  /** T-03: pending permission prompts — id → resolve (TUI/serve answer them). */
-  private pendingPermissions = new Map<string, (a: PermissionAnswer) => void>();
-  private permSeq = 0;
+  /** T-03: frontend interaction broker — permission and ask_user flows. */
+  private interaction = new InteractionBroker();
   private session: SessionStore;
   /** v2 durable event log (session/ + events.jsonl) — crash recovery + steering. */
   private events: EventSessionStore;
@@ -273,10 +137,9 @@ export class Agent {
   private lastVerifySignature = "";
   private verifyStrikes = 0;
   /** v2: ask_user plumbing (frontends register handlers; serve → not-interactive). */
-  private onQuestion: ((req: AskUserRequest & { id: string }) => Promise<string | null>) | null = null;
-  private questionSeq = 0;
   /** Guardrail Engine — khởi tạo trong constructor (cần this.config). */
   private guardrails: ReturnType<typeof createGuardrailEngine>;
+  private reporter: Reporter;
 
   /** Log một quyết định guardrail ra JSONL + event (quan sát được, không ồn ào UI). */
   /** v2: single plan-update path — ledger + UI + event + log. */
@@ -284,7 +147,7 @@ export class Agent {
     this.plan = items;
     notePlan(this.memory, items);
     const done = items.filter((t) => t.status === "completed").length;
-    ui.info(`plan: ${done}/${items.length} completed`);
+    this.reporter.info(`plan: ${done}/${items.length} completed`);
     this.emit({ type: "todo", items: [...items] });
     this.logger.log({ type: "todo", items });
   }
@@ -343,103 +206,51 @@ export class Agent {
 
   /** Frontends register a question handler (TUI modal / REPL readline). */
   setQuestionHandler(fn: ((req: AskUserRequest & { id: string }) => Promise<string | null>) | null): void {
-    this.onQuestion = fn;
+    this.interaction.setQuestionHandler(fn);
   }
 
   private async programmaticAsk(req: AskUserRequest): Promise<{ ok: boolean; output: string }> {
-    if (!this.onQuestion) {
-      return {
-        ok: false,
-        output: "ERROR: ask_user is unavailable — non-interactive session. Proceed with your best judgment or stop and report.",
-      };
-    }
-    const id = `q${Date.now()}_${++this.questionSeq}`;
-    this.emit({
-      type: "question_request",
-      id,
-      question: req.question,
-      options: req.options,
-      multiple: req.multiple,
-      timeoutSecs: req.timeoutSecs ?? 120,
-    });
-    try {
-      const timeoutMs = (req.timeoutSecs ?? 120) * 1000;
-      const answer = await Promise.race([
-        this.onQuestion({ ...req, id }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-      ]);
-      if (answer == null || (typeof answer === "string" && !answer.trim())) {
-        return { ok: false, output: "ERROR: ask_user timed out or was cancelled." };
-      }
-      this.logger.log({ type: "ask_user", question: req.question, answer: String(answer).slice(0, 500) });
-      return { ok: true, output: `User answered: ${answer}` };
-    } catch (err) {
-      return { ok: false, output: `ERROR: ask_user failed: ${(err as Error).message.slice(0, 200)}` };
-    }
+    return this.interaction.ask(this.interactionRuntime(), req);
+  }
+
+  private interactionRuntime(): InteractionRuntime {
+    return {
+      logger: this.logger,
+      emit: (event) => this.emit(event),
+      hasEventSink: () => this.onEvent !== null,
+    };
   }
 
   // ── v2: verification pipeline (build → test → typecheck → lint) ───────────
 
   /** Resolved verify commands: rc overrides → manifest detection → buildCmd. */
   private resolveVerify(buildCmd: string): VerifyCommands {
-    const cfg = this.config.verifyCmds ?? {};
-    const detected = detectVerifyCmds(this.config.workdir);
-    const pick = (name: keyof VerifyCommands, fallback: string | undefined): string | undefined => {
-      const v = cfg[name];
-      if (v === "") return undefined; // explicit disable
-      return v ?? fallback;
-    };
-    return {
-      build: pick("build", buildCmd),
-      test: pick("test", detected.test),
-      typecheck: pick("typecheck", detected.typecheck),
-      lint: pick("lint", detected.lint),
-    };
+    return resolveVerificationCommands(this.config, buildCmd);
   }
 
   /** Run the full gate: build → test → typecheck → lint, fail fast, one build event per cmd. */
   private async verifyAll(buildCmd: string): Promise<BuildResult> {
-    const v = this.resolveVerify(buildCmd);
-    const outputs: Array<{ cmd: string; res: BuildResult }> = [];
-    const runOne = async (cmd: string): Promise<BuildResult> => {
-      const res = await runBuild(this.config.workdir, cmd, (stream, delta) =>
-        this.handleToolOutput("build", stream, delta),
-      );
-      this.endToolStream();
-      ui.buildStatus(res.success, res.output);
-      this.emit({ type: "build", success: res.success, command: cmd, output: res.output });
-      this.logger.log({ type: "build", success: res.success, command: cmd, output: res.output.slice(0, 10_000) });
-      return res;
+    const runtime: VerificationRuntime = {
+      config: this.config,
+      reporter: this.reporter,
+      logger: this.logger,
+      events: this.events,
+      emit: (event) => this.emit(event),
+      onToolOutput: (stream, delta) => this.handleToolOutput("build", stream, delta),
+      endToolStream: () => this.endToolStream(),
+      setLastBuildResult: (result) => { this.lastBuildResult = result; },
     };
-    // Always verify the build when one is configured; test/typecheck/lint add on.
-    for (const cmd of [v.build, v.test, v.typecheck, v.lint]) {
-      if (!cmd) continue;
-      const res = await runOne(cmd);
-      outputs.push({ cmd, res });
-      if (!res.success) break;
-    }
-    if (outputs.length === 0) {
-      return { success: true, command: buildCmd, output: "(no verify commands)" };
-    }
-    const allOk = outputs.every((o) => o.res.success);
-    const combined = outputs.map((o) => `$ ${o.cmd}\n${o.res.output}`).join("\n\n");
-    this.lastBuildResult = { success: allOk, command: outputs.map((o) => o.cmd).join(" && "), output: combined };
-    this.events.append({ type: "build.checked", success: allOk, command: this.lastBuildResult.command, output: combined.slice(0, 10_000) });
-    return this.lastBuildResult;
+    return runVerification(runtime, buildCmd);
   }
 
   /** Signature of a verification failure — stable across cosmetic differences. */
   private failureSignature(output: string): string {
-    const diags = parseDiagnostics(output);
-    if (diags.length > 0) return diags.slice(0, 5).map((d) => d.code ?? d.message).join("|");
-    return output.toLowerCase().replace(/\d+/g, "N").replace(/\s+/g, " ").slice(0, 300);
+    return getFailureSignature(output);
   }
 
   /** Collect the run's diff texts (capped) for the self-review pass. */
   private collectRunDiff(): string {
-    if (this.runDiffs.length === 0) return "";
-    const joined = this.runDiffs.join("\n");
-    return joined.length > 12_000 ? `…[truncated]\n${joined.slice(-12_000)}` : joined;
+    return collectVerificationDiff(this.runDiffs);
   }
 
   /**
@@ -448,31 +259,19 @@ export class Agent {
    * infrastructure problems never block completion.
    */
   private async selfReviewGate(): Promise<string | null> {
-    if (this.config.selfReview === false) return null;
-    if (this.selfReviewDone) return null;
-    if (!this.filesModified) return null;
-    this.selfReviewDone = true;
-    const diff = this.collectRunDiff();
-    if (!diff) return null;
-    const prompt =
-      `You are reviewing an agent's diff for this task:\n\nTASK: ${this.currentTask}\n\nDIFF:\n${diff}\n\n` +
-      `List ONLY blocking issues (correctness, security, or acceptance violations), each on its own line prefixed with "[blocking]" ` +
-      `and include file:line and a one-line fix. If there are no blocking issues, reply exactly "LGTM".`;
-    try {
-      const res = await this.client.chat([{ role: "user", content: prompt }], [], { signal: this.runSignal.signal });
-      this.recordLlmUsage(res.usage);
-      const text = (res.message.content ?? "").trim();
-      const blocking = text.split("\n").filter((l) => /\[blocking\]/i.test(l));
-      if (blocking.length === 0) {
-        this.logger.log({ type: "self_review", verdict: /^LGTM\b/im.test(text) ? "lgtm" : "no-blocking-findings" });
-        return null;
-      }
-      this.logger.log({ type: "self_review", verdict: "blocking", findings: blocking.slice(0, 10).join("\n").slice(0, 2000) });
-      return blocking.slice(0, 10).join("\n").slice(0, 3000);
-    } catch (err) {
-      this.logger.log({ type: "self_review", verdict: "error", error: (err as Error).message.slice(0, 200) });
-      return null;
-    }
+    const runtime: SelfReviewRuntime = {
+      config: this.config,
+      currentTask: () => this.currentTask,
+      runDiffs: () => this.runDiffs,
+      filesModified: () => this.filesModified,
+      selfReviewDone: () => this.selfReviewDone,
+      setSelfReviewDone: (value) => { this.selfReviewDone = value; },
+      client: this.client,
+      signal: this.runSignal.signal,
+      recordLlmUsage: (usage) => this.recordLlmUsage(usage),
+      logger: this.logger,
+    };
+    return runSelfReviewGate(runtime);
   }
 
   private logGuardrailDecision(d: GuardrailDecision): void {
@@ -485,11 +284,13 @@ export class Agent {
     // v2 (3.1): resolve the primary agent FIRST — model routing, tool filter,
     // permission mode and prompt override all derive from it. The local
     // `config` alias below keeps the rest of the body readable.
-    const resolved = resolvePrimaryConfig(config);
+    const reporter = config.reporter ?? consoleReporter;
+    const resolved = resolvePrimaryConfig(config, reporter);
     this.config = resolved.config;
     this.primaryDef = resolved.def;
     config = this.config;
-    this.tools = applyToolFilter(allToolSpecs(), resolved.def);
+    this.reporter = reporter;
+    this.tools = applyToolFilter(allToolSpecs(), resolved.def, reporter);
     this.guardrails = createGuardrailEngine(config.guardrails ?? {}, (d) => this.logGuardrailDecision(d));
     const commonOpts = {
       baseUrl: config.baseUrl,
@@ -533,6 +334,7 @@ export class Agent {
       sandbox: config.sandbox,
       allowSubagents: config.allowSubagents,
       askUser: (req) => this.programmaticAsk(req),
+      reporter: this.reporter,
     };
     // G7: thresholds từ rc limits.
     if (config.limits?.maxOutputChars) setMaxOutputChars(config.limits.maxOutputChars);
@@ -725,27 +527,7 @@ export class Agent {
    * Timeout ⇒ deny + auto-resolve (no leaked promise).
    */
   private programmaticPermissionPrompt(req: PermissionRequest): Promise<PermissionAnswer> {
-    if (!this.onEvent) return Promise.resolve("no");
-    const id = `perm-${++this.permSeq}`;
-    return new Promise<PermissionAnswer>((resolve) => {
-      const timer = setTimeout(() => {
-        if (this.pendingPermissions.delete(id)) resolve("no");
-      }, req.timeoutSecs * 1000);
-      this.pendingPermissions.set(id, (a) => {
-        clearTimeout(timer);
-        resolve(a);
-      });
-      this.emit({
-        type: "permission_request",
-        id,
-        kind: req.kind,
-        label: req.label,
-        ...(req.command !== undefined ? { command: req.command } : {}),
-        ...(req.diff !== undefined ? { diff: req.diff } : {}),
-        ...(req.alwaysAllowPrefix !== undefined ? { alwaysAllowPrefix: req.alwaysAllowPrefix } : {}),
-        timeoutSecs: req.timeoutSecs,
-      });
-    });
+    return this.interaction.permissionPrompt(this.interactionRuntime(), req);
   }
 
   /**
@@ -753,11 +535,7 @@ export class Agent {
    * HTTP API). Unknown id → silently ignored (already timed out).
    */
   resolvePermission(id: string, answer: PermissionAnswer): void {
-    const res = this.pendingPermissions.get(id);
-    if (res) {
-      this.pendingPermissions.delete(id);
-      res(answer);
-    }
+    this.interaction.resolvePermission(id, answer);
   }
 
   /** Aborted when abort() is called — cancels in-flight LLM requests (SIGINT). */
@@ -768,16 +546,16 @@ export class Agent {
    * first chunk; `endToolStream()` closes it after the tool completes.
    */
   private handleToolOutput = (name: string, stream: "stdout" | "stderr", delta: string): void => {
-    if (!ui.isToolStreamOpen()) {
-      ui.toolStreamStart();
+    if (!this.reporter.isToolStreamOpen()) {
+      this.reporter.toolStreamStart();
     }
-    ui.toolStreamChunk(delta);
+    this.reporter.toolStreamChunk(delta);
     this.emit({ type: "tool_output", name, stream, delta });
   };
 
   /** Close the live tool-output block (if open) before printing the next UI element. */
   private endToolStream(): void {
-    if (ui.isToolStreamOpen()) ui.toolStreamEnd();
+    if (this.reporter.isToolStreamOpen()) this.reporter.toolStreamEnd();
   }
 
   /** Push one tool-result message back into the conversation. */
@@ -817,7 +595,7 @@ export class Agent {
     output: string,
     logExtra: Record<string, unknown>,
   ): void {
-    ui.toolResult(tc.name, false, output);
+    this.reporter.toolResult(tc.name, false, output);
     this.emit({ type: "tool_result", step, id: tc.id, name: tc.name, ok: false, output });
     this.logger.log({ type: "tool", step, tool: tc.name, ok: false, ...logExtra });
     this.pushToolResult(tc, output);
@@ -868,7 +646,7 @@ export class Agent {
       return {};
     }
 
-    ui.toolCall(tc.name, args);
+    this.reporter.toolCall(tc.name, args);
     this.currentToolCall = { step: steps, id: tc.id, name: tc.name };
     this.emit({ type: "tool_call", step: steps, id: tc.id, name: tc.name, args });
 
@@ -970,7 +748,7 @@ export class Agent {
     // User pressed [q]uit in an edit-confirmation prompt — stop the whole run.
     if (this.permissions.abortRequested) {
       this.aborted = true;
-      ui.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
+      this.reporter.warn("edit confirmation aborted by user ([q]uit) — stopping the run");
     }
 
     const filesModified = result.ok && (tc.name === "write_file" || tc.name === "edit_file");
@@ -987,7 +765,7 @@ export class Agent {
         }
         this.endToolStream();
         this.currentToolCall = null;
-        ui.toolResult(tc.name, result.ok, result.output);
+        this.reporter.toolResult(tc.name, result.ok, result.output);
         this.emit({
           type: "tool_result",
           step: steps,
@@ -1009,27 +787,7 @@ export class Agent {
 
   /** MCP tool call with output clamp (extracted for I-09 readability). */
   private async invokeMcpTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-    const reg = this.mcp?.getTool(name);
-    if (!reg) return { ok: false, output: `ERROR: unknown tool "${name}"` };
-    // M2: validate args theo inputSchema — lỗi local, không gọi server.
-    const schemaErrors = validateSchema(args, reg.def.inputSchema);
-    if (schemaErrors.length > 0) {
-      return { ok: false, output: `ERROR: invalid arguments for ${name}:\n${schemaErrors.join("\n")}` };
-    }
-    // Phase 5: audit log MCP tool invocations (redacted, JSONL).
-    this.logger.log({
-      type: "mcp_audit",
-      tool: name,
-      server: reg.serverName,
-      args: redactSecrets(JSON.stringify(args)),
-      ts: new Date().toISOString(),
-    });
-    const r = await reg.conn.callTool(reg.toolName, args);
-    return {
-      ok: r.ok,
-      output: r.output.length > 20_000 ? r.output.slice(0, 20_000) + "\n... [truncated]" : r.output,
-      untrusted: true,
-    };
+    return invokeMcpToolBridge(this.mcpBridgeRuntime(), name, args);
   }
 
   /**
@@ -1061,7 +819,7 @@ export class Agent {
     this.usageTotals.inputTokens += input;
     this.usageTotals.outputTokens += output;
     this.usageTotals.cachedTokens += cached;
-    ui.info(`tokens: in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"}`);
+    this.reporter.info(`tokens: in=${usage.prompt_tokens ?? "?"} out=${usage.completion_tokens ?? "?"}`);
     this.emit({
       type: "llm_usage",
       usage: { input_tokens: input, output_tokens: output, cached_tokens: cached },
@@ -1109,10 +867,10 @@ export class Agent {
         }
         if (chunk.contentDelta) {
           if (!started) {
-            ui.llmStreamStart("assistant");
+            this.reporter.llmStreamStart("assistant");
             started = true;
           }
-          ui.llmStreamChunk(chunk.contentDelta);
+          this.reporter.llmStreamChunk(chunk.contentDelta);
           this.emit({ type: "llm_delta", delta: chunk.contentDelta });
           streamedText += chunk.contentDelta;
         }
@@ -1120,7 +878,7 @@ export class Agent {
         if (chunk.final) final = chunk.final;
       }
 
-      if (started) ui.llmStreamEnd();
+      if (started) this.reporter.llmStreamEnd();
 
       if (final) {
         if ((final.message.content == null || final.message.content === "") && streamedText) {
@@ -1131,7 +889,7 @@ export class Agent {
       // No finish_reason seen — fall through to non-streaming
       return this.client.chat(this.messages, this.tools);
     } catch (caught) {
-      if (started) ui.llmStreamEnd();
+      if (started) this.reporter.llmStreamEnd();
       // A timeout is a real failure, not a streaming quirk — falling back to
       // non-streaming would just wait the full timeout a second time.
       const e = caught as Error;
@@ -1148,7 +906,7 @@ export class Agent {
       ) {
         const partial = this.client.lastPartialToolCalls ?? [];
         if (partial.length > 0) {
-          ui.warn("stream interrupted after complete tool-call(s) — continuing with what was received");
+          this.reporter.warn("stream interrupted after complete tool-call(s) — continuing with what was received");
           return {
             message: {
               role: "assistant",
@@ -1162,7 +920,7 @@ export class Agent {
       }
       if (err instanceof LlmError && !this.streamFallbackWarned) {
         this.streamFallbackWarned = true;
-        ui.warn(`streaming unavailable (${(err as Error).message.slice(0, 120)}) — falling back to non-streaming`);
+        this.reporter.warn(`streaming unavailable (${(err as Error).message.slice(0, 120)}) — falling back to non-streaming`);
       }
       return this.client.chat(this.messages, this.tools);
     }
@@ -1172,44 +930,30 @@ export class Agent {
     return this.config.buildCmd ?? detectBuildCommand(this.config.workdir) ?? "echo BUILD";
   }
 
+  private mcpBridgeRuntime(): McpBridgeRuntime {
+    return {
+      config: this.config,
+      reporter: this.reporter,
+      logger: this.logger,
+      permissions: this.permissions,
+      primaryDef: this.primaryDef,
+      pendingAllowedTools: this.pendingAllowedTools,
+      getMcp: () => this.mcp,
+      setMcp: (manager) => { this.mcp = manager; },
+      setTools: (tools) => { this.tools = tools; },
+      emit: (event) => this.emit(event),
+      confirmMcpTool: (name) => this.confirmMcpTool(name),
+    };
+  }
+
   /** Connect configured MCP stdio servers (if any) and merge their tools. */
   private async connectMcp(): Promise<void> {
-    const servers = this.config.mcpServers ?? {};
-    if (Object.keys(servers as Record<string, unknown>).length === 0) return;
-    // Idempotent: /mcp may connect while idle — never spawn a second set of
-    // server processes (the first manager's children would leak).
-    if (this.mcp) return;
-    if (this.config.permissionMode === "readonly") {
-      ui.warn("readonly mode: MCP tools are disabled (they bypass the permission system)");
-    }
-    this.mcp = new McpManager(servers);
-    this.mcp.onStatus = (line) => {
-      this.logger.log({ type: "mcp_status", line });
-      this.emit({ type: "mcp_status", line });
-      ui.info(line); // setQuiet suppresses this in the TUI — alt-screen stays clean
-    };
-    // Sidebar TUI: trạng thái máy trạng thái per-server (M1) — event structured
-    // (server/state) để reducer giữ map, không append thêm notice vào chat.
-    this.mcp.onServerState = (name, st, detail) => {
-      const line = `MCP "${name}" ${st}${detail ? ` — ${detail}` : ""}`;
-      this.logger.log({ type: "mcp_status", line, server: name, state: st });
-      this.emit({ type: "mcp_status", line, server: name, state: st });
-    };
-    await this.mcp.connectAll();
-    this.rebuildToolList();
+    await connectMcpBridge(this.mcpBridgeRuntime());
   }
 
   /** Rebuild built-in and connected MCP tool specs for the current skill scope. */
   private rebuildToolList(): void {
-    const mcpSpecs = this.mcp ? [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()] : [];
-    let base = applyToolFilter(allToolSpecs(), this.primaryDef);
-    if (this.pendingAllowedTools && this.pendingAllowedTools.length > 0) {
-      const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
-      base = base.filter((s) => allow.has(s.function.name.toLowerCase()));
-      this.tools = [...base, ...mcpSpecs.filter((s) => allow.has(s.function.name.toLowerCase()))];
-    } else {
-      this.tools = [...base, ...mcpSpecs];
-    }
+    rebuildMcpToolList(this.mcpBridgeRuntime());
   }
 
   /**
@@ -1219,8 +963,7 @@ export class Agent {
    * dispose() when their agent is done.
    */
   private shutdownMcp(): void {
-    this.mcp?.killAll();
-    this.mcp = null;
+    shutdownMcpBridge(this.mcpBridgeRuntime());
   }
 
   /** M4: đóng hot-reload watcher (khi agent bị hủy vĩnh viễn). */
@@ -1244,7 +987,7 @@ export class Agent {
     const buildCmd = this.buildCmd;
     // @file mention expansion — task trước khi build messages.
     task = expandMentions(task, this.config.workdir);
-    ui.banner("scoder", [
+    this.reporter.banner("scoder", [
       ["task", task],
       ["model", `${this.client.model} (${this.config.provider}${this.config.stream ? ", stream" : ""})`],
       ["workdir", this.config.workdir],
@@ -1265,7 +1008,7 @@ export class Agent {
     this.verifyStrikes = 0;
     this.lastVerifySignature = "";
     // Skills 2.0: rebuild tool list honouring a staged skill's allowed-tools.
-    let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef);
+    let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef, this.reporter);
     if (this.pendingAllowedTools && this.pendingAllowedTools.length > 0) {
       const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
       baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
@@ -1410,11 +1153,11 @@ export class Agent {
     if (restoredPlan) {
       this.plan = restoredPlan;
       this.emit({ type: "todo", items: [...this.plan] });
-      ui.info(`restored plan: ${this.plan.length} step(s)`);
+      this.reporter.info(`restored plan: ${this.plan.length} step(s)`);
     }
 
-    ui.header(`RESUME ${session.id}`);
-    ui.info(`previous task: ${session.task} (${session.steps} step(s) done)`);
+    this.reporter.header(`RESUME ${session.id}`);
+    this.reporter.info(`previous task: ${session.task} (${session.steps} step(s) done)`);
 
     if (followUp) {
       for (const content of this.pendingContext) this.messages.push({ role: "user", content });
@@ -1494,7 +1237,7 @@ export class Agent {
         this.guardrails.notifySteered();
         this.emit({ type: "steer_delivered", count: steered.length });
         this.emit({ type: "queue", ...this.steerInbox.counts() });
-        ui.info(`steer: +${steered.length} user message(s) delivered`);
+        this.reporter.info(`steer: +${steered.length} user message(s) delivered`);
       }
 
       // v2 (3.4): fold the ledger into the conversation every 6 steps.
@@ -1503,7 +1246,7 @@ export class Agent {
       }
 
       steps++;
-      ui.step(steps, this.config.maxSteps, "thinking...");
+      this.reporter.step(steps, this.config.maxSteps, "thinking...");
       this.events.claimExecution(steps);
       this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
 
@@ -1549,7 +1292,7 @@ export class Agent {
       if (!hasToolCalls) {
         this.messages.push({ role: "assistant", content: text });
         this.events.append({ type: "message.added", message: { role: "assistant", content: text } });
-        ui.llm("agent", text);
+        this.reporter.llm("agent", text);
         scanDecisions(this.memory, text);
       } else {
         this.messages.push({
@@ -1719,7 +1462,7 @@ export class Agent {
       // the history below the trigger before compaction ever sees it.
       if (compactionCfg && shouldCompact(this.messages, compactionCfg)) {
         try {
-          ui.info("compaction: summarizing older history…");
+          this.reporter.info("compaction: summarizing older history…");
           const tokensBefore = estimateTokens(this.messages);
           const summaryInput = extractSummaryInput(this.currentTask, this.messages);
           const mem = this.memoryBlock();
@@ -1743,12 +1486,12 @@ export class Agent {
             summary: summary.slice(0, 2000),
           });
           this.snapshotMemory("compaction");
-          ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${this.messages.length} messages)`);
+          this.reporter.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${this.messages.length} messages)`);
           this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: false });
           this.emitContextEvent(true);
         } catch (err) {
           // Compaction is best-effort — mechanical trim stays as fallback.
-          ui.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
+          this.reporter.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
           // Fallback uses the legacy conservative cap: the next LLM call must
           // not leave a near-full window if summarization failed.
           this.messages = trimHistory(this.messages, safeTrimBudget);
@@ -1829,7 +1572,7 @@ export class Agent {
     const messagesBefore = this.messages.length;
     const summaryInput = extractSummaryInput(this.currentTask, this.messages);
     const mem = this.memoryBlock();
-    ui.info("compaction: summarizing older history…");
+    this.reporter.info("compaction: summarizing older history…");
     try {
       // A previous run interrupted with Esc leaves the shared signal aborted.
       if (this.runSignal.signal.aborted) this.resetRunSignal();
@@ -1852,7 +1595,7 @@ export class Agent {
         manual: true,
         summary: summary.slice(0, 2000),
       });
-      ui.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens)`);
+      this.reporter.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens)`);
       this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: true });
       this.emitContextEvent(true);
       this.snapshotMemory("compaction-manual");
@@ -1862,7 +1605,7 @@ export class Agent {
       };
     } catch (err) {
       const msg = (err as Error).message.slice(0, 200);
-      ui.warn(`compaction failed (${msg})`);
+      this.reporter.warn(`compaction failed (${msg})`);
       return { ok: false, message: `compaction failed: ${msg}` };
     }
   }
@@ -1893,77 +1636,17 @@ export class Agent {
 
   /** MCP server overview (for /mcp): config always; tools once connected. */
   async mcpStatus(): Promise<Array<{ name: string; command: string; connected: boolean; tools: Array<{ name: string; description?: string }>; serverInfo: { name?: string; version?: string }; capabilities: Record<string, unknown>; resourceCount: number; promptCount: number }>> {
-    const configs = (this.config.mcpServers ?? {}) as Record<string, { command?: string; url?: string }>;
-    // M3: http server hiển thị url thay vì command.
-    const target = (cfg: { command?: string; url?: string }) => cfg.url ?? cfg.command ?? "(unknown)";
-    if (!this.mcp) {
-      return Object.entries(configs).map(([name, cfg]) => ({ name, command: target(cfg), connected: false, tools: [], serverInfo: {}, capabilities: {}, resourceCount: 0, promptCount: 0 }));
-    }
-    await this.connectMcp();
-    // MCP A: connected = actual connection state, not tool count (0-tool servers
-    // still report connected: true). Includes serverInfo + capabilities.
-    const states = this.mcp.serverStates();
-    const stateMap = new Map(states.map((s) => [s.name, s]));
-    const byServer = new Map(this.mcp.listToolsByServer().map((s) => [s.server, s.tools]));
-    return Object.entries(configs).map(([name, cfg]) => {
-      const st = stateMap.get(name);
-      return {
-        name,
-        command: target(cfg),
-        connected: st?.state === "ready",
-        tools: byServer.get(name) ?? [],
-        serverInfo: st?.serverInfo ?? {},
-        capabilities: st?.capabilities ?? {},
-        resourceCount: st?.resourceCount ?? 0,
-        promptCount: st?.promptCount ?? 0,
-      };
-    });
+    return mcpStatusBridge(this.mcpBridgeRuntime());
   }
 
   /** Call one MCP tool directly by its full name (mcp__server__tool) (/mcp exec). */
   async callMcpTool(fullName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string; structured?: Record<string, unknown> }> {
-    await this.connectMcp();
-    const reg = this.mcp?.getTool(fullName);
-    if (!reg) {
-      return { ok: false, output: `ERROR: unknown MCP tool "${fullName}" — run /mcp to list servers and tools.` };
-    }
-    const trust = (this.config.mcpServers as Record<string, McpServerConfig>)[reg.serverName]?.trust;
-    const decision = this.permissions.classifyMcpTool(fullName, trust) ??
-      (this.config.permissionMode === "readonly" ? { decision: "deny" as const, reason: "readonly mode" } :
-        this.config.permissionMode === "ask" ? { decision: "ask" as const, reason: "requires user confirmation" } :
-          { decision: "allow" as const, reason: "auto mode" });
-    if (decision.decision === "deny") return { ok: false, output: `ERROR: MCP tool denied (${decision.reason}).` };
-    if (decision.decision === "ask" && !this.config.yes && !(await this.confirmMcpTool(fullName))) {
-      return { ok: false, output: `ERROR: user denied permission to call MCP tool: ${fullName}` };
-    }
-    // Text shorthand (`/mcp exec <tool> free text`): bind to the tool's first
-    // required string property from its inputSchema, so users don't have to
-    // hand-write JSON for the common one-argument case.
-    if ("__text" in args && typeof args.__text === "string") {
-      const props = (reg.def.inputSchema?.properties ?? {}) as Record<string, { type?: string }>;
-      const required = (reg.def.inputSchema?.required ?? []) as string[];
-      const target =
-        required.find((k) => props[k]?.type === "string") ??
-        Object.keys(props).find((k) => props[k]?.type === "string");
-      if (!target) {
-        return { ok: false, output: `ERROR: "${fullName}" has no string parameter — pass JSON args instead.` };
-      }
-      args = { [target]: args.__text };
-    }
-    try {
-      return await reg.conn.callTool(reg.toolName, args);
-    } catch (err) {
-      return { ok: false, output: `ERROR: ${(err as Error).message}` };
-    }
+    return callMcpToolBridge(this.mcpBridgeRuntime(), fullName, args);
   }
 
   /** Ask user to approve an MCP tool call; "always" persists a project-scoped rule. */
   async confirmMcpTool(fullName: string): Promise<boolean> {
-    return this.permissions.confirmMcpTool(fullName, () => {
-      try {
-        saveApproval(this.config.workdir, { action: fullName, resource: "*", effect: "allow" });
-      } catch { /* persistence failure must not block the run */ }
-    });
+    return confirmMcpToolBridge(this.mcpBridgeRuntime(), fullName);
   }
 
   /** Switch permission mode at runtime (/permission) — rebuilds the checker. */  setPermissionMode(mode: "auto" | "ask" | "readonly"): void {
@@ -1980,7 +1663,7 @@ export class Agent {
       policyRules: loadPolicyRules(this.config.workdir),
     });
     this.ctx.permissionMode = mode;
-    ui.info(`permission mode → ${mode}`);
+    this.reporter.info(`permission mode → ${mode}`);
   }
 
   /**
@@ -2021,12 +1704,12 @@ export class Agent {
     this.events.append({ type: "finish", success, summary: summary.slice(0, 2000) });
     if (success) {
       if (chatOnly) {
-        ui.success(`Done in ${steps} step(s).`);
+        this.reporter.success(`Done in ${steps} step(s).`);
       } else {
-        ui.success(`Task complete in ${steps} step(s). Build passed: ${buildCmd}`);
+        this.reporter.success(`Task complete in ${steps} step(s). Build passed: ${buildCmd}`);
       }
     } else {
-      ui.error(`Task NOT complete. ${summary}`);
+      this.reporter.error(`Task NOT complete. ${summary}`);
     }
     const lb = this.lastBuildResult;
     const verification: VerificationInfo = chatOnly

@@ -3,8 +3,11 @@ import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import type { PermissionMode, PermissionRule, PermissionEffect } from "./permissions.js";
 import { parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
+import type { Reporter } from "./io/reporter.js";
 
 export interface AgentConfig {
+  /** Optional output port; omitted uses the classic console reporter. */
+  reporter?: Reporter;
   /** OpenAI-compatible base URL, e.g. https://api.openai.com/v1 */
   baseUrl: string;
   apiKey: string;

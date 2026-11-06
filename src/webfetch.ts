@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
-import type { ToolContext, ToolResult } from "./tools.js";
+import type { ToolContext, ToolResult } from "./tools/types.js";
 
 /**
  * web_fetch — read-only HTTP(S) fetch with SSRF protection.
