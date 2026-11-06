@@ -1,9 +1,9 @@
 /** `scoder mcp <list|add|remove|test|import>` subcommand. */
 import type { AgentConfig } from "../config/config.js";
-import type { McpServerConfig } from "../mcp.js";
+import type {McpServerConfig} from "../mcp/types.js";
 
 export async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | "test" | "import", restArgs: string[]): Promise<void> {
-  const { McpManager } = await import("../mcp.js");
+  const { McpManager } = await import("../mcp/manager.js");
   const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
   const { join, dirname } = await import("node:path");
   const { mkdirSync } = await import("node:fs");

@@ -1,14 +1,12 @@
 # commands/ — slash commands
 
 **Responsibility:** command metadata + parsing (`definitions.ts`), dispatch
-against a `CommandHost` (`registry.ts`), transcript export/search
-(`transcript.ts`), UI-independent transcript contract (`types.ts`).
+against a `CommandHost` (`registry.ts`).
 
-**Public API:** used by `cli/repl.ts` and `tui/`; legacy facades exist at
-`tui/commands.ts`, `tui/command-registry.ts`, `tui/transcript.ts`.
+**Public API:** used by `cli/repl.ts` and `tui/` (import from here directly —
+no facades).
 
-**Allowed imports:** core domains; never `tui/` (use `types.ts` for the
-transcript shape).
+**Allowed imports:** core domains; never `tui/`.
 
 **Anti-patterns:** adding UI framework imports; diverging command behavior
 between REPL and TUI (both go through `dispatchCommand`).

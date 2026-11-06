@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../dist/server.js";
+import { startServer } from "../dist/server/server.js";
 
 // ── Temp project: build.js fails until lib.js is fixed ──────────────────────
 const tmp = mkdtempSync(join(tmpdir(), "scoder-server-test-"));

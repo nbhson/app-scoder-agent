@@ -14,7 +14,6 @@ const GRAPH_OUT = resolve(new URL("..", import.meta.url).pathname, "docs", "arch
 
 // Existing violations intentionally retained until their planned phase.
 const ALLOWLIST = new Set([
-  "index.ts -> ./tui/command-registry.js",
 ]);
 
 function sourceFiles(dir, out = []) {

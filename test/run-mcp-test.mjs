@@ -1,5 +1,5 @@
 // MCP smoke test: connect to the mock MCP stdio server, discover tools, call one.
-import { McpManager } from "../dist/mcp.js";
+import {McpManager} from "../dist/mcp/manager.js";
 
 const manager = new McpManager({
   mock: { command: "node", args: [new URL("./mock-mcp.mjs", import.meta.url).pathname] },

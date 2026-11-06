@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseFrontmatter, loadSkillFile, discoverSkills, findSkill, formatSkillIndex } from "../dist/skills.js";
-import { getTool } from "../dist/tools.js";
-import { completeSlashCommand, parseSlashCommand, formatSlashHelp } from "../dist/tui/commands.js";
+import { parseFrontmatter, loadSkillFile, discoverSkills, findSkill, formatSkillIndex } from "../dist/context/skills.js";
+import {getTool} from "../dist/tools/registry.js";
+import { completeSlashCommand, parseSlashCommand, formatSlashHelp } from "../dist/commands/definitions.js";
 
 describe("skills", () => {
   const root = mkdtempSync(join(tmpdir(), "scoder-skills-"));
@@ -86,10 +86,10 @@ describe("slash command completion", () => {
     assert.equal(r?.candidates.length, 1);
   });
 
-  it("common-prefixes ambiguous matches (/sk → /skill)", () => {
+  it("unique prefix completes with trailing space (/sk → /skill)", () => {
     const r = completeSlashCommand("/sk");
-    assert.equal(r?.completed, "/skill");
-    assert.equal(r?.candidates.length, 2); // /skills + /skill
+    assert.equal(r?.completed, "/skill ");
+    assert.equal(r?.candidates.length, 1);
   });
 
   it("exact match completes with space", () => {
@@ -104,7 +104,7 @@ describe("slash command completion", () => {
   it("parseSlashCommand splits cmd + arg; help lists new commands", () => {
     assert.deepEqual(parseSlashCommand("/skill code-review"), { cmd: "/skill", arg: "code-review" });
     const help = formatSlashHelp("scoder tui");
-    assert.match(help, /\/skills/);
+    assert.match(help, /\/skill/);
     assert.match(help, /\/mcp/);
     assert.match(help, /\/permission/);
   });

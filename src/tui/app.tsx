@@ -32,7 +32,6 @@ import { useScrollMetrics } from "./hooks/use-scroll.js";
 import { useEventQueue } from "./hooks/use-event-queue.js";
 import { useSessionResume } from "./hooks/use-session-resume.js";
 import { useCommandHost } from "./hooks/use-command-host.js";
-import { useReview } from "./hooks/use-review.js";
 import { useTuiKeybinds } from "./hooks/use-keybinds.js";
 import { useSubmit } from "./hooks/use-submit.js";
 
@@ -122,16 +121,12 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   });
 
   const tuiHost = useCommandHost({
-    cfg, setCfg, createAgent, pushNotice, update, agentRef, runningRef, stateRef, eventQueue,
-    viewport, content, setScrollOffset, setPermMode,
+    cfg, setCfg, update, agentRef, runningRef, eventQueue, setScrollOffset, setPermMode,
   });
-
-  // ── Prompt-gate review flow (/review) ──────────────────────────────────────
-  const { reviewRef, reviewStep, reviewAnswer } = useReview(agentRef, createAgent, pushNotice);
 
   const { submit } = useSubmit({
     cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode,
-    reviewRef, reviewAnswer, reviewStep, tuiHost, agentRef, runningRef, stateRef,
+    tuiHost, agentRef, runningRef, stateRef,
     historyRef, setScrollOffset, createAgent, bumpFrame,
   });
 
@@ -209,7 +204,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               <Text dimColor>type a task to start — agent plans, edits, and builds</Text>
               <Text></Text>
               <Text dimColor>
-                ⏎ send · <Text bold>ctrl+s</Text> sessions · tab complete · /help · /skills
+                ⏎ send · <Text bold>ctrl+s</Text> sessions · tab complete · /help
               </Text>
             </Box>
           ) : (

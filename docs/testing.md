@@ -29,7 +29,6 @@ Tests are auto-discovered via `test/*.test.mjs`:
 | `test/server.test.mjs` | HTTP API: run lifecycle, abort, auth |
 | `test/tui.test.mjs` | Full-screen TUI in real PTY |
 | `test/tui-state.test.mjs` | Event reducer unit tests |
-| `test/review-flow.test.mjs` | /review prompt-gate wiring |
 | `test/core.test.mjs` | Diff, retry, context trimming, @file mentions |
 | `test/config.test.mjs` | Env/rc/cli precedence, logFile mapping |
 | `test/session.test.mjs` | Session store, prune, resolve |

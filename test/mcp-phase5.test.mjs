@@ -9,9 +9,9 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, copyFileSync } from "
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { parseConfigFile, loadConfigFile, mergeConfigs, discoverConfigs } from "../dist/mcp-import.js";
-import { PermissionChecker } from "../dist/permissions.js";
-import { McpManager } from "../dist/mcp.js";
+import { parseConfigFile, loadConfigFile, mergeConfigs, discoverConfigs } from "../dist/mcp/mcp-import.js";
+import { PermissionChecker } from "../dist/security/permissions.js";
+import {McpManager} from "../dist/mcp/manager.js";
 import { Agent } from "../dist/agent.js";
 
 // The mock MCP server lives in test/ — reference it by absolute path.

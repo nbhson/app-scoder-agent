@@ -10,10 +10,10 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync, existsSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolvePrimaryConfig, Agent } from "../dist/agent.js";
-import { filterToolNamesForDef, discoverAgents, selectableAgents, MUTATING_TOOL_SPECS } from "../dist/agents.js";
-import { getTool, AGENT_TOOLS } from "../dist/tools.js";
-import { buildRepoMap, extractSymbols, repoMapKey } from "../dist/repo-map.js";
-import { collectAgentGuides, extractFocusFiles, buildAgentGuideBlock, agentsMdTemplate } from "../dist/agents-guide.js";
+import { filterToolNamesForDef, discoverAgents, selectableAgents, MUTATING_TOOL_SPECS } from "../dist/context/agents.js";
+import {getTool, AGENT_TOOLS} from "../dist/tools/registry.js";
+import { buildRepoMap, extractSymbols, repoMapKey } from "../dist/context/repo-map.js";
+import { collectAgentGuides, extractFocusFiles, buildAgentGuideBlock, agentsMdTemplate } from "../dist/context/agents-guide.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "scoder-v2-"));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -327,7 +327,7 @@ describe("/agent + /init dispatch", () => {
     const wd = mkWorkdir();
     const cfg = { workdir: wd, permissionMode: "auto", agent: "build" };
     const { host, state } = fakeHost(cfg);
-    const { dispatchCommand } = await import("../dist/tui/command-registry.js");
+    const { dispatchCommand } = await import("../dist/commands/registry.js");
     const notices = [];
     const notice = (text) => notices.push(text);
     await dispatchCommand("/agent", host, notice);
@@ -347,7 +347,7 @@ describe("/agent + /init dispatch", () => {
     const wd = mkWorkdir();
     const cfg = { workdir: wd, permissionMode: "auto" };
     const { host } = fakeHost(cfg);
-    const { dispatchCommand } = await import("../dist/tui/command-registry.js");
+    const { dispatchCommand } = await import("../dist/commands/registry.js");
     const notices = [];
     const notice = (text) => notices.push(text);
     await dispatchCommand("/init", host, notice);

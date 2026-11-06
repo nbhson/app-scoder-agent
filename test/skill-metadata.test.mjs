@@ -5,7 +5,7 @@
  */
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { discoverSkills, loadSkillFile, skillWarnings } from "../dist/skills.js";
+import { discoverSkills, loadSkillFile, skillWarnings } from "../dist/context/skills.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

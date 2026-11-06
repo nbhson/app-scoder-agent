@@ -52,7 +52,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoin
 # Run a task
 scoder "add a ping function to src/network.ts"
 
-# Interactive REPL (supports /help, /clear, /compact, /cost, /model, /skills, /skill, /mcp, /review, /permission)
+# Interactive REPL (supports /help, /clear, /compact, /cost, /model, /skill, /mcp, /permission)
 scoder
 
 # Full-screen TUI with rich agent display
@@ -227,7 +227,7 @@ Read the current diff. Check for: null derefs, injection risks, ...
 
 - **Advertised to the model** — every run's system prompt lists skill names + descriptions; the agent reads a matching `SKILL.md` itself via `read_file` when a task fits
 - **Explicit load** — `/skill <name>` stages the skill's content; it is injected as context before your next task
-- **`/skills`** lists everything discovered (both scopes)
+- **Bare `/skill`** lists everything discovered (both scopes)
 - **Metadata (Anthropic convention)** — `description` is required (a skill without one is skipped with a warning); optional `allowed-tools` (comma-separated tool list, informational — enforcement goes through permission rules), `license`, `when-to-use`
 - **Validation warnings** — duplicate names across scopes warn (project wins); missing `description` skips the skill; warnings surface in the log/notice stream
 - **Hot-reload** — `.scoderrc` and `.scoder/skills/` are watched (debounced); a skill added mid-session is advertised on the next turn, no restart needed
@@ -236,27 +236,19 @@ Read the current diff. Check for: null derefs, injection risks, ...
 
 | Command | Description |
 |---|---|
-| `/help` | command list |
-| `/plan` | show the current plan; `/plan done\|start <id\|n>` to mark steps |
+| `/help` | command list (builtin + custom) |
 | `/agent` | list/select primary agents (build/plan/review/custom) |
 | `/init` | create an AGENTS.md template in this project |
-| `/sessions` | list saved sessions; `/sessions resume <id\|last>` |
-| `/diff` | show diffs: `/diff turn\|session\|branch` (TUI) |
 | `/theme` | switch palette (TUI) |
 | `/clear` | reset conversation + agent context |
 | `/compact` | summarize older history now (manual compaction) |
 | `/cost` | session token usage |
 | `/model` | active model/provider/build |
-| `/skills` | list discovered skills |
-| `/skill <name>` | stage a skill for the next task |
+| `/skill [name]` | list discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers + tools; exec one directly: `/mcp <server> <tool> [json\|text]` or `/mcp mcp__server__tool [json\|text]` — non-JSON text binds to the tool's first string parameter |
-| `/review <prompt>` | Prompt gate (prompt-gate MCP): LLM rewrites your prompt, you pick original/rewritten/update/cancel — only the approved prompt is used |
 | `/permission <auto\|ask\|readonly>` | switch permission mode at runtime |
-| `/undo` | revert files (and optionally trim the turn) (TUI) |
-| `/commands` | list all commands (builtin + custom) |
-| `/export [md\|json]` | export session transcript |
-| `/search <query>` | search the transcript |
-| `/exit` | quit |
+
+Sessions are managed with `scoder list` / `scoder resume` (CLI) or the **Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.
 
 In the TUI, **Tab** completes commands (and `/skill` names, `/mcp <server> <tool>` arguments), **↑/↓** recall sent-message history.
 
@@ -361,22 +353,6 @@ Each server supports `enabled`, `trust` (`auto`/`ask`/`readonly`/`deny`), `tools
 `scoder mcp import`. MCP tool output is flagged `untrusted` and wrapped with an `[UNTRUSTED]`
 marker; audit entries are written to the JSONL log.
 
-### Prompt gate (`/review`)
-
-If the [`prompt-gate`](https://github.com/nbhson/s-universal-prompt-gate-mcp) MCP server is configured (`~/.scoder/config.json`), `/review <prompt>` runs the gated rewrite flow — like OpenCode's `review-and-select-prompt`:
-
-```
-/review phân tích project
-  → [1] light  [2] balanced  [3] detailed     ← you pick the rewrite level
-  → ORIGINAL vs REWRITTEN shown side by side
-  → [1] original  [2] rewritten  [3] update <changes>  [4] cancel
-  → ✔ prompt approved: <the exact text you approved>
-```
-
-- **You approve exactly what you read** — the approved text is echoed verbatim from the server's pending result, never re-typed by the model or you
-- `[3] update` loops: describe changes, the prompt is rewritten again, review repeats until you pick original/rewritten/cancel
-- Cancel approves nothing; LLM errors fail loudly (no silent fallback to the original)
-
 ## Sessions
 
 Every run auto-saves its state (messages, steps, build result) to `.scoder/sessions/<id>.json` after each step. If the run is interrupted (Ctrl+C, crash, max steps), you can continue where it left off:
@@ -416,7 +392,7 @@ Features:
 - **Header row 2** — (no longer present; phase breadcrumb + metrics moved into the sidebar / status bar to avoid duplication)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
 - **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
-- **Slash commands** — `/help`, `/clear`, `/compact`, `/cost`, `/model`, `/skills`, `/skill`, `/mcp`, `/review`, `/permission`, `/exit` (identical to the REPL)
+- **Slash commands** — `/help`, `/clear`, `/compact`, `/cost`, `/model`, `/skill`, `/mcp`, `/permission` (identical to the REPL; `/theme` is TUI-only)
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
 - **Scrollback** — `PgUp`/`PgDn` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
 - **Keybinds** — `Enter` send · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+C` quit
@@ -603,7 +579,6 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, live `tool_output` events
 - `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + slash commands (`/help`, `/cost`) + clean exit
 - `test/tui-state.test.mjs` — event reducer unit tests: diff items, build lamp, abort marking, slash-command parsing & help formatting
-- `test/review-flow.test.mjs` — `/review` prompt-gate wiring: both pending stages, approved/cancelled outcomes, verbatim `rewritten_prompt` echo (security)
 - `test/core.test.mjs` — unified diff, retry backoff, context trimming, @file mention expansion
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve

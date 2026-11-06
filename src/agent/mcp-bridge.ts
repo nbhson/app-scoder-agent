@@ -1,8 +1,9 @@
 import { saveApproval } from "../config/config.js";
 import { redactSecrets, type ToolSpec } from "../llm/llm.js";
-import { allToolSpecs } from "../tools.js";
+import {allToolSpecs} from "../tools/registry.js";
 import { applyToolFilter } from "./types.js";
-import { McpManager, type McpServerConfig } from "../mcp.js";
+import {McpManager} from "../mcp/manager.js";
+import { type McpServerConfig } from "../mcp/types.js";
 import type { AgentConfig } from "../config/config.js";
 import type { AgentEvent } from "./types.js";
 import type { PermissionChecker } from "../security/permissions.js";
@@ -65,7 +66,7 @@ export function shutdownMcp(runtime: McpBridgeRuntime): void {
   runtime.setMcp(null);
 }
 
-export async function invokeMcpTool(runtime: McpBridgeRuntime, name: string, args: Record<string, unknown>): Promise<import("../tools.js").ToolResult> {
+export async function invokeMcpTool(runtime: McpBridgeRuntime, name: string, args: Record<string, unknown>): Promise<import("../tools/types.js").ToolResult> {
   const registration = runtime.getMcp()?.getTool(name);
   if (!registration) return { ok: false, output: `ERROR: unknown tool "${name}"` };
   const schemaErrors = validateSchema(args, registration.def.inputSchema);

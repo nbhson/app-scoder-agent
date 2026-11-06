@@ -13,7 +13,7 @@ import {
   loadSession,
   pruneSessions,
   resolveSessionId,
-} from "../dist/session.js";
+} from "../dist/session/session.js";
 
 const TMP = join("/tmp", `scoder-session-test-${process.pid}`);
 

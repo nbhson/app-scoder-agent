@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { McpConnection } from "../dist/mcp.js";
+import {McpConnection} from "../dist/mcp/connection.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 

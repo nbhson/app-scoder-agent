@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { SnapshotManager } from "../dist/snapshot.js";
+import { SnapshotManager } from "../dist/workspace/snapshot.js";
 
 /** @type {string} */
 let workdir;

@@ -7,7 +7,8 @@ no behavior/prompt/schema/event/CLI/permission changes.
 
 Every structural change is a `git mv` + import rewrite + a facade at the old
 path (`LEGACY PUBLIC PATH` header). Old `dist/<module>.js` paths keep working;
-reverting a phase is a single commit revert.
+reverting a phase is a single commit revert. (Facades were removed after the
+refactor — see ADR-5 supersession.)
 
 ## ADR-2: Reporter port instead of core → ui.ts
 
@@ -26,10 +27,10 @@ preserved exactly.
 
 ## ADR-4: Commands domain is UI-independent
 
-`src/commands/` holds slash-command definitions, dispatch and transcript
-helpers. It must not import from `tui/` — the transcript contract lives in
-`commands/types.ts`. REPL and TUI share `dispatchCommand`, so command behavior
-cannot diverge between frontends.
+`src/commands/` holds slash-command definitions and dispatch. It must not
+import from `tui/`. REPL and TUI share `dispatchCommand`, so command behavior
+cannot diverge between frontends. (The transcript export/search helpers were
+removed together with the `/export` and `/search` commands.)
 
 ## ADR-5: Domain migration — Option A (keep all root facades)
 
@@ -37,6 +38,12 @@ Chosen over Option B (drop internal shims): the package does not commit to
 internal module stability publicly, but preserving every `dist/*.js` path is
 the safer default and satisfies constraint #1 without an approval gate.
 Root keeps ~30 thin shims; `src/README.md` points readers at the domains.
+
+**Superseded (post-refactor):** the root facades turned out to have exactly
+one consumer — this repo's own test suite — because the package is a CLI app
+(`bin: dist/index.js`, no `exports` map). All 40 root/`tui/` facades were
+deleted and every importer was rewritten to domain paths (Option B). The
+`src/` root now holds only `index.ts` and `agent.ts`.
 
 ## ADR-6: Performance changes require measured equivalence
 

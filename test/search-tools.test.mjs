@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { toolGrep, toolGlob, globToRegExp } from "../dist/tools.js";
+import {toolGrep, toolGlob, globToRegExp} from "../dist/tools/search.js";
 
 let workdir;
 

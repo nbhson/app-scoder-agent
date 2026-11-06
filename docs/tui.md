@@ -145,27 +145,20 @@ Same commands available in TUI and REPL:
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Command list |
-| `/plan` | Show current plan |
+| `/help` | Command list (builtin + custom) |
 | `/agent` | List/select primary agents |
 | `/init` | Create AGENTS.md template |
-| `/sessions` | List/resume sessions |
-| `/diff` | Show diffs |
 | `/theme` | Switch palette |
 | `/clear` | Reset conversation |
 | `/compact` | Summarize older history |
 | `/cost` | Token usage |
 | `/model` | Model info |
-| `/skills` | List skills |
-| `/skill <name>` | Load a skill |
+| `/skill [name]` | List skills; with a name, load it |
 | `/mcp` | MCP servers & tools |
-| `/review <prompt>` | Prompt gate |
 | `/permission <mode>` | Switch mode |
-| `/undo` | Revert files |
-| `/commands` | List all commands |
-| `/export [md\|json]` | Export transcript |
-| `/search <query>` | Search transcript |
-| `/exit` | Quit |
+
+Sessions are resumed via the **Ctrl+S** session picker; quit with `exit` or
+**Ctrl+C**.
 
 ## Themes
 

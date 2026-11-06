@@ -5,7 +5,7 @@ history trim (`context.ts`), compaction (`compaction.ts`), repo map
 (`repo-map.ts`), working memory (`memory.ts`), skills (`skills.ts`), agent
 definitions/discovery (`agents.ts`, `agents-guide.ts`).
 
-**Public API:** via root facades (`../prompt.ts`, `../skills.ts`, …).
+**Public API:** direct imports (`./prompt.js`, `./skills.js`, …).
 
 **Allowed imports:** core domains; never `tui/`.
 

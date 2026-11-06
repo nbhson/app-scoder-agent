@@ -76,33 +76,26 @@ scoder --no-save -y "run the migration"
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show command list |
-| `/plan` | Show current plan; `/plan done\|start <id\|n>` to mark steps |
+| `/help` | Show command list (builtin + custom) |
 | `/agent` | List/select primary agents (build/plan/review/custom) |
 | `/init` | Create an AGENTS.md template in this project |
-| `/sessions` | List saved sessions; `/sessions resume <id\|last>` |
-| `/diff` | Show diffs: `/diff turn\|session\|branch` (TUI) |
 | `/theme` | Switch palette (TUI) |
 | `/clear` | Reset conversation + agent context |
 | `/compact` | Summarize older history now (manual compaction) |
 | `/cost` | Session token usage |
 | `/model` | Active model/provider/build |
-| `/skills` | List discovered skills |
-| `/skill <name>` | Stage a skill for the next task |
+| `/skill [name]` | List discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
-| `/review <prompt>` | Prompt gate: rewrite, review, approve |
 | `/permission <mode>` | Switch permission mode |
-| `/undo` | Revert files (and optionally trim the turn) (TUI) |
-| `/commands` | List all commands (builtin + custom) |
-| `/export [md\|json]` | Export session transcript |
-| `/search <query>` | Search the transcript |
-| `/exit` | Quit |
+
+Sessions are managed with `scoder list` / `scoder resume` (CLI) or the
+**Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.
 
 ## Custom Commands
 
-Project-level custom slash commands are discovered from `.scoder/commands/*.js`
-(or `.scoder/commands/*.ts` after build). Each file exports a `scoder.commands(dir, meta)`
-descriptor. They appear in `/commands` and tab completion alongside builtins.
+Project-level custom slash commands are discovered from `.scoder/commands/*.md`
+(with optional YAML frontmatter). They appear in `/help` and tab completion
+alongside builtins.
 
 ## @file Mentions
 

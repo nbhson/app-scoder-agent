@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyEvent, initialState, markAborted } from "../dist/tui/state.js";
-import { parseSlashCommand, formatSlashHelp, SLASH_COMMANDS, completeMcpArg } from "../dist/tui/commands.js";
+import { parseSlashCommand, formatSlashHelp, SLASH_COMMANDS, completeMcpArg } from "../dist/commands/definitions.js";
 
 const baseEvent = {
   type: "run_start",

@@ -5,7 +5,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { LlmClient, LlmError, LLM_REQUEST_TIMEOUT_MS } from "../dist/llm.js";
+import { LlmClient, LlmError, LLM_REQUEST_TIMEOUT_MS } from "../dist/llm/llm.js";
 
 const makeClient = (port) =>
   new LlmClient({

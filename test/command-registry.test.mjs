@@ -12,14 +12,13 @@ import {
   coreCommands,
   formatUsage,
   formatSkills,
-  formatSessions,
   formatMcpStatus,
-} from "../dist/tui/command-registry.js";
-import { discoverCustomCommands, runCustomCommand } from "../dist/tui/commands.js";
+} from "../dist/commands/registry.js";
+import { discoverCustomCommands, runCustomCommand } from "../dist/commands/definitions.js";
 
 /** Fake host — agent chỉ cần các method /cost /skills /permission đụng tới. */
-/** @typedef {import("../dist/tui/command-registry.js").CommandHost} CommandHost */
-/** @typedef {import("../dist/tui/command-registry.js").NoticeSink} NoticeSink */
+/** @typedef {import("../dist/commands/registry.js").CommandHost} CommandHost */
+/** @typedef {import("../dist/commands/registry.js").NoticeSink} NoticeSink */
 
 function fakeHost(over = {}) {
   return {
@@ -53,14 +52,6 @@ describe("dispatchCommand (T1)", () => {
     assert.match(s.lines[0].text, /\/cost/);
   });
 
-  it("/exit + /quit → outcome.quit (không notice)", async () => {
-    const s = sink();
-    const r = await dispatchCommand("/quit", fakeHost(), s.fn);
-    assert.equal(r.handled, true);
-    assert.equal(r.outcome?.quit, true);
-    assert.equal(s.lines.length, 0);
-  });
-
   it("không phải slash → handled:false", async () => {
     const r = await dispatchCommand("hello world", fakeHost(), sink().fn);
     assert.equal(r.handled, false);
@@ -74,11 +65,10 @@ describe("dispatchCommand (T1)", () => {
     assert.match(s.lines[0].text, /unknown command/);
   });
 
-  it("/skill thiếu arg → usage warn", async () => {
+  it("/skill không arg → liệt kê skills (merge từ /skills cũ)", async () => {
     const s = sink();
     await dispatchCommand("/skill", fakeHost(), s.fn);
-    assert.equal(s.lines[0].level, "warn");
-    assert.match(s.lines[0].text, /usage: \/skill/);
+    assert.match(s.lines[0].text, /no skills discovered|Skills:/);
   });
 
   it("handler ném lỗi → bắt thành error notice (không crash dispatcher)", async () => {
@@ -154,7 +144,7 @@ describe("dispatchCommand (T1)", () => {
       assert.equal(typeof c.run, "function");
     }
     assert.ok(coreCommands().some((c) => c.name === "/mcp"));
-    assert.ok(coreCommands().some((c) => c.name === "/sessions"));
+    assert.ok(coreCommands().some((c) => c.name === "/skill"));
     assert.ok(coreCommands().some((c) => c.name === "/compact"));
   });
 });
@@ -170,12 +160,6 @@ describe("formatters (T1)", () => {
   it("formatSkills: rỗng + có skill", () => {
     assert.match(formatSkills([]), /no skills discovered/);
     assert.match(formatSkills([{ name: "rev", description: "review code", path: "/p", scope: "project", body: "" }]), /rev\s+review code\s+\[project\]/);
-  });
-  it("formatSessions: rỗng + có session", () => {
-    assert.match(formatSessions([]), /no saved sessions/);
-    const t = formatSessions([{ id: "abcdefgh-1234", task: "fix bug", steps: 3, updatedAt: "2026-01-01T10:00:00Z" }]);
-    assert.match(t, /abcdefgh/);
-    assert.match(t, /fix bug/);
   });
   it("formatMcpStatus: rỗng + server không kết nối + tool", () => {
     assert.match(formatMcpStatus([]), /no MCP servers configured/);
@@ -236,8 +220,8 @@ describe("discoverCustomCommands", () => {
   });
 });
 
-describe("/commands dispatch", () => {
-  it("/commands → lists builtin + custom (custom in output)", async () => {
+describe("custom commands dispatch", () => {
+  it("/help liệt kê cả custom commands (merge từ /commands cũ)", async () => {
     const tmp = mkdirSync(join(tmpdir(), "cmd-test-" + Math.random()), { recursive: true });
     try {
       const cmdDir = join(tmp, ".scoder", "commands");
@@ -245,19 +229,12 @@ describe("/commands dispatch", () => {
       writeFileSync(join(cmdDir, "mycmd.md"), "---\ndescription: My custom command\n---\nDo the thing.\n");
       const s = sink();
       const host = fakeHost({ config: { workdir: tmp, permissionMode: "auto" } });
-      await dispatchCommand("/commands", host, s.fn);
-      assert.ok(s.lines[0].text.includes("builtin"), `should mention builtin: ${s.lines[0].text.slice(0, 200)}`);
-      assert.ok(s.lines[0].text.includes("mycmd") || s.lines[0].text.includes("Do the thing"), `should mention custom: ${s.lines[0].text.slice(0, 200)}`);
+      await dispatchCommand("/help", host, s.fn);
+      assert.ok(s.lines[0].text.includes("/help"), `should list builtins: ${s.lines[0].text.slice(0, 200)}`);
+      assert.ok(s.lines[0].text.includes("/mycmd"), `should list custom: ${s.lines[0].text.slice(0, 400)}`);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  });
-
-  it("/commands unknown → warn", async () => {
-    const s = sink();
-    const host = fakeHost({ config: { workdir: tmpdir(), permissionMode: "auto" } });
-    await dispatchCommand("/commands nonexistent-xyz-cmd", host, s.fn);
-    assert.equal(s.lines[0].level, "warn");
   });
 
   it("custom prompt command returns a task for the frontend to submit", async () => {

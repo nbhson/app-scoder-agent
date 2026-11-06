@@ -5,7 +5,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { AnthropicClient } from "../dist/provider-anthropic.js";
+import { AnthropicClient } from "../dist/llm/provider-anthropic.js";
 
 let server;
 let lastBody;

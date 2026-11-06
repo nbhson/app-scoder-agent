@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { contextWindowFor, lookupModel } from "../dist/model-catalog.js";
+import { contextWindowFor, lookupModel } from "../dist/llm/model-catalog.js";
 
 describe("lookupModel — sync lookup (cache hoặc fallback)", () => {
   it("known model trả về metadata hợp lệ", () => {
@@ -28,7 +28,7 @@ describe("contextWindowFor", () => {
 
 describe("loadCatalog — cache/network/fallback chain", () => {
   it("không bao giờ throw, trả về models + source", async () => {
-    const { loadCatalog } = await import("../dist/model-catalog.js");
+    const { loadCatalog } = await import("../dist/llm/model-catalog.js");
     const r = await loadCatalog(true); // force → thử network; offline → fallback
     assert.ok(r.models);
     assert.ok(["cache", "network", "fallback"].includes(r.source));

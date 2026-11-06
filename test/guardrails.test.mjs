@@ -12,7 +12,7 @@ import {
   defaultGuardrailRules,
   DEFAULT_GUARDRAIL_OPTIONS,
   CHAT_DONE_MARKER,
-} from "../dist/guardrails.js";
+} from "../dist/agent/guardrails.js";
 
 /** Context gốc tiện dụng — test override từng trường. */
 const baseCtx = (over = {}) => ({

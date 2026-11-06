@@ -10,7 +10,7 @@ import {
   SessionAllowlist,
   PermissionChecker,
   promptForPermission,
-} from "../dist/permissions.js";
+} from "../dist/security/permissions.js";
 
 const allow = [];
 const deny = [];
@@ -178,7 +178,7 @@ describe("PermissionChecker — nonInteractive", () => {
 // Permission Engine v2 — rule-based (pattern from opencode, MIT — see NOTICE)
 // ---------------------------------------------------------------------------
 
-import { wildcardMatch, matchRule, aggregate } from "../dist/permissions.js";
+import { wildcardMatch, matchRule, aggregate } from "../dist/security/permissions.js";
 
 describe("wildcardMatch", () => {
   it("* matches everything", () => {

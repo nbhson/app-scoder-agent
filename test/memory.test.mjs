@@ -14,9 +14,9 @@ import {
   emptyWorkingMemory,
   notePlan,
   noteFailure,
-} from "../dist/memory.js";
-import { COMPACTION_INSTRUCTION } from "../dist/compaction.js";
-import { getTool } from "../dist/tools.js";
+} from "../dist/context/memory.js";
+import { COMPACTION_INSTRUCTION } from "../dist/context/compaction.js";
+import {getTool} from "../dist/tools/registry.js";
 import { Agent } from "../dist/agent.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "scoder-mem-"));
@@ -264,46 +264,3 @@ describe("plan-before-edit nudge (soft guardrail)", () => {
   });
 });
 
-describe("/plan command", () => {
-  it("bare /plan renders plan with verify; /plan done marks completed", async () => {
-    const { dispatchCommand } = await import("../dist/tui/command-registry.js");
-    const calls = [];
-    const agentStub = {
-      getPlan: () => [
-        { id: "t1", content: "repro", status: "completed" },
-        { id: "t2", content: "fix crash", status: "in_progress", verify: "npm test", acceptance: "green" },
-      ],
-      markPlanStep: (status, ref) => {
-        calls.push([status, ref]);
-        return { ok: true, message: `step marked ${status}` };
-      },
-    };
-    const notices = [];
-    const host = {
-      agent: () => agentStub,
-      config: { workdir: TMP, permissionMode: "auto" },
-      replaceAgent: () => {},
-    };
-    const notice = (text) => notices.push(text);
-    await dispatchCommand("/plan", host, notice);
-    const out = notices.join("\n");
-    assert.match(out, /Plan:/);
-    assert.match(out, /repro/);
-    assert.match(out, /verify: npm test/);
-    assert.match(out, /acceptance: green/);
-    await dispatchCommand("/plan done 2", host, notice);
-    assert.deepEqual(calls, [["completed", "2"]]);
-  });
-
-  it("bare /plan with no plan says so", async () => {
-    const { dispatchCommand } = await import("../dist/tui/command-registry.js");
-    const notices = [];
-    const host = {
-      agent: () => ({ getPlan: () => [], markPlanStep: () => ({ ok: false, message: "no plan" }) }),
-      config: { workdir: TMP, permissionMode: "auto" },
-      replaceAgent: () => {},
-    };
-    await dispatchCommand("/plan", host, (text) => notices.push(text));
-    assert.match(notices.join("\n"), /no plan yet/);
-  });
-});

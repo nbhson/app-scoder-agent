@@ -3,7 +3,7 @@ import type { ChatMessage } from "../llm/llm.js";
 import type { BuildResult } from "../workspace/build.js";
 import { EventSessionStore, SessionStore, type SessionFile } from "../session/session.js";
 import { memoryFromMessages, type WorkingMemory } from "../context/memory.js";
-import type { TodoItem } from "../tools.js";
+import type {TodoItem} from "../tools/types.js";
 import type { UsageTotals } from "./types.js";
 
 export interface PersistSessionRuntime {

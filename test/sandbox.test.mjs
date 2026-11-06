@@ -4,8 +4,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildSandboxArgv, planSandbox, sandboxWritePaths } from "../dist/sandbox.js";
-import { toolRunCommand } from "../dist/tools.js";
+import { buildSandboxArgv, planSandbox, sandboxWritePaths } from "../dist/security/sandbox.js";
+import {toolRunCommand} from "../dist/tools/run-command.js";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

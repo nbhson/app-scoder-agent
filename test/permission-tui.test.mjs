@@ -5,7 +5,7 @@
  */
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { PermissionChecker } from "../dist/permissions.js";
+import { PermissionChecker } from "../dist/security/permissions.js";
 import { Agent } from "../dist/agent.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

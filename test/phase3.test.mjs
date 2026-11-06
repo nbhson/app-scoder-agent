@@ -3,7 +3,7 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { parseDiagnostics, formatDiagnostics, classifyError, detectVerifyCmds } from "../dist/diagnostics.js";
+import { parseDiagnostics, formatDiagnostics, classifyError, detectVerifyCmds } from "../dist/workspace/diagnostics.js";
 import { resolvePrimaryConfig } from "../dist/agent.js";
 import { rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";

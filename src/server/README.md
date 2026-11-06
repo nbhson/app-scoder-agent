@@ -2,7 +2,7 @@
 
 **Responsibility:** `scoder serve` — POST tasks, stream AgentEvents over SSE.
 
-**Public API:** via `../server.ts` facade (`startServer`).
+**Public API:** `startServer` — import from `./server.js`.
 
 **Anti-patterns:** consuming agent events differently from the TUI (same
 stream, same order).

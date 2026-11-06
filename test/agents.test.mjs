@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverAgents, findAgent } from "../dist/agents.js";
-import { getTool, allToolSpecs } from "../dist/tools.js";
+import { discoverAgents, findAgent } from "../dist/context/agents.js";
+import {getTool, allToolSpecs} from "../dist/tools/registry.js";
 
 let workdir;
 

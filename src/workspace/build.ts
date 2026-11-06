@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { toolRunCommand } from "../tools.js";
+import {toolRunCommand} from "../tools/run-command.js";
 
 export interface BuildResult {
   success: boolean;

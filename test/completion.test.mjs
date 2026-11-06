@@ -3,7 +3,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { completionProviders, ghostText } from "../dist/tui/commands.js";
+import { completionProviders, ghostText } from "../dist/commands/definitions.js";
 
 const sources = {
   skills: ["commit", "review-pr"],
@@ -17,7 +17,7 @@ describe("completionProviders", () => {
     const p = providers.find((x) => x.id === "commands");
     assert.ok(p.match("/sk"));
     const c = p.candidates("/sk");
-    assert.deepEqual(c.map((x) => x.label), ["/skills", "/skill"]);
+    assert.deepEqual(c.map((x) => x.label), ["/skill"]);
   });
   it("files provider fuzzy", () => {
     const p = providers.find((x) => x.id === "files");

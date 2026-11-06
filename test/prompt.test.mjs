@@ -3,7 +3,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { PROMPT_VERSION, SYSTEM_PROMPT, buildSystemPrompt } from "../dist/prompt.js";
+import { PROMPT_VERSION, SYSTEM_PROMPT, buildSystemPrompt } from "../dist/context/prompt.js";
 
 describe("prompt — system prompt versioning", () => {
   it("PROMPT_VERSION là số nguyên dương", () => {

@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { PermissionChecker } from "../dist/permissions.js";
+import { PermissionChecker } from "../dist/security/permissions.js";
 
 const base = { mode: "ask", allowCommands: [], denyCommands: [], nonInteractive: false };
 

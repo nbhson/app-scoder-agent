@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "../dist/agent.js";
-import { CHAT_DONE_MARKER } from "../dist/guardrails.js";
+import { CHAT_DONE_MARKER } from "../dist/agent/guardrails.js";
 
 /**
  * ScriptedClient — trả tuần tự các turn của transcript. Mỗi turn:

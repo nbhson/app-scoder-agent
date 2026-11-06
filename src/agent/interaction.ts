@@ -1,4 +1,4 @@
-import type { AskUserRequest } from "../tools.js";
+import type {AskUserRequest} from "../tools/types.js";
 import type { AgentEvent } from "./types.js";
 import type { PermissionAnswer, PermissionRequest } from "../security/permissions.js";
 import type { JsonlLogger } from "../session/logger.js";

@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getTool, isProtectedEnvFile } from "../dist/tools.js";
+import {getTool} from "../dist/tools/registry.js";
+import {isProtectedEnvFile} from "../dist/tools/path-safety.js";
 
 let workdir;
 

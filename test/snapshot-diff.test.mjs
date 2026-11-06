@@ -3,7 +3,7 @@
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { SnapshotManager } from "../dist/snapshot.js";
+import { SnapshotManager } from "../dist/workspace/snapshot.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";

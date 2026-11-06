@@ -5,8 +5,8 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { getTool } from "../dist/tools.js";
-import { htmlToText, toolWebFetch } from "../dist/webfetch.js";
+import {getTool} from "../dist/tools/registry.js";
+import { htmlToText, toolWebFetch } from "../dist/tools/webfetch.js";
 
 // Test server chạy trên 127.0.0.1 (private) — cho phép trong env test
 process.env.SCODER_WEB_ALLOW_PRIVATE = "1";

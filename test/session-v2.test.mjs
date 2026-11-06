@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventSessionStore, readEventLog, loadSession, listSessions, pruneSessions } from "../dist/session.js";
+import { EventSessionStore, readEventLog, loadSession, listSessions, pruneSessions } from "../dist/session/session.js";
 
 /** @type {string} */
 let workdir;

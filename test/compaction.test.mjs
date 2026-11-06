@@ -11,7 +11,7 @@ import {
   extractSummaryInput,
   applyCompaction,
   DEFAULT_COMPACTION,
-} from "../dist/compaction.js";
+} from "../dist/context/compaction.js";
 
 function fill(n, role = "user") {
   return Array.from({ length: n }, (_, i) => ({ role, content: `msg-${i}-`.repeat(50) }));

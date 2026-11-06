@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { toolRunCommand, buildChildEnv } from "../dist/tools.js";
+import {toolRunCommand, buildChildEnv} from "../dist/tools/run-command.js";
 
 describe("toolRunCommand redaction (G3)", () => {
   it("secret shape qua stdout → REDACTED trong output", async () => {

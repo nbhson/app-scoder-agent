@@ -6,9 +6,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { unifiedDiff, diffCounts } from "../dist/diff.js";
-import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/retry.js";
-import { trimHistory, summariseOutput, claimsCompletion, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "../dist/context.js";
+import { unifiedDiff, diffCounts } from "../dist/workspace/diff.js";
+import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/llm/retry.js";
+import { trimHistory, summariseOutput, claimsCompletion, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "../dist/context/context.js";
 
 // ── diff ────────────────────────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ describe("trimHistory", () => {
     const out = trimHistory(msgs);
     // I-10: token-accurate budget — mỗi turn 60k chars ≫ budget nên chỉ turn
     // cuối sống; assert theo token count (x64 repeated chars nén ~ x tokens).
-    const { estimateTokens } = await import("../dist/compaction.js");
+    const { estimateTokens } = await import("../dist/context/compaction.js");
     assert.ok(estimateTokens(out) < 90_000, `budget respected (tokens=${estimateTokens(out)})`);
     // mọi assistant tool_calls vẫn có tool result đi kèm
     for (let i = 0; i < out.length; i++) {
@@ -222,7 +222,7 @@ describe("trimHistory", () => {
       ...Array.from({ length: 40 }, (_, i) => ({ role: "user", content: `u${i}-` + "word ".repeat(80) })),
     ];
     const out = trimHistory(msgs, 2_000);
-    const { estimateTokens } = await import("../dist/compaction.js");
+    const { estimateTokens } = await import("../dist/context/compaction.js");
     assert.ok(out.length < msgs.length, "phải cắt bớt");
     assert.ok(estimateTokens(out) < 2_500, `custom budget respected (tokens=${estimateTokens(out)})`);
     assert.equal(out[out.length - 1].content, msgs[msgs.length - 1].content, "message cuối giữ nguyên");

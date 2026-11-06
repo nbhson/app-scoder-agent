@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, LIMIT_DEFAULTS, resolveLimits } from "../dist/config.js";
+import { loadConfig, LIMIT_DEFAULTS, resolveLimits } from "../dist/config/config.js";
 
 let dir;
 

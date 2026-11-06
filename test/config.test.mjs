@@ -5,7 +5,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, loadPermissionLists } from "../dist/config.js";
+import { loadConfig, loadPermissionLists } from "../dist/config/config.js";
 
 const TMP = join("/tmp", `scoder-config-test-${process.pid}`);
 

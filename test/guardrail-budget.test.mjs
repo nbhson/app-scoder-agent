@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { tokenBudgetRule, createGuardrailEngine } from "../dist/guardrails.js";
+import { tokenBudgetRule, createGuardrailEngine } from "../dist/agent/guardrails.js";
 
 const baseCtx = {
   step: 1,

@@ -6,7 +6,8 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getTool, toolRunCommand } from "../dist/tools.js";
+import {getTool} from "../dist/tools/registry.js";
+import {toolRunCommand} from "../dist/tools/run-command.js";
 
 const TMP = join("/tmp", `scoder-tools-test-${process.pid}`);
 const workdir = join(TMP, "workdir");

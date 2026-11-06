@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { McpServerConfig } from "../mcp.js";
+import type {McpServerConfig} from "./types.js";
 
 /** Result of parsing one source file. */
 export interface ImportedServer {

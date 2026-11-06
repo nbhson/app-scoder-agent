@@ -125,10 +125,7 @@ describe("scoder tui — Ink full-screen UI", () => {
     const clean = stripAnsi(readFileSync(outFile, "utf8"));
 
     assert.ok(/Anything else is sent to the agent/.test(clean), `phải render /help listing (tail: ${clean.slice(-400)})`);
-    // Listing dài hơn viewport 30 dòng → phần đầu (/clear, /cost) bị cuộn khỏi
-    // màn hình; xác nhận các command ở cuối listing vẫn render đầy đủ.
-    // /cost được kiểm tra qua output "session usage" bên dưới.
-    assert.ok(clean.includes("/search") && clean.includes("/exit"), "/help phải liệt kê /search, /exit");
+    assert.ok(clean.includes("/skill") && clean.includes("/mcp"), "/help phải liệt kê /skill, /mcp");
     assert.ok(/no LLM calls yet|session usage/.test(clean), "/cost phải báo usage");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode})`);
   }, 30_000);

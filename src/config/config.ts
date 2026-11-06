@@ -76,7 +76,7 @@ export interface AgentConfig {
   /** JSONL session log: true = .scoder/logs/<session>.jsonl, string = custom path */
   logFile?: boolean | string;
   /** MCP stdio servers: name -> launch config */
-  mcpServers?: Record<string, import("../mcp.js").McpServerConfig>;
+  mcpServers?: Record<string, import("../mcp/types.js").McpServerConfig>;
   /** Permission mode: auto | ask | readonly */
   permissionMode: PermissionMode;
   /** Rule engine v2 (from rc permissions.rules). */
@@ -130,7 +130,7 @@ interface RcFile {
   wrapUpStepsBeforeEnd?: number;
   /** Guardrail thresholds override (rc: "guardrails": {...}). */
   guardrails?: { textOnlyStreakLimit?: number; doomLoopRepeats?: number; wrapUpStepsBeforeEnd?: number; tokenBudget?: number };
-  mcpServers?: Record<string, import("../mcp.js").McpServerConfig>;
+  mcpServers?: Record<string, import("../mcp/types.js").McpServerConfig>;
   permissions?: {
     mode?: string;
     allowCommands?: string[];

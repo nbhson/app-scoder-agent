@@ -24,7 +24,7 @@ export interface CommandDef {
   name: string;
   aliases: string[];
   description: string;
-  /** Usage line, e.g. "/sessions resume <id|last>" (defaults to /name). */
+  /** Usage line, e.g. "/model <provider/model>" (defaults to /name). */
   usage: string;
   visibility: CommandVisibility;
   source: CommandSource;
@@ -40,27 +40,17 @@ export interface CommandDef {
 
 /** Built-in commands — the single catalog both help and completion read. */
 export const BUILTIN_COMMANDS: CommandDef[] = [
-  { name: "/help", aliases: [], description: "show this command list", usage: "/help", visibility: "public", source: "builtin" },
-  { name: "/plan", aliases: [], description: "show the current plan — /plan done|start <id|n> to mark steps", usage: "/plan [done|start <id|n|text>]", visibility: "public", source: "builtin" },
+  { name: "/help", aliases: [], description: "show this command list (builtin + custom)", usage: "/help", visibility: "public", source: "builtin" },
   { name: "/agent", aliases: [], description: "list selectable agents — /agent <name> to switch (idle only)", usage: "/agent [name]", visibility: "public", source: "builtin" },
   { name: "/init", aliases: [], description: "create an AGENTS.md template in this project", usage: "/init", visibility: "public", source: "builtin" },
-  { name: "/sessions", aliases: [], description: "list saved sessions — /sessions resume <id|last>", usage: "/sessions [resume <id|last>]", visibility: "public", source: "builtin" },
-  { name: "/diff", aliases: [], description: "show diffs: /diff turn | session | branch", usage: "/diff [turn|session|branch]", visibility: "tui-only", source: "builtin" },
   { name: "/theme", aliases: [], description: "switch palette: /theme <name> — /theme list (mission|paper|mono|light|high-contrast|solarized)", usage: "/theme [name|list]", visibility: "tui-only", source: "builtin" },
   { name: "/clear", aliases: [], description: "clear the conversation and reset agent context", usage: "/clear", visibility: "public", source: "builtin" },
   { name: "/compact", aliases: [], description: "summarize older history now (manual compaction)", usage: "/compact", visibility: "public", source: "builtin" },
   { name: "/cost", aliases: [], description: "token usage of the current session", usage: "/cost", visibility: "public", source: "builtin" },
   { name: "/model", aliases: [], description: "show the active model & provider", usage: "/model [provider/model]", visibility: "public", source: "builtin" },
-  { name: "/skills", aliases: [], description: "list discovered skills (SKILL.md)", usage: "/skills", visibility: "public", source: "builtin" },
-  { name: "/skill", aliases: [], description: "load a skill into context: /skill <name>", usage: "/skill <name>", visibility: "public", source: "builtin" },
+  { name: "/skill", aliases: [], description: "list skills, or load one into context: /skill <name>", usage: "/skill [name]", visibility: "public", source: "builtin" },
   { name: "/mcp", aliases: [], description: "MCP servers & tools: /mcp [server] [tool] [json|text]", usage: "/mcp [server [tool [json]]]", visibility: "public", source: "builtin" },
-  { name: "/review", aliases: [], description: "prompt gate: rewrite + user approval — /review <prompt>", usage: "/review <prompt>", visibility: "tui-only", source: "builtin" },
   { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly>", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
-  { name: "/undo", aliases: [], description: "revert files: /undo [files|edit] — edit also trims the turn back for re-send", usage: "/undo [files|edit]", visibility: "tui-only", source: "builtin" },
-  { name: "/commands", aliases: [], description: "list all commands (builtin + custom) — /commands <name> to inspect", usage: "/commands [name]", visibility: "public", source: "builtin" },
-  { name: "/export", aliases: [], description: "export session transcript: /export [md|json]", usage: "/export [md|json]", visibility: "public", source: "builtin" },
-  { name: "/search", aliases: [], description: "search transcript: /search <query>", usage: "/search <query>", visibility: "public", source: "builtin" },
-  { name: "/exit", aliases: ["/quit"], description: "quit (aliases: /quit, exit, quit)", usage: "/exit", visibility: "public", source: "builtin" },
 ];
 
 /** Back-compat view used by completion + /help — derived from BUILTIN_COMMANDS. */
@@ -96,7 +86,7 @@ export function completeSlashCommand(
   if (matches.length === 0) return null;
   // Exact match — complete to it (e.g. typing "/help" + Tab still completes).
   if (matches.length === 1) return { completed: matches[0].cmd + " ", candidates: matches };
-  // Common prefix of all matches (e.g. "/sk" → "/skill" prefix of /skills+/skill).
+  // Common prefix of all matches (e.g. "/m" → "/m" prefix of /model+/mcp).
   let prefix = matches[0].cmd;
   for (const m of matches.slice(1)) {
     let i = 0;
@@ -397,8 +387,8 @@ export function ghostText(
 }
 
 /** Format the /help listing (shared so both frontends render identically). */
-export function formatSlashHelp(commandName: string): string {
-  const rows = SLASH_COMMANDS.map((c) => `  ${c.cmd.padEnd(12)} ${c.desc}`).join("\n");
+export function formatSlashHelp(commandName: string, custom: Array<{ cmd: string; desc: string }> = []): string {
+  const rows = [...SLASH_COMMANDS, ...custom].map((c) => `  ${c.cmd.padEnd(12)} ${c.desc}`).join("\n");
   return `Commands (${commandName}):\n${rows}\n  Anything else is sent to the agent as a task.\n  Tab completes commands; ↑/↓ recalls history.`;
 }
 

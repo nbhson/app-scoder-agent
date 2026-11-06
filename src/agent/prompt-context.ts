@@ -80,7 +80,7 @@ export class PromptContext {
     const skill = findSkill(this.workdir, name);
     if (!skill) {
       const names = this.skills.map((item) => item.name).join(", ");
-      return { ok: false, message: `skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered (try /skills)"}` };
+      return { ok: false, message: `skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered (try /skill)"}` };
     }
     this.pendingContext.push(`[User loaded skill "${skill.name}" — follow these instructions for the upcoming task]\n\n${skill.body}`);
     this.pendingAllowedTools = skill.allowedTools?.length ? skill.allowedTools : null;

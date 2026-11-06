@@ -1,9 +1,11 @@
 import type { AgentConfig } from "./config/config.js";
 import { loadPermissionLists, loadPolicyRules, loadSavedApprovals } from "./config/config.js";
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
-import type { ToolResult } from "./tools.js";
+import type {ToolResult} from "./tools/types.js";
 import { AnthropicClient } from "./llm/provider-anthropic.js";
-import { allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
+import {allToolSpecs} from "./tools/registry.js";
+import {setMaxOutputChars} from "./tools/path-safety.js";
+import { type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools/types.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
 import { expandMentions } from "./context/context.js";
 import { createGuardrailEngine, type GuardrailDecision } from "./agent/guardrails.js";
@@ -17,7 +19,7 @@ import { contextWindowFor } from "./llm/model-catalog.js";
 import { JsonlLogger } from "./session/logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
 import { loadRcFile } from "./config/config.js";
-import { McpManager } from "./mcp.js";
+import {McpManager} from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./context/skills.js";
 import { discoverAgents, findAgent, type AgentDef } from "./context/agents.js";
@@ -144,12 +146,12 @@ export class Agent {
     this.logger.log({ type: "todo", items });
   }
 
-  /** Frontend-facing: current plan snapshot (for /plan). */
+  /** Frontend-facing: current plan snapshot. */
   getPlan(): TodoItem[] {
     return [...this.plan];
   }
 
-  /** Frontend-facing: mark a plan step from the REPL/TUI (/plan done|start). */
+  /** Frontend-facing: mark a plan step by id/index/text. */
   markPlanStep(status: "completed" | "in_progress", ref: string): { ok: boolean; message: string } {
     if (this.plan.length === 0) {
       return { ok: false, message: "no plan yet — the agent has not called write_todos" };
@@ -1124,7 +1126,7 @@ export class Agent {
     }
   }
 
-  /** Skills visible to this project (for /skills). */
+  /** Skills visible to this project (for /skill). */
   getSkills(): Skill[] {
     return this.promptContext.getSkills();
   }

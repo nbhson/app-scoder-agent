@@ -12,7 +12,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EVENT_SCHEMA_VERSION, resolvePrimaryConfig } from "../dist/agent.js";
-import { discoverSkills } from "../dist/skills.js";
+import { discoverSkills } from "../dist/context/skills.js";
 import { initialState, applyEvent } from "../dist/tui/state.js";
 
 describe("config migration — 0.8.x → 0.9.0", () => {

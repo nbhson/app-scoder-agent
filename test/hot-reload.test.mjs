@@ -4,8 +4,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { watchWorkdir } from "../dist/watch.js";
-import { discoverSkills } from "../dist/skills.js";
+import { watchWorkdir } from "../dist/workspace/watch.js";
+import { discoverSkills } from "../dist/context/skills.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

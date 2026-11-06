@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { SteeringInbox } from "../dist/steering.js";
+import { SteeringInbox } from "../dist/session/steering.js";
 
 describe("SteeringInbox (I5)", () => {
   it("FIFO drain nguyên batch", () => {

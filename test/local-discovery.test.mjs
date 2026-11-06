@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { discoverLocalEngines } from "../dist/provider-registry.js";
+import { discoverLocalEngines } from "../dist/llm/provider-registry.js";
 
 describe("discoverLocalEngines (I-03)", () => {
   it("offline → mảng rỗng, không throw", { timeout: 5000 }, async () => {

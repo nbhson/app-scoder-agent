@@ -47,7 +47,7 @@ scoder
 **List available skills:**
 
 ```bash
-> /skills
+> /skill
 ```
 
 ## Hot Reload

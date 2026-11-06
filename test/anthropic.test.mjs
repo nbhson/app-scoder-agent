@@ -5,7 +5,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { toAnthropicMessages, fromAnthropicResponse, AnthropicClient } from "../dist/provider-anthropic.js";
+import { toAnthropicMessages, fromAnthropicResponse, AnthropicClient } from "../dist/llm/provider-anthropic.js";
 
 // ── Translation ─────────────────────────────────────────────────────────────
 

@@ -5,8 +5,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { scanCommand } from "../dist/shell-scanner.js";
-import { PermissionChecker } from "../dist/permissions.js";
+import { scanCommand } from "../dist/security/shell-scanner.js";
+import { PermissionChecker } from "../dist/security/permissions.js";
 
 const base = { allowCommands: [], denyCommands: [], nonInteractive: true };
 

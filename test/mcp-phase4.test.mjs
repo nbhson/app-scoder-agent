@@ -5,8 +5,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { McpManager } from "../dist/mcp.js";
-import { parseSseEvent } from "../dist/mcp.js";
+import {McpManager} from "../dist/mcp/manager.js";
+import {parseSseEvent} from "../dist/mcp/sse.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 

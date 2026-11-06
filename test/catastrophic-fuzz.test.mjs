@@ -4,8 +4,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { PermissionChecker } from "../dist/permissions.js";
-import { redactSecrets } from "../dist/llm.js";
+import { PermissionChecker } from "../dist/security/permissions.js";
+import { redactSecrets } from "../dist/llm/llm.js";
 
 const checker = new PermissionChecker({ mode: "auto", allowCommands: [], denyCommands: [], nonInteractive: true });
 

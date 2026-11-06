@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { validateSchema } from "../dist/json-schema.js";
+import { validateSchema } from "../dist/shared/json-schema.js";
 
 describe("validateSchema (M2)", () => {
   const schema = {

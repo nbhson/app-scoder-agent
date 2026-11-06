@@ -5,7 +5,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { McpConnection, McpManager, parseSseMessages } from "../dist/mcp.js";
+import {McpConnection} from "../dist/mcp/connection.js";
+import {McpManager} from "../dist/mcp/manager.js";
+import {parseSseMessages} from "../dist/mcp/sse.js";
 import { startMockMcpHttp } from "./mock-mcp-http.mjs";
 
 describe("M3 — parseSseMessages", () => {

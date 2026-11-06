@@ -5,7 +5,7 @@
 The refactor (plan/REFACTOR-PLAN.md) is complete through the domain migration (Phase 8.1, Option A):
 
 - Source is domain-oriented — see `src/README.md` and each domain's README (`agent/`, `cli/`, `commands/`, `config/`, `context/`, `io/`, `llm/`, `mcp/`, `security/`, `server/`, `session/`, `shared/`, `tools/`, `tui/`, `workspace/`).
-- Root files (`agent.ts`, `tools.ts`, `mcp.ts`, `config.ts`, `session.ts`, `ui.ts`, …) are `LEGACY PUBLIC PATH` facades re-exporting the domain implementation, so `dist/<module>.js` keeps working.
+- The `src/` root holds only `index.ts` (CLI entry) and `agent.ts` (Agent facade); legacy root re-export facades were removed once the test suite moved to domain paths.
 - `src/agent.ts` is the public Agent facade; subsystems live in `src/agent/` (run loop, tool executor, MCP bridge, interaction, prompt context, session persistence, verification, guardrails, types).
 - Slash commands are UI-independent in `src/commands/`; both the REPL and the TUI dispatch through `dispatchCommand`.
 - `src/index.ts` is a thin entry; the CLI lives in `src/cli/`.
@@ -69,7 +69,6 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 | `llm/provider-registry.ts` | Provider resolution + custom provider registry |
 | `llm/model-catalog.ts` | Model catalog (context window, pricing) |
 | `llm/retry.ts` | Retry/backoff helpers |
-| `tools.ts` | Compatibility facade for the tool registry and tool implementations |
 | `tools/` | Tool contracts, file/search/command implementations, webfetch, ordered registry |
 | `workspace/build.ts` | Build command execution + exit code analysis |
 | `security/permissions.ts` | Permission checker, catastrophic deny list, rule engine |
@@ -103,7 +102,6 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 
 | File | Purpose |
 |------|---------|
-| `mcp.ts` | Compatibility facade for the MCP client |
 | `mcp/` | MCP types, transports, connection state machine, manager, config import |
 | `server/server.ts` | HTTP API server with SSE events |
 
@@ -113,19 +111,15 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 |------|---------|
 | `commands/definitions.ts` | Slash command metadata, parser, help formatter |
 | `commands/registry.ts` | Command dispatcher shared by REPL + TUI |
-| `commands/transcript.ts` | Transcript export/search (pure) |
-| `commands/types.ts` | UI-independent transcript contract |
 
 ### TUI (src/tui/)
 
 | File | Purpose |
 |------|---------|
 | `app.tsx` | TUI composition + layout (Ink/React) |
-| `hooks/` | Logic hooks: event queue, submit, keybinds, scroll, review, command host, session resume |
+| `hooks/` | Logic hooks: event queue, submit, keybinds, scroll, command host, session resume |
 | `state.ts` | Pure reducer for UI state |
 | `selectors.ts` | Pure selectors (latestPlan, visibleWindow, toolPhase, estimateItemRows) |
-| `commands.ts` | Facade → `commands/definitions.ts` |
-| `command-registry.ts` | Facade → `commands/registry.ts` |
 | `chat-views.tsx` | Chat message renders |
 | `chrome.tsx` | TUI chrome (header, status bar) |
 | `input.tsx` | User input component |

@@ -1,7 +1,7 @@
 # Source map
 
-Domain-oriented layout (Phase 8, Option A). Root files are either the CLI entry
-or legacy facades — implementation lives in the domain folders.
+Domain-oriented layout. The root holds only the CLI entry (`index.ts`) and the
+Agent facade (`agent.ts`) — all other implementation lives in domain folders.
 
 ## Domains
 
@@ -9,7 +9,7 @@ or legacy facades — implementation lives in the domain folders.
 |---|---|
 | `cli/` | CLI parsing + subcommands (`args`, `run-once`, `repl`, `init`, `mcp-command`, `main`) |
 | `agent/` | Agent subsystems: types/events, run loop, tool executor, MCP bridge, interaction, prompt context, session persistence, verification, guardrails |
-| `commands/` | Slash-command definitions, registry/dispatch, transcript — UI-independent |
+| `commands/` | Slash-command definitions, registry/dispatch — UI-independent |
 | `config/` | Config load/precedence (`.scoderrc.json`, env, CLI flags) |
 | `context/` | Prompt + context window: compaction, prompt builder, repo map, memory, skills, agent discovery |
 | `io/` | Output port (`reporter`) + terminal adapter (`terminal.ts`, formerly `ui.ts`) |
@@ -23,19 +23,13 @@ or legacy facades — implementation lives in the domain folders.
 | `tui/` | Ink UI: app composition, components, hooks, state reducer |
 | `workspace/` | Build/verify, diff, snapshots, diagnostics, file index, watcher |
 
-## Legacy facades (root)
-
-`agent.ts`, `tools.ts`, `mcp.ts`, `ui.ts`, `config.ts`, `session.ts`, … re-export
-from the domain implementation (`LEGACY PUBLIC PATH` header). Do not add code to
-a facade — edit the domain module.
-
 ## Layer rules
 
 Enforced by `node scripts/check-layers.mjs` (CI):
 
 - Core domains must not import from `tui/`.
 - `commands/` is UI-independent (no `tui/` imports).
-- Facade paths stay stable: `dist/<module>.js` keeps working.
+- Import from the domain module directly — there are no root re-export facades.
 
 Dependency graph: `docs/architecture-graph.md` (generated, `npm run check:layers:graph`).
 

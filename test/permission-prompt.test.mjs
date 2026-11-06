@@ -14,6 +14,7 @@ const distPermissions = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
   "dist",
+  "security",
   "permissions.js"
 );
 

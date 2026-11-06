@@ -5,8 +5,8 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { AnthropicClient } from "../dist/provider-anthropic.js";
-import { LlmClient } from "../dist/llm.js";
+import { AnthropicClient } from "../dist/llm/provider-anthropic.js";
+import { LlmClient } from "../dist/llm/llm.js";
 
 describe("reasoning parse (I-05)", () => {
   let server;

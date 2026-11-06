@@ -14,8 +14,8 @@ import {
   formatCostReport,
   listLogSessions,
   logFilePath,
-} from "../dist/cost.js";
-import { resolveModelPricing, DEFAULT_MODEL_PRICING } from "../dist/constants.js";
+} from "../dist/session/cost.js";
+import { resolveModelPricing, DEFAULT_MODEL_PRICING } from "../dist/shared/constants.js";
 
 const TMP = join("/tmp", `scoder-cost-test-${process.pid}`);
 
@@ -200,7 +200,7 @@ describe("formatCostReport", () => {
 describe("session metrics (latency / success / guardrails)", () => {
   it("extractSessionMetrics: đếm steps, latency, tools, guardrails, success", async () => {
     // import ở đây để không ảnh hưởng phần import trên (file đã có import group riêng)
-    const { extractSessionMetrics } = await import("../dist/cost.js");
+    const { extractSessionMetrics } = await import("../dist/session/cost.js");
     const events = [
       { type: "step", step: 1, durationMs: 4000, toolCalls: 2 },
       { type: "tool", step: 1, tool: "read_file", ok: true, elapsedMs: 5 },
@@ -221,14 +221,14 @@ describe("session metrics (latency / success / guardrails)", () => {
   });
 
   it("extractSessionMetrics: session trống / chưa finish -> success null", async () => {
-    const { extractSessionMetrics } = await import("../dist/cost.js");
+    const { extractSessionMetrics } = await import("../dist/session/cost.js");
     const m = extractSessionMetrics([{ type: "step", step: 1, durationMs: 100 }]);
     assert.equal(m.stepCount, 1);
     assert.equal(m.success, null);
   });
 
   it("formatCostReport: hiển thị steps, llm-avg, success-rate", async () => {
-    const { extractSessionMetrics } = await import("../dist/cost.js");
+    const { extractSessionMetrics } = await import("../dist/session/cost.js");
     writeLog("20260101-010101-mmm", [
       { type: "llm_usage", model: "gpt-4o-mini", usage: { input_tokens: 100, output_tokens: 50 } },
       { type: "step", step: 1, durationMs: 2000, toolCalls: 1 },

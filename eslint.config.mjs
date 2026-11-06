@@ -46,7 +46,6 @@ export default tseslint.config(
       "src/cli/repl.ts",
       "src/commands/definitions.ts",
       "src/commands/registry.ts",
-      "src/commands/transcript.ts",
       "src/config/config.ts",
       "src/context/compaction.ts",
       "src/context/context.ts",

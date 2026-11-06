@@ -1,9 +1,11 @@
 import type { AgentConfig } from "../config/config.js";
 import { redactSecrets, type ToolCall, type ToolSpec } from "../llm/llm.js";
-import { getTool, allToolSpecs, type ToolContext, type ToolResult } from "../tools.js";
+import {getTool, allToolSpecs} from "../tools/registry.js";
+import { type ToolContext, type ToolResult } from "../tools/types.js";
 import { invalidateFileIndex } from "../workspace/file-index.js";
 import { PermissionChecker } from "../security/permissions.js";
-import { McpManager, type McpServerConfig } from "../mcp.js";
+import {McpManager} from "../mcp/manager.js";
+import { type McpServerConfig } from "../mcp/types.js";
 import { summariseOutput } from "../context/context.js";
 import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";

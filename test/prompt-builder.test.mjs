@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildEnvInfo, buildSkillsBlock, buildAgentsBlock } from "../dist/prompt-builder.js";
+import { buildEnvInfo, buildSkillsBlock, buildAgentsBlock } from "../dist/context/prompt-builder.js";
 
 describe("buildEnvInfo (I3)", () => {
   it("chứa platform + node version + today", () => {

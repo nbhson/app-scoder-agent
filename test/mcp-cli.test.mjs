@@ -52,7 +52,7 @@ describe("scoder mcp CLI parse", () => {
 
 describe("McpManager — enabled:false / trust:readonly no-spawn", () => {
   it("enabled:false server is skipped (not spawned), reported as disabled", async () => {
-    const { McpManager } = await import("../dist/mcp.js");
+    const { McpManager } = await import("../dist/mcp/manager.js");
     const m = new McpManager({ disabledSrv: { command: "node", args: ["nonexistent"], enabled: false } });
     const statusLines = [];
     m.onStatus = (l) => statusLines.push(l);
@@ -63,7 +63,7 @@ describe("McpManager — enabled:false / trust:readonly no-spawn", () => {
   });
 
   it("trust:readonly server is skipped (not spawned), reported as readonly", async () => {
-    const { McpManager } = await import("../dist/mcp.js");
+    const { McpManager } = await import("../dist/mcp/manager.js");
     const m = new McpManager({ roSrv: { command: "node", args: ["nonexistent"], trust: "readonly" } });
     const statusLines = [];
     m.onStatus = (l) => statusLines.push(l);

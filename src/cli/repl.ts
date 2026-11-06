@@ -30,7 +30,7 @@ export async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scode
     if (input === "exit" || input === "quit") break;
 
     // Slash commands — registry dùng chung với TUI (T1). Command riêng của
-    // TUI (/review /undo /theme /diff turn-scope) do TUI tự xử lý trước.
+    // TUI (/theme) do TUI tự xử lý trước.
     const host: CommandHost = {
       agent: () => agent,
       config: cfg,
@@ -43,21 +43,12 @@ export async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scode
         agent = next ?? new Agent(cfg);
         first = true;
       },
-      resumeAndRun: async (s) => {
-        agent.abort();
-        agent.dispose();
-        agent = new Agent(cfg);
-        first = false;
-        await agent.resume(s);
-        return { success: true, steps: 0, buildCmd: cfg.buildCmd, summary: "resumed" };
-      },
     };
     const { handled, outcome } = await dispatchCommand(input, host, (text, level) => {
       if (level === "error") ui.error(text);
       else console.log(text);
     });
     if (handled) {
-      if (outcome?.quit) break;
       if (outcome?.notice) ui.info(outcome.notice);
       if (!outcome?.task) continue;
       try {

@@ -233,7 +233,7 @@ export class EventSessionStore {
     return this._finished;
   }
 
-  /** Persist a manifest (cheap summary for /sessions listing). */
+  /** Persist a manifest (cheap summary for the session picker / `scoder list`). */
   writeManifest(meta: { task: string; model: string; provider: string; buildCmd: string | null; steps: number; maxSteps: number; usage?: SessionFile["usage"] }): void {
     if (!this.enabled) return;
     try {

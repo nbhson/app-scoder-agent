@@ -10,9 +10,9 @@ import {
   parseCustomProviders,
   resolveProvider,
   splitProviderModel,
-} from "../dist/provider-registry.js";
-import { LlmClient } from "../dist/llm.js";
-import { AnthropicClient } from "../dist/provider-anthropic.js";
+} from "../dist/llm/provider-registry.js";
+import { LlmClient } from "../dist/llm/llm.js";
+import { AnthropicClient } from "../dist/llm/provider-anthropic.js";
 
 describe("splitProviderModel", () => {
   it("provider/model → [provider, model]", () => {
