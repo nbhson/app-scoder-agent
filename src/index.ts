@@ -2,7 +2,7 @@
 /** LEGACY PUBLIC PATH — CLI implementation lives in ./cli/main.js. */
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import * as ui from "./ui.js";
+import * as ui from "./io/terminal.js";
 import { main } from "./cli/main.js";
 
 export { parseArgs } from "./cli/args.js";

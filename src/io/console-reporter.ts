@@ -1,4 +1,4 @@
-import * as ui from "../ui.js";
+import * as ui from "./terminal.js";
 import type { Reporter } from "./reporter.js";
 
 /** Default reporter preserving the existing classic terminal behavior. */

@@ -1,7 +1,7 @@
 import process from "node:process";
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
-import * as ui from "../ui.js";
+import * as ui from "../io/terminal.js";
 
 /**
  * `scoder init` — first-run wizard: asks for the essentials, writes

@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useApp, useWindowSize } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import { Agent, type AgentEvent } from "../agent.js";
-import { setQuiet } from "../ui.js";
+import { setQuiet } from "../io/terminal.js";
 import { discoverSkills } from "../context/skills.js";
 import { discoverAgents } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";

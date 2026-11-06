@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { Agent } from "../agent.js";
 import type { AgentConfig } from "../config/config.js";
 import { dispatchCommand, type CommandHost } from "../commands/registry.js";
-import * as ui from "../ui.js";
+import * as ui from "../io/terminal.js";
 
 export async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scoder interactive — model: ${cfg.model}`);
   ui.info('Type a task and press Enter. "exit" or Ctrl+D to quit.');

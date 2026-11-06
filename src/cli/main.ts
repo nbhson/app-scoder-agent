@@ -8,7 +8,7 @@ import { JsonlLogger } from "../session/logger.js";
 import { collectUsage, formatCostReport } from "../session/cost.js";
 import { getVersion as getPackageVersion } from "../shared/version.js";
 import { selectableAgents } from "../context/agents.js";
-import * as ui from "../ui.js";
+import * as ui from "../io/terminal.js";
 import { parseArgs, HELP, type CliArgs } from "./args.js";
 import { runOnce } from "./run-once.js";
 import { runInit } from "./init.js";
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
   }
 
   if (args.subcommand === "serve") {
-    const { startServer } = await import("../server.js");
+    const { startServer } = await import("../server/server.js");
     if (!cfg.apiKey) {
       ui.warn("No API key configured — runs will fail until SCODER_API_KEY (or OPENAI_API_KEY) is set.");
     }

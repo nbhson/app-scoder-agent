@@ -92,7 +92,7 @@ export async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "rem
 
   if (cmd === "import") {
     // scoder mcp import [path] [--dry-run] [--force]
-    const { loadConfigFile, discoverConfigs, mergeConfigs } = await import("../mcp-import.js");
+    const { loadConfigFile, discoverConfigs, mergeConfigs } = await import("../mcp/mcp-import.js");
     const dryRun = restArgs.includes("--dry-run");
     const force = restArgs.includes("--force");
     const paths = restArgs.filter((a) => !a.startsWith("--"));
