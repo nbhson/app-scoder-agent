@@ -2,7 +2,7 @@
 import process from "node:process";
 import { Agent } from "../agent.js";
 import type { AgentConfig } from "../config/config.js";
-import { pruneSessions } from "../session.js";
+import { pruneSessions } from "../session/session.js";
 import * as ui from "../ui.js";
 
 export async function runOnce(cfg: AgentConfig, task: string): Promise<number> {

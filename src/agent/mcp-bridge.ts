@@ -7,7 +7,7 @@ import type { AgentConfig } from "../config/config.js";
 import type { AgentEvent } from "./types.js";
 import type { PermissionChecker } from "../security/permissions.js";
 import { validateSchema } from "../shared/json-schema.js";
-import type { JsonlLogger } from "../logger.js";
+import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 
 export interface McpBridgeRuntime {

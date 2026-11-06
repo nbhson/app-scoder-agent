@@ -7,9 +7,9 @@ import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCT
 import { redactSecrets, type ChatMessage, type ChatResult } from "../llm.js";
 import type { ProviderRuntimeContract } from "../provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
-import type { EventSessionStore } from "../session.js";
+import type { EventSessionStore } from "../session/session.js";
 import type { SnapshotManager } from "../snapshot.js";
-import type { JsonlLogger } from "../logger.js";
+import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 import { createGuardrailEngine } from "../guardrails.js";
 import { memoryIsMeaningful, formatWorkingMemory, scanDecisions, type WorkingMemory } from "../memory.js";

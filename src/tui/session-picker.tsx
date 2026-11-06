@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import { listSessions, type SessionSummary } from "../session.js";
+import { listSessions, type SessionSummary } from "../session/session.js";
 import { theme, fit } from "./theme.js";
 
 export interface SessionPickerProps {

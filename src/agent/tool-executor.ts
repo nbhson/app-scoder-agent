@@ -5,7 +5,7 @@ import { invalidateFileIndex } from "../file-index.js";
 import { PermissionChecker } from "../security/permissions.js";
 import { McpManager, type McpServerConfig } from "../mcp.js";
 import { summariseOutput } from "../context.js";
-import type { JsonlLogger } from "../logger.js";
+import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 import type { AgentEvent } from "./types.js";
 

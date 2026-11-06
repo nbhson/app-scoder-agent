@@ -4,8 +4,8 @@ import type { ProviderRuntimeContract } from "../provider-registry.js";
 import type { ChatResult } from "../llm.js";
 import { parseDiagnostics, detectVerifyCmds, type VerifyCommands } from "../diagnostics.js";
 import type { AgentEvent } from "./types.js";
-import type { EventSessionStore } from "../session.js";
-import type { JsonlLogger } from "../logger.js";
+import type { EventSessionStore } from "../session/session.js";
+import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 
 export interface VerificationRuntime {

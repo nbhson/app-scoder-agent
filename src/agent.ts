@@ -10,11 +10,11 @@ import { createGuardrailEngine, type GuardrailDecision } from "./guardrails.js";
 import type { VerifyCommands } from "./diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
-import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
+import { SessionStore, EventSessionStore, type SessionFile } from "./session/session.js";
 import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { SnapshotManager } from "./snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
-import { JsonlLogger } from "./logger.js";
+import { JsonlLogger } from "./session/logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
 import { loadRcFile } from "./config/config.js";
 import { McpManager } from "./mcp.js";
@@ -30,7 +30,7 @@ import {
   type WorkingMemory,
 } from "./memory.js";
 
-import { SteeringInbox } from "./steering.js";
+import { SteeringInbox } from "./session/steering.js";
 import { randomUUID } from "node:crypto";
 import { consoleReporter } from "./io/console-reporter.js";
 import type { Reporter } from "./io/reporter.js";
