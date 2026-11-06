@@ -1,6 +1,6 @@
 import type { ToolSpec } from "../llm.js";
-import type { PermissionChecker, PermissionMode } from "../permissions.js";
-import type { SandboxConfig } from "../sandbox.js";
+import type { PermissionChecker, PermissionMode } from "../security/permissions.js";
+import type { SandboxConfig } from "../security/sandbox.js";
 import type { Reporter } from "../io/reporter.js";
 
 export interface ToolDiff {

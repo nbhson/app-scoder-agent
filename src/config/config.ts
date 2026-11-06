@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import type { PermissionMode, PermissionRule, PermissionEffect } from "../permissions.js";
+import type { PermissionMode, PermissionRule, PermissionEffect } from "../security/permissions.js";
 import { parseCustomProviders, resolveProvider, splitProviderModel } from "../provider-registry.js";
 import type { Reporter } from "../io/reporter.js";
 
@@ -276,7 +276,7 @@ function parsePricing(raw: unknown): Record<string, { input: number; output: num
 const VALID_EFFECTS = new Set(["allow", "deny", "ask"]);
 
 /** Validate permission rules v2; drop malformed entries with a warning. */
-export function parsePermissionRules(raw: unknown, label = "permissions.rules"): import("../permissions.js").PermissionRule[] | undefined {
+export function parsePermissionRules(raw: unknown, label = "permissions.rules"): import("../security/permissions.js").PermissionRule[] | undefined {
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw)) {
     console.error(`⚠  ignoring invalid ${label} (expected an array of {action, resource, effect})`);

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadRcFile } from "../config/config.js";
-import { resolveSandbox, type SandboxConfig } from "../sandbox.js";
+import { resolveSandbox, type SandboxConfig } from "../security/sandbox.js";
 import { consoleReporter } from "../io/console-reporter.js";
 import { clamp, MAX_OUTPUT_CHARS } from "./path-safety.js";
 import type { ToolResult } from "./types.js";

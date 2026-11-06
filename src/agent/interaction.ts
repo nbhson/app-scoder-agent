@@ -1,6 +1,6 @@
 import type { AskUserRequest } from "../tools.js";
 import type { AgentEvent } from "./types.js";
-import type { PermissionAnswer, PermissionRequest } from "../permissions.js";
+import type { PermissionAnswer, PermissionRequest } from "../security/permissions.js";
 import type { JsonlLogger } from "../logger.js";
 
 export interface InteractionRuntime {

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { DiffResult } from "../diff.js";
 import type { ToolContext, ToolResult, ToolDiff } from "./types.js";
-import type { PermissionMode } from "../permissions.js";
+import type { PermissionMode } from "../security/permissions.js";
 import { consoleReporter } from "../io/console-reporter.js";
 
 const FORMATTER_TIMEOUT_MS = 30_000;

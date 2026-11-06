@@ -9,7 +9,7 @@ import { expandMentions } from "./context.js";
 import { createGuardrailEngine, type GuardrailDecision } from "./guardrails.js";
 import type { VerifyCommands } from "./diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
-import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
+import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { SnapshotManager } from "./snapshot.js";

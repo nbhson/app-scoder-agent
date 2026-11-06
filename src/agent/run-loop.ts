@@ -6,7 +6,7 @@ import { parseDiagnostics, formatDiagnostics, classifyError } from "../diagnosti
 import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../compaction.js";
 import { redactSecrets, type ChatMessage, type ChatResult } from "../llm.js";
 import type { ProviderRuntimeContract } from "../provider-registry.js";
-import type { PermissionChecker } from "../permissions.js";
+import type { PermissionChecker } from "../security/permissions.js";
 import type { EventSessionStore } from "../session.js";
 import type { SnapshotManager } from "../snapshot.js";
 import type { JsonlLogger } from "../logger.js";

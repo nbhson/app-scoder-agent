@@ -11,7 +11,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFrontmatter } from "./skills.js";
-import type { PermissionMode } from "./permissions.js";
+import type { PermissionMode } from "./security/permissions.js";
 
 export interface AgentDef {
   name: string;

@@ -5,7 +5,7 @@ import { applyToolFilter } from "./types.js";
 import { McpManager, type McpServerConfig } from "../mcp.js";
 import type { AgentConfig } from "../config/config.js";
 import type { AgentEvent } from "./types.js";
-import type { PermissionChecker } from "../permissions.js";
+import type { PermissionChecker } from "../security/permissions.js";
 import { validateSchema } from "../shared/json-schema.js";
 import type { JsonlLogger } from "../logger.js";
 import type { Reporter } from "../io/reporter.js";
