@@ -541,6 +541,8 @@ Tách:
 - `src/index.ts`: giữ shebang, import `main`, gọi `main()`.
 - `parseArgs` vẫn re-export từ `src/index.ts` cho test.
 
+**Status:** Hoàn tất move-only. `src/index.ts` còn 17 dòng (shebang + entry guard + facade re-export `parseArgs`/`runInit`). Implementation nằm tại `src/cli/`: `args.ts` (CliArgs/HELP/parseArgs), `run-once.ts`, `repl.ts`, `init.ts`, `mcp-command.ts`, `main.ts` (composition root). CLI contract giữ nguyên — smoke test `--version`, `--help`, `mcp list` chạy đúng.
+
 #### 5.2 Command registry ra khỏi TUI
 
 - Move `src/tui/command-registry.ts` → `src/commands/registry.ts`.
