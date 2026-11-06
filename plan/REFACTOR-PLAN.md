@@ -1,6 +1,6 @@
 # Refactor Plan — app-scoder-agent
 
-> **Trạng thái:** ĐANG THỰC HIỆN — Phase 0, Phase 1.1–1.4, Phase 2, Phase 3 và Phase 4.1 đã hoàn tất; Phase 4 đang tiếp tục theo từng subsystem.
+> **Trạng thái:** ĐANG THỰC HIỆN — Phase 0, Phase 1.1–1.4, Phase 2, Phase 3 và toàn bộ Phase 4 đã hoàn tất; các phase còn lại tiếp tục theo commit nhỏ, tương thích ngược.
 >
 > **Ngày lập:** 06/11/2026  
 > **Baseline commit:** `110e6020f3a5` — `feat(tui): show application version in header` (2026-11-06). Working tree hiện có các thay đổi refactor chưa commit.  
@@ -509,7 +509,9 @@ io/    ──▶ ui.ts (chỉ adapter)
 8. **`agent/run-loop.ts` (bước cuối, optional nếu risk cao)**
    - Extract `runLoop` với `RunLoopDeps` interface tường minh (messages, tools, emit, guardrails, compaction, verification, steering).
    - `Agent.run/runTurn/resume` vẫn là public API, delegate vào loop.
-   - Nếu sau 2 ngày vẫn không đạt tương đương event order → dừng, giữ `runLoop` trong `agent.ts`, ghi lại lý do. Không ép split bằng mọi giá.
+    - Nếu sau 2 ngày vẫn không đạt tương đương event order → dừng, giữ `runLoop` trong `agent.ts`, ghi lại lý do. Không ép split bằng mọi giá.
+
+   **Status:** Hoàn tất extraction move-only. `runAgentLoop` dùng `RunLoopRuntime` live-state adapter; `Agent.run/runTurn/resume` và các delegate side-effect vẫn giữ nguyên. Trình tự steer, tool execution, guardrail, compaction, session persistence và finish được giữ nguyên; targeted gates 70/70, eval 11/11 và full suite 867/867 (PTY TUI được rerun xanh sau một lần timing-sensitive failure) đều pass.
 
 **Chiến lược test**
 

@@ -5,13 +5,13 @@ import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
 import { detectBuildCommand, type BuildResult } from "./build.js";
-import { trimHistory, summariseOutput, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "./context.js";
-import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
-import { parseDiagnostics, formatDiagnostics, classifyError, type VerifyCommands } from "./diagnostics.js";
+import { expandMentions } from "./context.js";
+import { createGuardrailEngine, type GuardrailDecision } from "./guardrails.js";
+import type { VerifyCommands } from "./diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
-import { DEFAULT_COMPACTION, shouldCompact, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
+import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
 import { SnapshotManager } from "./snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
@@ -23,13 +23,10 @@ import type { Skill } from "./skills.js";
 import { discoverAgents, findAgent, type AgentDef } from "./agents.js";
 import {
   emptyWorkingMemory,
-  memoryIsMeaningful,
-  formatWorkingMemory,
   noteFileRead,
   noteFileChanged,
   noteFailure,
   notePlan,
-  scanDecisions,
   type WorkingMemory,
 } from "./memory.js";
 
@@ -57,9 +54,10 @@ import {
   type McpBridgeRuntime,
 } from "./agent/mcp-bridge.js";
 import { InteractionBroker, type InteractionRuntime } from "./agent/interaction.js";
-import { ToolExecutor, READONLY_TOOLS, type ToolExecutorRuntime } from "./agent/tool-executor.js";
+import { ToolExecutor, type ToolExecutorRuntime } from "./agent/tool-executor.js";
 import { PromptContext, buildRunMessages, memoryBlock } from "./agent/prompt-context.js";
 import { persistSession, restoreSessionState } from "./agent/session-persistence.js";
+import { runAgentLoop, type RunLoopRuntime } from "./agent/run-loop.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
 
@@ -1002,312 +1000,56 @@ export class Agent {
     buildCmd: string,
     initialBuild: BuildResult | null = null,
   ): Promise<AgentRunResult> {
-    let steps = startSteps;
-    let lastBuild: BuildResult | null = initialBuild;
-    // G1: guardrail tracker state (textOnlyStreak, sigRepeat, toolError*,
-    // lowTokenStreak, wrapUpInjected) sống trong GuardrailEngine — reset mỗi run.
-    this.guardrails.reset();
-    // H-10 compaction config (false = disabled → mechanical trim only).
-    // I-02: contextWindow từ model catalog (lookup sync, cache/fallback) thay
-    // vì default 128k cứng — compaction trigger chính xác theo model.
-    const compactionCfg: CompactionConfig | null =
-      this.config.compaction === false ? null : this.compactionSettings();
-    // Compaction-aware trim: mechanical trim scales with the model window and
-    // starts AFTER compaction (95% vs 80% trigger). Disabled compaction keeps
-    // the legacy conservative 90k cap.
-    const trimBudget = compactionCfg
-      ? historyTokenBudget(compactionCfg.contextWindow)
-      : MAX_HISTORY_TOKENS;
-    // When a run ends early (guardrail finish/build verification) compaction is
-    // skipped, so never leave a near-full window for the next turn.
-    const safeTrimBudget = Math.min(trimBudget, MAX_HISTORY_TOKENS);
-
-    while (steps < this.config.maxSteps && !this.aborted) {
-      // ── Safe step boundary: deliver steered user input (H-08) ────────────
-      const steered = this.drainSteerInbox();
-      if (steered.length > 0) {
-        for (const s of steered) {
-          this.messages.push({ role: "user", content: s });
-          this.events.append({ type: "message.added", message: { role: "user", content: s } });
-        }
-        // One allowance reset for the whole steering batch (opencode behavior)
-        // — engine exposes a hook so the runLoop doesn't touch tracker state.
-        this.guardrails.notifySteered();
-        this.emit({ type: "steer_delivered", count: steered.length });
-        this.emit({ type: "queue", ...this.steerInbox.counts() });
-        this.reporter.info(`steer: +${steered.length} user message(s) delivered`);
-      }
-
-      // v2 (3.4): fold the ledger into the conversation every 6 steps.
-      if (steps > 0 && steps % 6 === 0 && memoryIsMeaningful(this.memory)) {
-        this.messages.push({ role: "user", content: formatWorkingMemory(this.memory) });
-      }
-
-      steps++;
-      this.reporter.step(steps, this.config.maxSteps, "thinking...");
-      this.events.claimExecution(steps);
-      this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
-
-      // Metrics: thời gian phần LLM của bước này (điều chỉnh chất lượng +
-      // so sánh provider; hiển thị trong `scoder cost`).
-      const stepStart = Date.now();
-      const { message, usage, incomplete } = await this.chatWithStream().catch((err: unknown) => {
-        // SIGINT during the LLM call — stop gracefully instead of crashing
-        if (this.aborted) {
-          return {
-            message: { role: "assistant" as const, content: null, tool_calls: undefined },
-            usage: undefined,
-            incomplete: undefined,
-          };
-        }
-        throw err;
-      });
-      if (this.aborted) break;
-      this.recordLlmUsage(usage);
-      this.emitContextEvent();
-      this.logger.log({ type: "step", step: steps, durationMs: Date.now() - stepStart, toolCalls: message.tool_calls?.length ?? 0 });
-
-      // H-09: after an interrupted stream, nudge the model to continue rather
-      // than restart (synthetic continuation instruction, opencode pattern).
-      if (incomplete) {
-        this.messages.push({
-          role: "user",
-          content: "[system] The previous response was cut off mid-stream. The tool call(s) above were received in full — continue exactly where you left off; do not repeat completed work.",
-        });
-        this.events.append({ type: "retry.scheduled", reason: "incomplete-stream continuation" });
-      }
-
-      // ── Chuẩn bị context cho Guardrail Engine ─────────────────────────────
-      // Chat marker được làm sạch ở đây để rule nhận text đã chuẩn hoá.
-      const hasToolCalls = !!message.tool_calls && message.tool_calls.length > 0;
-      let text = message.content ?? "";
-      let chatDone = false;
-      if (!hasToolCalls && text.includes(CHAT_DONE_MARKER)) {
-        chatDone = true;
-        text = text.split(CHAT_DONE_MARKER)[0].trim();
-      }
-
-      if (!hasToolCalls) {
-        this.messages.push({ role: "assistant", content: text });
-        this.events.append({ type: "message.added", message: { role: "assistant", content: text } });
-        this.reporter.llm("agent", text);
-        scanDecisions(this.memory, text);
-      } else {
-        this.messages.push({
-          role: "assistant",
-          content: message.content ?? null,
-          tool_calls: message.tool_calls,
-        });
-        this.events.append({ type: "message.added", message: this.messages[this.messages.length - 1] });
-        if (typeof message.content === "string") scanDecisions(this.memory, message.content);
-      }
-
-      // v2 (3.3): soft guardrail — editing without a plan gets a reminder.
-      const batchMayWriteEarly = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch");
-      if (batchMayWriteEarly && this.plan.length === 0 && !this.planNudged) {
-        this.planNudged = true;
-        this.messages.push({
-          role: "user",
-          content:
-            "[system] You modified files without a plan. Call write_todos now with the full remaining plan " +
-            "(steps with verify + acceptance), then continue. One step in_progress at a time.",
-        });
-      }
-      // Execute each tool call (validate args before running)
-      const stepToolResults = new Map<string, { ok: boolean; output: string }>();
-      // H-11: checkpoint before any batch that may write files.
-      const batchMayWrite = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch");
-      if (batchMayWrite) this.snapshots.capture(`step ${steps}: ${(message.tool_calls ?? []).map((t) => t.name).join(",")}`);
-      // I-09: parallelize read-only tool calls (concurrency cap 4); mutating
-      // calls (and any batch containing an ask-gated call) run sequentially.
-      const calls = message.tool_calls ?? [];
-      const needsAsk = calls.some((tc) => {
-        if (tc.name !== "run_command") return false;
-        try {
-          const a = JSON.parse(tc.arguments || "{}") as { command?: unknown };
-          if (typeof a.command !== "string") return false;
-          const d = this.permissions.classifyShell(a.command);
-          return d.decision === "ask" || d.decision === "deny";
-        } catch {
-          return true;
-        }
-      });
-      if (calls.length > 1 && !needsAsk) {
-        const readOnly = calls.every((tc) => READONLY_TOOLS.has(tc.name));
-        if (readOnly) {
-          const executor = this.toolExecutor();
-          const results = await executor.parallelMap(calls, (tc) => executor.executeToolCall(tc, steps, stepToolResults), Math.max(1, this.config.limits?.toolConcurrency ?? 4));
-          for (const r of results) {
-            if (r.post) r.post();
-          }
-        } else {
-          for (const tc of calls) {
-            if (this.aborted) break;
-            const r = await this.toolExecutor().executeToolCall(tc, steps, stepToolResults);
-            if (r.post) r.post();
-          }
-        }
-      } else {
-        for (const tc of calls) {
-          if (this.aborted) break;
-          const r = await this.toolExecutor().executeToolCall(tc, steps, stepToolResults);
-          if (r.post) r.post();
-        }
-      }
-      // ── Guardrail Engine — đánh giá toàn bộ rule sau khi tools chạy xong ──
-      // Thông tin build stop condition: có tool call nào chạy ĐÚNG buildCmd?
-      // Match theo arguments đã parse (đúng hơn substring: "npm run build && rm -rf /"
-      // vẫn tính là build call, nhưng lệnh echo chứa chuỗi buildCmd thì không).
-      const buildCall = hasToolCalls
-        ? (message.tool_calls ?? []).find(
-            (tc) =>
-              tc.name === "run_command" &&
-              (() => {
-                try {
-                  const a = JSON.parse(tc.arguments || "{}") as { command?: unknown };
-                  return typeof a.command === "string" && a.command.includes(buildCmd);
-                } catch {
-                  return false;
-                }
-              })(),
-          )
-        : undefined;
-      let buildPassedThisStep = false;
-      if (buildCall) {
-        const r = stepToolResults.get(buildCall.id);
-        if (r && r.ok) buildPassedThisStep = true;
-      }
-
-      const decisions = await this.guardrails.evaluate({
-        step: steps,
-        maxSteps: this.config.maxSteps,
-        text,
-        message,
-        hasToolCalls,
-        toolResults: stepToolResults,
-        buildPassedThisStep,
-        buildCallPresent: !!buildCall,
-        filesModified: this.filesModified,
-        chatDone,
-        outputTokensThisStep: usage?.completion_tokens,
-        totalTokensIn: this.usageTotals.inputTokens, // G6 budget rule
-        totalTokensOut: this.usageTotals.outputTokens,
-      });
-
-      // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
-      const reminders: string[] = [];
-      let doTrim = false;
-      for (const d of decisions) {
-        const a = d.action;
-        if (a.kind === "inject") {
-          if (d.rule === "wrap-up") this.guardrails.markWrapUpInjected(); // chỉ inject một lần / run
-          reminders.push(a.reminder);
-          continue;
-        }
-        if (a.kind === "trim") {
-          doTrim = true;
-          continue;
-        }
-        if (a.kind === "verify-build") {
-          // Xác minh độc lập với lời của model (async — loop tự chạy verify).
-          lastBuild = await this.verifyAll(buildCmd);
-          if (lastBuild.success) {
-            // v2: self-review the diff before calling it done.
-            const reviewNote = await this.selfReviewGate();
-            if (reviewNote) {
-              reminders.push(`[self-review] blocking findings — fix these, then verify again:\n${reviewNote}`);
-              continue;
-            }
-            if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
-            return this.finish(true, steps, buildCmd, a.successSummary);
-          }
-          // Structured diagnostics + error class instead of a raw log tail.
-          const diags = parseDiagnostics(lastBuild.output);
-          const errClass = classifyError(lastBuild.output);
-          const signature = this.failureSignature(lastBuild.output);
-          this.verifyStrikes = signature === this.lastVerifySignature ? this.verifyStrikes + 1 : 1;
-          this.lastVerifySignature = signature;
-          const failBlock = diags.length > 0 ? formatDiagnostics(diags) : summariseOutput(lastBuild.output);
-          reminders.push(`${a.failReminder}\n${failBlock}\nError class: ${errClass.kind} — ${errClass.strategy}\nFix and continue.`);
-          if (this.verifyStrikes >= 4) {
-            for (const r of reminders) this.messages.push({ role: "user", content: r });
-            if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
-            return this.finish(false, steps, buildCmd, `Verification failed the same way ${this.verifyStrikes} times — stopping. Last error class: ${errClass.kind}.`);
-          }
-          if (this.verifyStrikes >= 2) {
-            reminders.push("<system-reminder>The SAME verification failed repeatedly. Stop retrying the identical approach — change strategy fundamentally, or report the blocker in your final message.</system-reminder>");
-          }
-          continue;
-        }
-        if (a.kind === "finish") {
-          // Giữ nguyên thứ tự tin nhắn như bản inline cũ: reminder (wrap-up)
-          // đã đẩy trước khi kết thúc.
-          if (a.success && this.filesModified && !a.chatOnly && !this.selfReviewDone && this.config.selfReview !== false) {
-            const reviewNote = await this.selfReviewGate();
-            if (reviewNote) {
-              reminders.push(`[self-review] blocking findings — fix these, then verify again:\n${reviewNote}`);
-              continue;
-            }
-          }
-          for (const r of reminders) this.messages.push({ role: "user", content: r });
-          if (doTrim) this.messages = trimHistory(this.messages, safeTrimBudget);
-          return this.finish(a.success, steps, buildCmd, a.summary, a.chatOnly ?? false);
-        }
-      }
-      for (const r of reminders) this.messages.push({ role: "user", content: r });
-
-      // H-10: LLM compaction when history approaches the context window.
-      // Runs BEFORE mechanical trim: trim drops whole turns, which could push
-      // the history below the trigger before compaction ever sees it.
-      if (compactionCfg && shouldCompact(this.messages, compactionCfg)) {
-        try {
-          this.reporter.info("compaction: summarizing older history…");
-          const tokensBefore = estimateTokens(this.messages);
-          const summaryInput = extractSummaryInput(this.currentTask, this.messages);
-          const mem = this.memoryBlock();
-          const summaryRes = await this.client.chat(
-            [
-              ...this.messages,
-              { role: "user", content: `${summaryInput}\n\n${COMPACTION_INSTRUCTION}${mem.instruction}` },
-            ],
-            [], // no tools for the summarizer call
-            { signal: this.runSignal.signal },
-          );
-          this.recordLlmUsage(summaryRes.usage);
-          const summary =
-            redactSecrets(summaryRes.message.content ?? "History summarized.") + mem.suffix;
-          this.messages = applyCompaction(this.messages, summary, compactionCfg);
-          const tokensAfter = estimateTokens(this.messages);
-          this.events.append({
-            type: "compaction.ran",
-            tokensBefore,
-            tokensAfter,
-            summary: summary.slice(0, 2000),
-          });
-          this.snapshotMemory("compaction");
-          this.reporter.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${this.messages.length} messages)`);
-          this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: false });
-          this.emitContextEvent(true);
-        } catch (err) {
-          // Compaction is best-effort — mechanical trim stays as fallback.
-          this.reporter.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
-          // Fallback uses the legacy conservative cap: the next LLM call must
-          // not leave a near-full window if summarization failed.
-          this.messages = trimHistory(this.messages, safeTrimBudget);
-        }
-      }
-      if (doTrim) this.messages = trimHistory(this.messages, trimBudget);
-
-      // Persist session state after every step (enables resume after crash/SIGINT)
-      this.saveSession(steps, buildCmd, lastBuild);
-      this.events.releaseExecution(steps);
-    }
-
-    // Max steps reached or aborted
-    const reason = this.aborted ? "interrupted by user (SIGINT)" : `reached max steps (${this.config.maxSteps})`;
-    this.saveSession(steps, buildCmd, lastBuild);
-    return this.finish(false, steps, buildCmd, `Agent stopped: ${reason}`);
+    return runAgentLoop(this.runLoopRuntime(), startSteps, buildCmd, initialBuild);
   }
+
+  private runLoopRuntime(): RunLoopRuntime {
+    // Getters keep the runtime view live while the loop mutates Agent state.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const agent = this;
+    return {
+      config: this.config,
+      client: this.client,
+      get messages() { return agent.messages; },
+      set messages(value) { agent.messages = value; },
+      get aborted() { return agent.aborted; },
+      get currentTask() { return agent.currentTask; },
+      get filesModified() { return agent.filesModified; },
+      get plan() { return agent.plan; },
+      get planNudged() { return agent.planNudged; },
+      set planNudged(value) { agent.planNudged = value; },
+      get memory() { return agent.memory; },
+      get usageTotals() { return agent.usageTotals; },
+      get verifyStrikes() { return agent.verifyStrikes; },
+      set verifyStrikes(value) { agent.verifyStrikes = value; },
+      get lastVerifySignature() { return agent.lastVerifySignature; },
+      set lastVerifySignature(value) { agent.lastVerifySignature = value; },
+      get selfReviewDone() { return agent.selfReviewDone; },
+      get runSignal() { return agent.runSignal; },
+      guardrails: this.guardrails,
+      permissions: this.permissions,
+      snapshots: this.snapshots,
+      events: this.events,
+      logger: this.logger,
+      reporter: this.reporter,
+      drainSteerInbox: () => this.drainSteerInbox(),
+      steerCounts: () => this.steerInbox.counts(),
+      chatWithStream: () => this.chatWithStream(),
+      recordLlmUsage: (usage) => this.recordLlmUsage(usage),
+      emit: (event) => this.emit(event),
+      emitContextEvent: (force) => this.emitContextEvent(force),
+      toolExecutor: () => this.toolExecutor(),
+      verifyAll: (command) => this.verifyAll(command),
+      selfReviewGate: () => this.selfReviewGate(),
+      failureSignature: (output) => this.failureSignature(output),
+      compactionSettings: () => this.compactionSettings(),
+      memoryBlock: () => this.memoryBlock(),
+      snapshotMemory: (trigger) => this.snapshotMemory(trigger),
+      saveSession: (steps, command, lastBuild) => this.saveSession(steps, command, lastBuild),
+      finish: (success, steps, command, summary, chatOnly) => this.finish(success, steps, command, summary, chatOnly),
+    };
+  }
+
 
   /** Persist current agent state (v2 event log + manifest; crash-resumable). */
   private saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null): void {
