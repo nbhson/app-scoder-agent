@@ -1,5 +1,5 @@
-import type { AgentConfig } from "../config.js";
-import { loadRcFile } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
+import { loadRcFile } from "../config/config.js";
 import { parseCustomProviders, resolveProvider, splitProviderModel } from "../provider-registry.js";
 import type { ToolSpec } from "../llm.js";
 import type { ToolDiff, TodoItem } from "../tools/types.js";

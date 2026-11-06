@@ -2,7 +2,7 @@ import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { safePath, toPosInt, toResult, clamp } from "./path-safety.js";
 import { globToRegExp } from "./search.js";
-import type { ToolResult } from "../tools/types.js";
+import type { ToolResult } from "./types.js";
 
 export function toolListFiles(
   workdir: string,

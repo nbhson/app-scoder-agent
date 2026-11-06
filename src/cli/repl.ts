@@ -2,7 +2,7 @@
 import process from "node:process";
 import { createInterface } from "node:readline";
 import { Agent } from "../agent.js";
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import { dispatchCommand, type CommandHost } from "../commands/registry.js";
 import * as ui from "../ui.js";
 

@@ -4,7 +4,7 @@ import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
 import { Agent, type AgentEvent, type AgentRunResult } from "./agent.js";
-import type { AgentConfig } from "./config.js";
+import type { AgentConfig } from "./config/config.js";
 
 /**
  * `scoder serve` — HTTP API that runs agent tasks in the background and

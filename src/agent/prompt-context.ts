@@ -1,4 +1,4 @@
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import type { AgentDef } from "../agents.js";
 import { discoverAgents } from "../agents.js";
 import { buildAgentGuideBlock } from "../agents-guide.js";

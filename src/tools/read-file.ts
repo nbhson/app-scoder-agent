@@ -3,7 +3,7 @@ import { relative } from "node:path";
 import { detectImageBytes } from "../media/image.js";
 import { clamp, MAX_FILE_SIZE_BYTES, safePath, toPosInt, toResult } from "./path-safety.js";
 import { isProtectedEnvFile } from "./path-safety.js";
-import type { ToolResult } from "../tools/types.js";
+import type { ToolResult } from "./types.js";
 
 export function toolReadFile(workdir: string, args: { path: string; offset?: number | string; limit?: number | string }): ToolResult {
   return toResult(() => {

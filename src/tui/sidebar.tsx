@@ -9,7 +9,7 @@
  */
 import React from "react";
 import { Box, Text } from "ink";
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import { contextWindowFor } from "../model-catalog.js";
 import { resolveModelPricing } from "../shared/constants.js";
 import { latestPlan, type ChatItem, type TuiState } from "./state.js";

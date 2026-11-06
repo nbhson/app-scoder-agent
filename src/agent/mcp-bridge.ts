@@ -1,9 +1,9 @@
-import { saveApproval } from "../config.js";
+import { saveApproval } from "../config/config.js";
 import { redactSecrets, type ToolSpec } from "../llm.js";
 import { allToolSpecs } from "../tools.js";
 import { applyToolFilter } from "./types.js";
 import { McpManager, type McpServerConfig } from "../mcp.js";
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import type { AgentEvent } from "./types.js";
 import type { PermissionChecker } from "../permissions.js";
 import { validateSchema } from "../shared/json-schema.js";

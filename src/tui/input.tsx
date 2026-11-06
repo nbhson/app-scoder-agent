@@ -4,7 +4,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import type { Agent } from "../agent.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg } from "../commands/definitions.js";

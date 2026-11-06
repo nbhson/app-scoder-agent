@@ -1,7 +1,7 @@
 /** T1: CommandHost cho registry dùng chung với REPL. */
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import type { Agent } from "../../agent.js";
-import type { AgentConfig } from "../../config.js";
+import type { AgentConfig } from "../../config/config.js";
 import type { CommandHost } from "../../commands/registry.js";
 import { initialState, estimateItemRows, type ChatItem, type TuiState } from "../state.js";
 

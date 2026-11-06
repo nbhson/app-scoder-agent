@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { formatSkillIndex, type Skill } from "./skills.js";
 import type { AgentDef } from "./agents.js";
-import type { AgentConfig } from "./config.js";
+import type { AgentConfig } from "./config/config.js";
 
 // P2: memoize per (workdir, date, platform, node version) — the git probe is a
 // spawned process and the output cannot change for a given key within a run.

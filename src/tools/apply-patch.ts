@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, statSync } from "node:fs";
 import { unifiedDiff } from "../diff.js";
 import { safePath, MAX_FILE_SIZE_BYTES } from "./path-safety.js";
 import { gateWrite, toToolDiff, formatFile, applyOneEdit } from "./file-edit-common.js";
-import type { ToolContext, ToolResult } from "../tools/types.js";
+import type { ToolContext, ToolResult } from "./types.js";
 
 export async function toolApplyPatch(
   ctx: ToolContext,

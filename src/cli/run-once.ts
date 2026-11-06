@@ -1,7 +1,7 @@
 /** One-shot `scoder "<task>"` mode: run to completion, exit with the result code. */
 import process from "node:process";
 import { Agent } from "../agent.js";
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import { pruneSessions } from "../session.js";
 import * as ui from "../ui.js";
 

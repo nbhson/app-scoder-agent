@@ -2,7 +2,7 @@ import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { safePath, clamp, toPosInt, toResult } from "./path-safety.js";
-import type { ToolResult } from "../tools/types.js";
+import type { ToolResult } from "./types.js";
 
 const SEARCH_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
 const MAX_SEARCH_HITS = 50;

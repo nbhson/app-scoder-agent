@@ -1,4 +1,4 @@
-import type { TaskSpec, AgentTool } from "../tools/types.js";
+import type { TaskSpec, AgentTool } from "./types.js";
 import { obj, str } from "./schemas.js";
 
 export const taskTool: AgentTool = {

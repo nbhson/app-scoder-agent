@@ -1,4 +1,4 @@
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import { runBuild, type BuildResult } from "../build.js";
 import type { ProviderRuntimeContract } from "../provider-registry.js";
 import type { ChatResult } from "../llm.js";

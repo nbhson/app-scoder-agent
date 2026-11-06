@@ -1,5 +1,5 @@
 /** `scoder mcp <list|add|remove|test|import>` subcommand. */
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import type { McpServerConfig } from "../mcp.js";
 
 export async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "remove" | "test" | "import", restArgs: string[]): Promise<void> {

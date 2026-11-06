@@ -1,5 +1,5 @@
-import type { AgentConfig } from "./config.js";
-import { loadPermissionLists, loadPolicyRules, loadSavedApprovals } from "./config.js";
+import type { AgentConfig } from "./config/config.js";
+import { loadPermissionLists, loadPolicyRules, loadSavedApprovals } from "./config/config.js";
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm.js";
 import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
@@ -16,7 +16,7 @@ import { SnapshotManager } from "./snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./provider-registry.js";
-import { loadRcFile } from "./config.js";
+import { loadRcFile } from "./config/config.js";
 import { McpManager } from "./mcp.js";
 import { watchWorkdir, type ReloadWatcher } from "./watch.js";
 import type { Skill } from "./skills.js";

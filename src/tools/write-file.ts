@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { unifiedDiff } from "../diff.js";
 import { safePath } from "./path-safety.js";
 import { gateWrite, toToolDiff, formatFile } from "./file-edit-common.js";
-import type { ToolContext, ToolResult } from "../tools/types.js";
+import type { ToolContext, ToolResult } from "./types.js";
 
 export async function toolWriteFile(ctx: ToolContext, args: { path: string; content: string }): Promise<ToolResult> {
   let abs: string;

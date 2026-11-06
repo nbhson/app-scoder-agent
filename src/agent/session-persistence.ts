@@ -1,4 +1,4 @@
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import type { ChatMessage } from "../llm.js";
 import type { BuildResult } from "../build.js";
 import { EventSessionStore, SessionStore, type SessionFile } from "../session.js";

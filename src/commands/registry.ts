@@ -11,7 +11,7 @@
  */
 import type { Agent, AgentRunResult, UsageTotals } from "../agent.js";
 import type { TranscriptItem } from "./types.js";
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import { listSessions, resolveSessionId, type SessionFile, type SessionSummary } from "../session.js";
 import { discoverSkills, skillWarnings, type Skill } from "../skills.js";
 import { selectableAgents } from "../agents.js";

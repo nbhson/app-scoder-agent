@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { resolve, dirname, basename, relative, isAbsolute } from "node:path";
-import type { ToolResult } from "../tools/types.js";
+import type { ToolResult } from "./types.js";
 
 export let MAX_OUTPUT_CHARS = 20_000;
 export function setMaxOutputChars(n: number): void {

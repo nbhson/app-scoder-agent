@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { resolve } from "node:path";
-import { loadConfig } from "../config.js";
+import { loadConfig } from "../config/config.js";
 import { Agent } from "../agent.js";
 import { listSessions, resolveSessionId } from "../session.js";
 import { JsonlLogger } from "../logger.js";

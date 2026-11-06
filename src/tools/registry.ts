@@ -10,7 +10,7 @@ import { toolGrep, toolGlob } from "./search.js";
 import { toolRunCommand } from "./run-command.js";
 import { taskTool } from "./task-tool.js";
 import { obj, str, num } from "./schemas.js";
-import type { AgentTool, TodoItem } from "../tools/types.js";
+import type { AgentTool, TodoItem } from "./types.js";
 import type { ToolSpec } from "../llm.js";
 
 export const AGENT_TOOLS: AgentTool[] = [

@@ -1,4 +1,4 @@
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig } from "../config/config.js";
 import type { BuildResult } from "../build.js";
 import { trimHistory, summariseOutput, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context.js";
 import { CHAT_DONE_MARKER } from "../guardrails.js";
