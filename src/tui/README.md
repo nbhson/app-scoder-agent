@@ -20,11 +20,18 @@ row, cell wrap, key-value fallback for narrow panes, 50-row cap) and
 `markdown/diagram.tsx` (mermaid structured summary, ```chart / ```timeline
 fences). Inline tokens: `markdown/inline.ts` (parse) + `inline-render.tsx`
 (Ink). Parse results are LRU-cached per text; `ChatItemView` is memoized with
-field-level equality (state mutates items in place — reference equality would
-freeze streaming).
+field-level equality — `state.ts` therefore updates chat items IMMUTABLY
+(`patchItem` replaces the object); in-place mutation would make prev/next
+props the same object and freeze streaming/tool updates.
 
 ## Layout & charset invariants
 
+- `sidebar.tsx` renders under a real height budget (`rows` measured from the
+  main row): sections greedy-fit in the fixed display order SESSION → MCP →
+  METRICS → PHASES → PLAN → SUBAGENTS → BUILD; a section that doesn't fit
+  wholly is SKIPPED (never half-clipped); PLAN shrinks to the remaining space
+  ("… +N more"). PLAN reads `state.plan` — a dedicated field (not the chat
+  items) so it survives `MAX_ITEMS` eviction on heavy runs.
 - `text-width.ts` (`measure/clipCells/padEndCells/padStartCells/wrapCells`) is
   the ONLY way to measure/clip/pad/wrap visible text — cell-accurate for
   emoji, CJK, combining marks (Vietnamese), ANSI passthrough.

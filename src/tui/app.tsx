@@ -230,8 +230,10 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           )}
         </Box>
         </Box>
-        {/* Sidebar phải: plan live · tok/s · phases · build · MCP (narrow → ẩn). */}
-        {showSidebar && <Sidebar state={state} config={cfg} />}
+        {/* Sidebar phải: session · MCP · metrics · phases · plan · build
+            (narrow → ẩn). rows = chiều cao đo được của khung chính — sidebar
+            greedy-fit theo budget, section không vừa trọn vẹn thì bỏ qua. */}
+        {showSidebar && <Sidebar state={state} config={cfg} rows={viewport.clientHeight || undefined} />}
       </Box>
       {/* Session picker modal — Ctrl+S or bare "/" opens it. */}
       {sessionPickerOpen && (

@@ -23,7 +23,7 @@ export const AGENT_TOOLS: AgentTool[] = [
           "Load the full instructions of a named skill from the AVAILABLE SKILLS index (project + global). Call this at the start of a task when it matches a skill, then follow the returned instructions exactly.",
         parameters: obj(
           {
-            name: str("Skill name from the AVAILABLE SKILLS index, e.g. 'prompt-gate-workflow'"),
+            name: str("Skill name ONLY, exactly as listed in the AVAILABLE SKILLS index, e.g. 'prompt-gate-workflow' — do NOT append task text."),
             section: str("Optional section heading to load (progressive disclosure). Omit for full body."),
           },
           ["name"],

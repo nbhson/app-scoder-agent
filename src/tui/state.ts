@@ -95,6 +95,13 @@ export interface TuiState {
   verification: { ok: boolean | null; detail: string } | null;
   /** v2: subagents spawned in this run (tree state for the sidebar). */
   subagents: Array<{ id: string; name: string; description: string; status: "running" | "ok" | "failed"; steps?: number; summary?: string }>;
+  /**
+   * Plan hiện tại cho sidebar PLAN (nguồn: write_todos). Field riêng thay vì
+   * derive từ items: todo chat-items bị MAX_ITEMS eviction xoá khỏi items trên
+   * run dài, khiến plan "biến mất" khỏi sidebar. Reset khi user gửi message mới
+   * (run_start, hoặc trực tiếp ở submit/steer path) — cùng ngữ nghĩa latestPlan.
+   */
+  plan: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> | null;
 }
 
 export function initialState(): TuiState {
@@ -127,6 +134,7 @@ export function initialState(): TuiState {
     queue: { pending: 0, steering: 0 },
     verification: null,
     subagents: [],
+    plan: null,
   };
 }
 
@@ -141,6 +149,16 @@ function appendItem(state: TuiState, item: ChatItem): void {
 
 function lastItem(state: TuiState): ChatItem | undefined {
   return state.items[state.items.length - 1];
+}
+
+/**
+ * Thay một chat item bằng bản copy đã patch — KHÔNG mutate in-place.
+ * ChatItemView là React.memo: mutate in-place khiến prevProps.item ===
+ * nextProps.item (cùng object), comparator so object với chính nó luôn
+ * "bằng" → memo đóng băng UI (stream đứng ở chunk đầu, tool kẹt "running").
+ */
+function patchItem(state: TuiState, index: number, patch: Record<string, unknown>): void {
+  state.items[index] = { ...state.items[index], ...patch } as ChatItem;
 }
 
 /** Cap long strings, keeping the tail (errors usually live at the end). */
@@ -215,6 +233,8 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       if (!(last && last.kind === "user" && last.text === ev.task)) {
         appendItem(state, { kind: "user", text: ev.task });
       }
+      // Plan của task trước không được lọt sang task mới.
+      state.plan = null;
       break;
     }
     case "llm_reasoning": {
@@ -223,8 +243,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       if (!state.thinkingVisible) break;
       const last = lastItem(state);
       if (last && last.kind === "thinking" && last.streaming) {
-        last.text += ev.delta;
-        if (last.text.length > MAX_TEXT_CHARS) last.text = last.text.slice(-MAX_TEXT_CHARS);
+        let text = last.text + ev.delta;
+        if (text.length > MAX_TEXT_CHARS) text = text.slice(-MAX_TEXT_CHARS);
+        patchItem(state, state.items.length - 1, { text });
       } else {
         appendItem(state, { kind: "thinking", text: ev.delta, streaming: true });
       }
@@ -239,8 +260,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.llmCallStartedAt = Date.now();
       // A new step starts: close any still-"streaming" assistant message.
       const last = lastItem(state);
-      if (last && last.kind === "assistant" && last.streaming) last.streaming = false;
-      if (last && last.kind === "thinking" && last.streaming) last.streaming = false;
+      if (last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming) {
+        patchItem(state, state.items.length - 1, { streaming: false });
+      }
       break;
     }
     case "llm_delta": {
@@ -250,12 +272,13 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.streamingOutputChars += ev.delta.length;
       const last = lastItem(state);
       if (last && last.kind === "assistant" && last.streaming) {
-        last.text += ev.delta;
-        if (last.text.length > MAX_TEXT_CHARS) last.text = last.text.slice(-MAX_TEXT_CHARS);
+        let text = last.text + ev.delta;
+        if (text.length > MAX_TEXT_CHARS) text = text.slice(-MAX_TEXT_CHARS);
+        patchItem(state, state.items.length - 1, { text });
       } else {
         if (last && last.kind === "assistant" && last.streaming === false && last.text === "") {
           // reuse an empty assistant placeholder from a previous step
-          last.streaming = true;
+          patchItem(state, state.items.length - 1, { streaming: true });
         } else {
           appendItem(state, { kind: "assistant", text: ev.delta, streaming: true });
         }
@@ -301,8 +324,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       for (let i = state.items.length - 1; i >= 0; i--) {
         const it = state.items[i];
         if (it.kind === "tool" && it.ok === null && it.name === ev.name) {
-          it.output += ev.delta;
-          if (it.output.length > MAX_OUTPUT_CHARS) it.output = capTail(it.output);
+          let output = it.output + ev.delta;
+          if (output.length > MAX_OUTPUT_CHARS) output = capTail(output);
+          patchItem(state, i, { output });
           break;
         }
         // Stop searching at the previous tool boundary to avoid cross-attachment.
@@ -317,11 +341,13 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         const it = state.items[i];
         const match = it.kind === "tool" && it.ok === null && (ev.id ? it.callId === ev.id : it.name === ev.name);
         if (match) {
-          it.ok = ev.ok;
-          if (it.startedAt != null) it.durationMs = Date.now() - it.startedAt;
-          // Prefer the final (complete) result over accumulated live chunks.
-          if (ev.output.length >= it.output.length) it.output = ev.output;
-          if (ev.image) it.image = ev.image;
+          patchItem(state, i, {
+            ok: ev.ok,
+            durationMs: it.startedAt != null ? Date.now() - it.startedAt : it.durationMs,
+            // Prefer the final (complete) result over accumulated live chunks.
+            output: ev.output.length >= it.output.length ? ev.output : it.output,
+            image: ev.image ?? it.image,
+          });
           break;
         }
       }
@@ -347,7 +373,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       break;
     }
     case "todo": {
-      // Plan updates render as a live checkbox list in the chat pane.
+      // Snapshot last-wins cho sidebar PLAN (field riêng, không bị MAX_ITEMS
+      // eviction xoá trên run dài). Chat item vẫn append để giữ transcript.
+      state.plan = ev.items.map((t) => ({ ...t }));
       appendItem(state, { kind: "todo", items: ev.items.map((t) => ({ ...t })) });
       break;
     }
@@ -405,7 +433,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       for (let i = state.items.length - 1; i >= 0; i--) {
         const it = state.items[i];
         if (it.kind === "tool" && it.ok === null && (it.callId === ev.id || it.name === ev.name)) {
-          if (ev.message) it.output = capTail(`${it.output}\n… ${ev.message}`.trim());
+          if (ev.message) patchItem(state, i, { output: capTail(`${it.output}\n… ${ev.message}`.trim()) });
           break;
         }
         if (it.kind === "tool") break;
@@ -427,9 +455,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       // Close ALL dangling streaming assistant messages — not just the last
       // item: a notice/tool item appended after the assistant text would
       // otherwise leave it stuck in raw streaming mode (invisible text).
-      for (const it of state.items) {
-        if (it.kind === "assistant" && it.streaming) it.streaming = false;
-      }
+      state.items = state.items.map((it) =>
+        it.kind === "assistant" && it.streaming ? { ...it, streaming: false } : it,
+      );
       break;
     }
     case "error": {
@@ -446,6 +474,8 @@ export function markAborted(state: TuiState): TuiState {
   state.summary = "abort requested…";
   state.endedAt = Date.now();
   const last = lastItem(state);
-  if (last && last.kind === "assistant") last.streaming = false;
+  if (last && last.kind === "assistant" && last.streaming) {
+    patchItem(state, state.items.length - 1, { streaming: false });
+  }
   return state;
 }

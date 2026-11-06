@@ -49,6 +49,17 @@ describe("skills", () => {
     assert.equal(findSkill(proj, "nope"), null);
   });
 
+  it("findSkill lenient: tên dính task text vẫn resolve (regression load_skill 'not found' dù skill tồn tại)", () => {
+    // Model đôi khi gọi load_skill với name = "code-review file a.ts" — phải
+    // resolve được thay vì báo "not found — available: …code-review…".
+    assert.equal(findSkill(proj, "code-review cung cấp angular new feature")?.name, "code-review");
+    assert.equal(findSkill(proj, "  code-review   xoá hộ tôi file này")?.name, "code-review");
+    // Không over-match: tên khác hẳn hoặc chỉ trùng một phần token vẫn null.
+    assert.equal(findSkill(proj, "code"), null);
+    assert.equal(findSkill(proj, "code-reviewx"), null);
+    assert.equal(findSkill(proj, "review mã nguồn"), null);
+  });
+
   it("project skills override global ones with the same name", () => {
     const globalDir = join(root, "home", ".scoder", "skills", "review");
     mkdirSync(globalDir, { recursive: true });

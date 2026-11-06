@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.4] — 2026-11-07
+
+### Fixed
+- **TUI chat frozen after the markdown-pipeline refactor** (regression from 0.9.3): `ChatItemView` is `React.memo`-wrapped but `state.ts` mutated chat items in place, so prev/next props were the SAME object and the memo blocked every re-render — streaming text froze at the first chunk and tools stayed "running" forever. All item updates are now immutable (`patchItem` replaces the object in `items`); regression tests pin the immutability contract.
+- **Sidebar section order restored** to the original layout: SESSION → MCP → METRICS → PHASES → PLAN → SUBAGENTS → BUILD. Sections greedy-fit the measured height budget (a section that doesn't fit wholly is skipped, never half-clipped); PLAN shrinks to the remaining space with a "… +N more" row.
+- **Plan no longer disappears on heavy runs**: the sidebar PLAN reads `state.plan`, a dedicated snapshot field immune to `MAX_ITEMS` transcript eviction; reset on every new user message (same semantics as `latestPlan`).
+- **`load_skill` / `/skill` "not found" despite the skill existing**: models sometimes glue task text onto the skill name (`"review-and-select-prompt cung cấp angular…"`). `findSkill` now resolves leniently — exact → first token → longest skill-name prefix (word-boundary safe, no over-matching) — and the tool description says to pass the skill name only.
+
 ## [0.9.1] — 2026-11-05
 
 ### Changed

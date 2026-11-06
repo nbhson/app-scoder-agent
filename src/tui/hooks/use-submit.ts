@@ -101,7 +101,8 @@ export function useSubmit(deps: {
         // boundary (H-08, "steer by default" — pattern from opencode).
         preSubmit(task);
         agentRef.current?.steer(task);
-        update((s) => ({ ...s, items: [...s.items, { kind: "user", text: `${task}  (steered)` }] }));
+        // Steer = user message mới → plan cũ reset (cùng ngữ nghĩa latestPlan).
+        update((s) => ({ ...s, plan: null, items: [...s.items, { kind: "user", text: `${task}  (steered)` }] }));
         return;
       }
       preSubmit(task);
@@ -111,7 +112,8 @@ export function useSubmit(deps: {
       const isFirst = stateRef.current.items.every((i) => i.kind !== "user");
       // runTurn() doesn't emit run_start, so the TUI shows the user's message
       // itself; applyEvent's run_start dedupe keeps turn 1 from doubling.
-      update((s) => ({ ...s, items: [...s.items, { kind: "user", text: task }], status: "running", summary: null }));
+      // runTurn cũng không reset plan — reset ở đây (user message mới).
+      update((s) => ({ ...s, plan: null, items: [...s.items, { kind: "user", text: task }], status: "running", summary: null }));
 
       const agent = createAgent();
       try {

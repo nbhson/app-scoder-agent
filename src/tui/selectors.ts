@@ -94,7 +94,9 @@ export function estimateItemRows(item: ChatItem): number {
     case "diff":
       return 3 + Math.min(24, (item.text?.split("\n").length ?? 0)); // header + ≤24 lines + border
     case "todo":
-      return 2 + item.items.length;
+      // TodoItemView render null (plan hiển thị ở sidebar qua state.plan) —
+      // chiếm 0 dòng thực tế trong transcript.
+      return 0;
     case "build":
       return 1;
     case "notice":

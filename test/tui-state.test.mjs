@@ -84,6 +84,57 @@ describe("tui state — markAborted", () => {
   });
 });
 
+// ── Immutability contract — ChatItemView là React.memo ──────────────────────
+// Regression: reducer từng mutate item in-place → memo comparator so object
+// với chính nó → luôn "bằng" → UI đóng băng (stream dừng ở chunk đầu, tool
+// kẹt "running"). Mọi cập nhật item phải THAY object trong items.
+
+describe("tui state — item updates are immutable (memo-safe)", () => {
+  it("llm_delta append text bằng object MỚI, không mutate item cũ", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, { type: "llm_delta", delta: "Chào" });
+    const first = s.items[s.items.length - 1];
+    applyEvent(s, { type: "llm_delta", delta: " bạn" });
+    const second = s.items[s.items.length - 1];
+    assert.notEqual(second, first, "item phải là object mới để React.memo re-render");
+    assert.equal(second.text, "Chào bạn");
+    assert.equal(first.text, "Chào", "item cũ không bị mutate");
+  });
+
+  it("step đóng streaming bằng object mới", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, { type: "llm_delta", delta: "x" });
+    const streaming = s.items[s.items.length - 1];
+    applyEvent(s, { type: "step", step: 2, maxSteps: 40 });
+    const closed = s.items[s.items.length - 1];
+    assert.notEqual(closed, streaming);
+    assert.equal(closed.streaming, false);
+    assert.equal(streaming.streaming, true, "snapshot cũ giữ nguyên");
+  });
+
+  it("tool_result cập nhật tool item bằng object mới (ok/durationMs/output)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, { type: "tool_call", step: 1, id: "t1", name: "web_fetch", args: { url: "u" } });
+    const running = s.items[s.items.length - 1];
+    applyEvent(s, { type: "tool_result", step: 1, id: "t1", name: "web_fetch", ok: true, output: "done" });
+    const done = s.items[s.items.length - 1];
+    assert.notEqual(done, running);
+    assert.equal(done.ok, true);
+    assert.equal(done.output, "done");
+    assert.equal(running.ok, null, "item running cũ không bị mutate");
+  });
+
+  it("finish đóng mọi assistant đang streaming bằng object mới", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, { type: "llm_delta", delta: "hello" });
+    const streaming = s.items[s.items.length - 1];
+    applyEvent(s, { type: "finish", success: true, summary: "ok" });
+    const closed = s.items[s.items.length - 1];
+    assert.notEqual(closed, streaming);
+    assert.equal(closed.streaming, false);
+  });
+});
+
 // ── Slash-command parser ────────────────────────────────────────────────────
 
 describe("parseSlashCommand", () => {

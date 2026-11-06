@@ -200,9 +200,27 @@ export function discoverSkills(workdir: string): Skill[] {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Tìm skill theo tên. Ngoài exact match (case-insensitive), chịu cả trường
+ * hợp model/user dán thêm text sau tên skill — vd load_skill với name =
+ * "review-and-select-prompt cung cấp angular new feature": thử first token,
+ * rồi tên skill dài nhất là prefix của input (theo word boundary).
+ */
 export function findSkill(workdir: string, name: string): Skill | null {
-  const wanted = name.toLowerCase();
-  return discoverSkills(workdir).find((s) => s.name.toLowerCase() === wanted) ?? null;
+  const skills = discoverSkills(workdir);
+  const wanted = name.trim().toLowerCase();
+  const exact = skills.find((s) => s.name.toLowerCase() === wanted);
+  if (exact) return exact;
+  const firstToken = wanted.split(/\s+/)[0];
+  const byToken = skills.find((s) => s.name.toLowerCase() === firstToken);
+  if (byToken) return byToken;
+  const byPrefix = skills
+    .filter((s) => {
+      const n = s.name.toLowerCase();
+      return wanted.startsWith(n) && wanted.length > n.length && /[\s/]/.test(wanted[n.length]);
+    })
+    .sort((a, b) => b.name.length - a.name.length)[0];
+  return byPrefix ?? null;
 }
 
 export function formatSkillIndex(skills: Skill[]): string {

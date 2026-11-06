@@ -2,11 +2,19 @@
  * Sidebar TUI (pattern opencode) — các phần thuần logic, không render:
  *   · reducer mcp_status structured (server/state) → map mcpServers cho sidebar
  *   · latestPlan(items) — plan mới nhất (last-wins) cho PlanSection
+ *   · state.plan — field chuyên dụng cho sidebar (miễn nhiễm MAX_ITEMS eviction)
+ *   · height budget — thứ tự section cố định (layout gốc) SESSION → MCP →
+ *     METRICS → PHASES → PLAN → SUBAGENTS → BUILD; section không vừa trọn vẹn
+ *     bị bỏ qua (không clip nửa chừng); PLAN co giãn theo chỗ còn lại
  * Chạy: node --test test/tui-sidebar.test.mjs (sau khi npm run build)
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
+import React from "react";
+import { render, Box } from "ink";
 import { applyEvent, initialState, latestPlan } from "../dist/tui/state.js";
+import { Sidebar } from "../dist/tui/sidebar.js";
 
 const baseEvent = {
   type: "run_start",
@@ -101,5 +109,148 @@ describe("tui sidebar — latestPlan", () => {
     const plan = latestPlan(items);
     assert.ok(plan, "plan mới hiện sau user message mới");
     assert.equal(plan.items[0].content, "step A");
+  });
+});
+
+// ── state.plan — nguồn dữ liệu PlanSection (không qua items, không bị evict) ──
+
+describe("tui sidebar — state.plan field", () => {
+  const planEvent = {
+    type: "todo",
+    items: [
+      { content: "step 1", status: "completed" },
+      { content: "step 2", status: "in_progress" },
+    ],
+  };
+
+  it("todo event set state.plan (last-wins snapshot)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    assert.equal(s.plan, null);
+    applyEvent(s, planEvent);
+    assert.equal(s.plan.length, 2);
+    applyEvent(s, { type: "todo", items: [{ content: "only", status: "in_progress" }] });
+    assert.equal(s.plan.length, 1);
+    assert.equal(s.plan[0].content, "only");
+  });
+
+  it("run_start reset plan (stale plan không lọt sang task mới)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, planEvent);
+    assert.ok(s.plan);
+    applyEvent(s, { ...baseEvent, task: "new task" });
+    assert.equal(s.plan, null);
+  });
+
+  it("plan sống sót qua MAX_ITEMS eviction — regression 'tác vụ nặng mất plan'", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, planEvent);
+    // Run nặng: > 400 items (MAX_ITEMS) đẩy todo item ra khỏi transcript…
+    for (let i = 0; i < 450; i++) {
+      applyEvent(s, { type: "tool_call", id: `c${i}`, name: "read_file", args: {}, step: i });
+    }
+    assert.equal(latestPlan(s.items), null, "todo item đã bị evict khỏi items");
+    assert.ok(s.plan, "state.plan vẫn giữ snapshot cho sidebar");
+    assert.equal(s.plan[1].content, "step 2");
+  });
+});
+
+// ── Height budget — thứ tự gốc cố định, section thừa bỏ qua gọn ─────────────
+
+function stripAnsi(s) {
+  return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+}
+
+async function renderSidebar(state, cfg, rows, containerHeight = rows) {
+  const stream = new PassThrough();
+  stream.columns = 100;
+  stream.rows = Math.max(containerHeight, 24);
+  let out = "";
+  stream.on("data", (c) => (out += String(c)));
+  const app = render(
+    React.createElement(
+      Box,
+      { flexDirection: "row", height: containerHeight },
+      React.createElement(Box, { flexGrow: 1 }, React.createElement("ink-text", null, "chat")),
+      React.createElement(Sidebar, { state, config: cfg, rows }),
+    ),
+    { stdout: stream, stderr: stream, patchConsole: false, exitOnCtrlC: false },
+  );
+  await new Promise((r) => setTimeout(r, 80));
+  app.unmount();
+  await app.waitUntilExit();
+  return stripAnsi(out);
+}
+
+describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
+  const cfg = { workdir: "/tmp/demo", model: "gpt-4o", mcpServers: { fs: {}, gate: {} } };
+
+  function busyState() {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, {
+      type: "todo",
+      items: [
+        { content: "investigate root cause", status: "completed" },
+        { content: "implement fix", status: "in_progress" },
+        { content: "verify build", status: "pending" },
+      ],
+    });
+    applyEvent(s, { type: "step", step: 3, maxSteps: 40 });
+    applyEvent(s, { type: "llm_usage", usage: { input_tokens: 1500, output_tokens: 700, cached_tokens: 200 } });
+    applyEvent(s, { type: "mcp_status", line: "l", server: "fs", state: "ready" });
+    applyEvent(s, { type: "mcp_status", line: "l", server: "gate", state: "ready" });
+    applyEvent(s, { type: "build", success: false, command: "npm run build" });
+    return s;
+  }
+
+  it("thứ tự section đúng layout gốc: SESSION → MCP → METRICS → PHASES → PLAN → BUILD", async () => {
+    const out = await renderSidebar(busyState(), cfg, undefined, 60);
+    const order = ["─ SESSION", "─ MCP", "─ METRICS", "─ PHASES", "─ PLAN", "─ BUILD"];
+    let prev = -1;
+    for (const section of order) {
+      const idx = out.indexOf(section);
+      assert.ok(idx > prev, `section ${section} phải hiện và đứng sau section trước`);
+      prev = idx;
+    }
+  });
+
+  it("terminal thấp (~22 dòng): section dưới không vừa bị BỎ QUA trọn vẹn (không clip nửa chừng)", async () => {
+    const out = await renderSidebar(busyState(), cfg, 22);
+    // Vừa: SESSION + MCP + METRICS. Hết chỗ: PHASES + PLAN + BUILD.
+    assert.match(out, /─ SESSION/);
+    assert.match(out, /─ MCP/);
+    assert.match(out, /─ METRICS/);
+    assert.ok(!out.includes("─ PHASES"), "PHASES không vừa → bỏ qua, không render nửa section");
+    assert.ok(!out.includes("─ PLAN"), "PLAN không vừa → bỏ qua, không render nửa section");
+    assert.ok(!out.includes("─ BUILD"), "BUILD không vừa → bỏ qua, không render nửa section");
+    assert.match(out, /└─/, "border dưới vẽ gọn");
+  });
+
+  it("terminal vừa (~31 dòng): PHASES hiện, PLAN co giãn theo chỗ còn lại", async () => {
+    const out = await renderSidebar(busyState(), cfg, 31);
+    assert.match(out, /─ PHASES/);
+    assert.match(out, /─ PLAN/);
+    assert.match(out, /1\/3 steps/);
+    assert.match(out, /… \+2 more/, "plan bị cap theo chỗ còn lại");
+  });
+
+  it("không truyền rows → render đủ mọi section (back-compat cho terminal cao)", async () => {
+    const out = await renderSidebar(busyState(), cfg, undefined, 60);
+    for (const section of ["SESSION", "MCP", "METRICS", "PHASES", "PLAN", "BUILD"]) {
+      assert.ok(out.includes(`─ ${section}`), `thiếu section ${section}`);
+    }
+  });
+
+  it("plan dài bị cap theo chỗ còn lại, METRICS (đứng trước) không bị ảnh hưởng", async () => {
+    const s = busyState();
+    applyEvent(s, {
+      type: "todo",
+      items: Array.from({ length: 14 }, (_, i) => ({ content: `step ${i + 1}`, status: i === 0 ? "in_progress" : "pending" })),
+    });
+    const out = await renderSidebar(s, cfg, 31);
+    assert.match(out, /─ METRICS/, "METRICS vẫn hiện dù plan dài");
+    assert.match(out, /steps ▰/, "fuel gauge của METRICS vẫn vẽ");
+    assert.match(out, /─ PLAN/);
+    assert.match(out, /… \+13 more/, "plan bị cap khi thiếu chỗ");
+    assert.ok(!out.includes("step 14"), "không vẽ tràn hết 14 dòng plan");
   });
 });

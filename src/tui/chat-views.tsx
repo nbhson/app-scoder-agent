@@ -185,17 +185,19 @@ function DiffItemView({ item, width }: { item: Extract<ChatItem, { kind: "diff" 
 
 /**
  * Plan KHÔNG còn render trong chat — checklist live hiển thị ở Sidebar bên
- * phải (sidebar.tsx, PlanSection) để transcript sạch; todo items vẫn được
- * giữ trong state (latestPlan) làm nguồn dữ liệu cho sidebar.
+ * phải (sidebar.tsx, PlanSection) để transcript sạch; plan hiển thị từ
+ * state.plan (field riêng, miễn nhiễm MAX_ITEMS eviction trên run dài).
  */
 function TodoItemView(): null {
   return null;
 }
 
 /**
- * Field-level equality for ChatItem. state.ts mutates items in place (streaming
- * deltas append to `text`), so reference equality alone is WRONG — the memo
- * would freeze a streaming message. Compare every field the views render.
+ * Field-level equality for ChatItem — defense-in-depth cho React.memo.
+ * state.ts cập nhật item theo kiểu immutable (patchItem thay object trong
+ * array): item đổi nội dung ⇒ đổi reference ⇒ memo thấy khác và re-render.
+ * (Regression cũ: mutate in-place + memo ⇒ prev/next là CÙNG object ⇒ mọi
+ * so sánh đều "bằng" ⇒ stream đóng băng ở chunk đầu, tool kẹt "running".)
  */
 function chatItemEqual(a: ChatItem, b: ChatItem): boolean {
   if (a === b && a.kind !== "assistant" && a.kind !== "thinking" && a.kind !== "tool") return true;
