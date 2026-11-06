@@ -550,6 +550,8 @@ Tách:
 - Loại bỏ type import `ChatItem` khỏi registry bằng type tối thiểu trong `commands/types.ts` (hoặc chỉ import type, nhưng mục tiêu là commands không phụ thuộc TUI).
 - `index.ts` import từ `commands/`, xoá allowlist A3.
 
+**Status:** Hoàn tất move-only. `src/commands/` là domain dùng chung cho definitions, dispatch, transcript và contract type tối thiểu; các path `src/tui/commands.ts`, `src/tui/command-registry.ts`, `src/tui/transcript.ts` được giữ như legacy facades. CLI và TUI nhập implementation mới trực tiếp, không đổi command surface hoặc render behavior.
+
 #### 5.3 `src/tui/app.tsx` (800 → ≤ 450)
 
 Tách hooks theo trách nhiệm:

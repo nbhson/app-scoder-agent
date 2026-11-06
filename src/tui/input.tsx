@@ -7,7 +7,7 @@ import { Box, Text, useInput } from "ink";
 import type { AgentConfig } from "../config.js";
 import type { Agent } from "../agent.js";
 import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
-import { completeSlashCommand, completionProviders, ghostText, completeMcpArg } from "./commands.js";
+import { completeSlashCommand, completionProviders, ghostText, completeMcpArg } from "../commands/definitions.js";
 import { applyNormalKey, type VimMode } from "./vim.js"; // T5
 import { theme } from "./theme.js";
 

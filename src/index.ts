@@ -8,7 +8,7 @@ import { listSessions, resolveSessionId, pruneSessions } from "./session.js";
 import { JsonlLogger } from "./logger.js";
 import { collectUsage, formatCostReport } from "./cost.js";
 import { getVersion as getPackageVersion } from "./version.js";
-import { dispatchCommand, type CommandHost } from "./tui/command-registry.js";
+import { dispatchCommand, type CommandHost } from "./commands/registry.js";
 import { selectableAgents } from "./agents.js";
 import * as ui from "./ui.js";
 import type { McpServerConfig } from "./mcp.js";

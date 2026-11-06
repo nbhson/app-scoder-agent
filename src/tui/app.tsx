@@ -19,8 +19,8 @@ import { discoverSkills } from "../skills.js";
 import { discoverAgents } from "../agents.js";
 import { resolveSessionId } from "../session.js";
 import { applyEvent, initialState, markAborted, estimateItemRows, type ChatItem, type TuiState } from "./state.js";
-import { parseSlashCommand, SLASH_COMMANDS, formatSlashHelp } from "./commands.js";
-import { dispatchCommand, type CommandHost } from "./command-registry.js";
+import { parseSlashCommand, SLASH_COMMANDS, formatSlashHelp } from "../commands/definitions.js";
+import { dispatchCommand, type CommandHost } from "../commands/registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar, SIDEBAR_MIN_COLS } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
