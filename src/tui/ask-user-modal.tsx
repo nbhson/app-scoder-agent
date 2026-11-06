@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { theme } from "./theme.js";
+import { boxBorderStyle } from "./charset.js";
 
 export interface AskUserModalProps {
   question: string;
@@ -20,7 +21,7 @@ export function AskUserModal({ question, options, multiple, onAnswer, onCancel }
     if (ch && !key.ctrl && !key.meta) setInput((v) => v + ch);
   });
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} paddingY={1}>
+    <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.accent} paddingX={1} paddingY={1}>
       <Text color={theme.accent} bold>❓ {question}</Text>
       {options?.length ? (
         <Box flexDirection="column" marginTop={1}>

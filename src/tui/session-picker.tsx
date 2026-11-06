@@ -10,6 +10,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { listSessions, type SessionSummary } from "../session/session.js";
 import { theme, fit } from "./theme.js";
+import { boxBorderStyle } from "./charset.js";
 
 export interface SessionPickerProps {
   workdir: string;
@@ -68,7 +69,7 @@ export function SessionPicker({ workdir, onSelect, onClose }: SessionPickerProps
 
   if (sessions.length === 0) {
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} paddingY={1}>
+      <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.brand} paddingX={1} paddingY={1}>
         <Text color={theme.brand} bold>
           ← saved sessions
         </Text>
@@ -79,7 +80,7 @@ export function SessionPicker({ workdir, onSelect, onClose }: SessionPickerProps
   }
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} paddingY={1}>
+    <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.brand} paddingX={1} paddingY={1}>
       {/* Header */}
       <Box justifyContent="space-between" marginBottom={1}>
         <Text color={theme.brand} bold>

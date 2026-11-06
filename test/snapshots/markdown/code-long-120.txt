@@ -1,0 +1,9 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ typescript                                                                                                           │
+│ 1 │ const veryLongFunctionName = async (parameterOne: string, parameterTwo: number, parameterThree:                  │
+│   ↪ SomeVeryLongTypeName) => {                                                                                       │
+│ 2 │   const result = await someService.callWithAnExtremelyLongMethodName(parameterOne, parameterTwo, parameterThree, │
+│   ↪ { option: true });                                                                                               │
+│ 3 │   return result;                                                                                                 │
+│ 4 │ };                                                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

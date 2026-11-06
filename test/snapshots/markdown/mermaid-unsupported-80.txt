@@ -1,0 +1,7 @@
+◉ mermaid diagram — gantt — preview not supported for this diagram type
+  gantt
+      title Kế hoạch
+      section Phase 1
+      Task A :a1, 2024-01-01, 30d
+      Task B :after a1, 20d
+  export: npx @mermaid-js/mermaid-cli -i <file> -o out.svg

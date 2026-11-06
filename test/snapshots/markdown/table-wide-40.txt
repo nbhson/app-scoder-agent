@@ -1,0 +1,18 @@
+table · 2 rows × 8 cols
+  col1 │ aaaaaaaa
+  col2 │ bbbbbbbb
+  col3 │ cccccccc
+  col4 │ dddddddd
+  col5 │ eeeeeeee
+  col6 │ ffffffff
+  col7 │ gggggggg
+  col8 │ hhhhhhhh
+  ────────────────────
+  col1 │ 11111111
+  col2 │ 22222222
+  col3 │ 33333333
+  col4 │ 44444444
+  col5 │ 55555555
+  col6 │ 66666666
+  col7 │ 77777777
+  col8 │ 88888888

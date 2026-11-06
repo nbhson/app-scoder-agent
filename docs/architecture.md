@@ -120,7 +120,10 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 | `hooks/` | Logic hooks: event queue, submit, keybinds, scroll, command host, session resume |
 | `state.ts` | Pure reducer for UI state |
 | `selectors.ts` | Pure selectors (latestPlan, visibleWindow, toolPhase, estimateItemRows) |
-| `chat-views.tsx` | Chat message renders |
+| `chat-views.tsx` | Chat message renders (memoized per item) |
+| `markdown.tsx` + `markdown/` | Assistant-message markdown pipeline: parse.ts (pure Block AST) → render.tsx, table.tsx (GFM tables), diagram.tsx (mermaid summary, chart/timeline fences) |
+| `text-width.ts` | Display-cell measuring/clipping/padding/wrapping (emoji, CJK, combining marks, ANSI-safe) — the only allowed way to size visible text |
+| `charset.ts` | Drawing glyphs with ASCII fallback (`SCODER_ASCII=1` / `TERM=dumb`) |
 | `chrome.tsx` | TUI chrome (header, status bar) |
 | `input.tsx` | User input component |
 | `permission-modal.tsx` | Permission approval modal |

@@ -1,0 +1,18 @@
+◉ mermaid diagram
+
+┌─ ◈ diagram preview ──────────────────────────────────────────────────┐
+│ flowchart · 5 nodes · 5 edges                                        │
+│                                                                      │
+│ ◦ Start  (A)                                                         │
+│ ◦ Valid?  (B)                                                        │
+│ ◦ Process data  (C)                                                  │
+│ ◦ Show error  (D)                                                    │
+│ ◦ Done  (E)                                                          │
+│ Start → Valid?  : user input                                         │
+│ Valid? → Process data  : yes                                         │
+│ Valid? → Show error  : no                                            │
+│ Process data → Done                                                  │
+│ Show error → Start                                                   │
+│                                                                      │
+│ export: npx @mermaid-js/mermaid-cli -i <file> -o out.svg             │
+└──────────────────────────────────────────────────────────────────────┘

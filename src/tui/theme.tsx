@@ -8,6 +8,7 @@
  */
 import React from "react";
 import { Text } from "ink";
+import { clipCells } from "./text-width.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -116,7 +117,7 @@ export function toolIcon(name: string): string {
 }
 
 export function fit(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + "…";
+  return clipCells(text, max);
 }
 
 /** The agent's signature mark, used as an avatar on assistant output. */

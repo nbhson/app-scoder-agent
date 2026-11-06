@@ -1,0 +1,13 @@
+◉ mermaid diagram
+
+┌─ ◈ diagram preview ──────────────────────────────────────────────────┐
+│ sequence · 3 participants · 4 messages                               │
+│                                                                      │
+│ participants: User, Agent, Tool                                      │
+│ User → Agent: gửi yêu cầu                                            │
+│ Agent → Tool: gọi run_command                                        │
+│ Tool → Agent: kết quả                                                │
+│ Agent → User: trả lời                                                │
+│                                                                      │
+│ export: npx @mermaid-js/mermaid-cli -i <file> -o out.svg             │
+└──────────────────────────────────────────────────────────────────────┘

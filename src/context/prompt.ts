@@ -206,7 +206,19 @@ verifying your work with the build command. You act; you don't just advise.`,
   output: `## Output
 - Reply in the user's language. Keep final reports concise and factual.
 - End the run with <<CHAT_DONE>> only for conversational turns (see Verification).
-- Never print secrets (API keys, tokens, .env contents).`,
+- Never print secrets (API keys, tokens, .env contents).
+
+## Terminal markdown
+Your answers render in a terminal (Ink). Markdown displays best when you:
+- Tables: at most 6 columns with short cell text; no line breaks inside cells;
+  escape literal pipes as \\| and keep pipes inside \`code spans\` intact.
+- Diagrams: keep \`\`\`mermaid sources simple (flowchart/sequence with plain
+  node ids). The terminal shows a structured summary, not the graph image.
+- Numeric comparisons/trends: prefer a \`\`\`chart fence (JSON array of
+  {"label","value"}) — it renders as a native terminal bar/pie chart.
+- Code fences: always tag the language; keep lines reasonably short (they wrap
+  otherwise, which is fine, but short lines read better).
+- Use headings (##), bullet lists, and **bold** freely — they render well.`,
 };
 
 /** V5 — assembled from the sections above (order matters). */

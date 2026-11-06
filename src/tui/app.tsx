@@ -25,6 +25,7 @@ import { Input } from "./input.js"; // T2
 import { SessionPicker } from "./session-picker.js"; // session picker modal
 import { fileIndex } from "./at-complete.js";
 import { getTheme, setActiveTheme, theme } from "./theme.js";
+import { boxBorderStyle } from "./charset.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
 import { Sidebar } from "./sidebar.js"; // sidebar opencode
 import { getVersion } from "../shared/version.js";
@@ -241,7 +242,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         />
       )}
       {paletteOpen && (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} paddingY={1}>
+        <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.accent} paddingX={1} paddingY={1}>
           <Text color={theme.accent} bold>Command palette (Ctrl+P to close)</Text>
           {SLASH_COMMANDS.slice(0, 40).map((c) => (
             <Text key={c.cmd}>{c.cmd.padEnd(12)} {c.desc}</Text>
@@ -249,7 +250,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         </Box>
       )}
       {helpOpen && (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.dim} paddingX={1} paddingY={1}>
+        <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.dim} paddingX={1} paddingY={1}>
           <Text color={theme.brand} bold>Help (?)</Text>
           <Text>{formatSlashHelp("scoder tui")}</Text>
         </Box>

@@ -3,14 +3,16 @@
  * ChatItemView. Tách khỏi app.tsx (component-based, pattern từ opencode
  * packages/tui).
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { memo, useEffect, useMemo, useState } from "react";
 import { Box, Text } from "ink";
 import type { ChatItem } from "./state.js";
 import { Markdown } from "./markdown.js";
 import { detectImageCaps, halfblockRows } from "./image.js"; // T7
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
+import { clipCells } from "./text-width.js";
+import { boxBorderStyle, charset } from "./charset.js";
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES = charset.spinner;
 const SPINNER_MS = 80;
 
 function useSpinner(active: boolean): string {
@@ -104,7 +106,7 @@ function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" 
       {/* Output preview */}
       {preview.map((line, i) => (
         <Text key={i} dimColor>
-          {"  └ "}{line.length > outputWidth ? line.slice(0, outputWidth - 1) + "…" : line}
+          {"  └ "}{clipCells(line, outputWidth)}
         </Text>
       ))}
 
@@ -151,7 +153,7 @@ function DiffItemView({ item, width }: { item: Extract<ChatItem, { kind: "diff" 
   return (
     <Box
       flexDirection="column"
-      borderStyle="round"
+      borderStyle={boxBorderStyle()}
       borderColor={theme.border}
       paddingX={1}
       marginTop={1}
@@ -172,7 +174,7 @@ function DiffItemView({ item, width }: { item: Extract<ChatItem, { kind: "diff" 
 
       {/* Diff body */}
       {shown.map((line, i) => (
-        <DiffLine key={i} line={line.length > diffWidth ? line.slice(0, diffWidth - 1) + "…" : line} />
+        <DiffLine key={i} line={clipCells(line, diffWidth)} />
       ))}
       {hidden > 0 && (
         <Text dimColor>  … +{hidden} more diff lines</Text>
@@ -190,7 +192,57 @@ function TodoItemView(): null {
   return null;
 }
 
-export function ChatItemView({ item, width }: { item: ChatItem; width?: number }): React.JSX.Element | null {
+/**
+ * Field-level equality for ChatItem. state.ts mutates items in place (streaming
+ * deltas append to `text`), so reference equality alone is WRONG — the memo
+ * would freeze a streaming message. Compare every field the views render.
+ */
+function chatItemEqual(a: ChatItem, b: ChatItem): boolean {
+  if (a === b && a.kind !== "assistant" && a.kind !== "thinking" && a.kind !== "tool") return true;
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "user":
+      return a.text === (b as typeof a).text;
+    case "assistant":
+    case "thinking": {
+      const bb = b as typeof a;
+      return a.text === bb.text && a.streaming === bb.streaming;
+    }
+    case "tool": {
+      const bb = b as typeof a;
+      return a.name === bb.name && a.ok === bb.ok && a.output === bb.output
+        && a.step === bb.step && a.durationMs === bb.durationMs && a.image === bb.image;
+    }
+    case "diff": {
+      const bb = b as typeof a;
+      return a.text === bb.text && a.path === bb.path && a.added === bb.added && a.removed === bb.removed;
+    }
+    case "todo": {
+      const bb = b as typeof a;
+      return a.items === bb.items;
+    }
+    case "build": {
+      const bb = b as typeof a;
+      return a.success === bb.success && a.command === bb.command;
+    }
+    case "compaction": {
+      const bb = b as typeof a;
+      return a.tokensBefore === bb.tokensBefore && a.tokensAfter === bb.tokensAfter && a.manual === bb.manual;
+    }
+    case "notice": {
+      const bb = b as typeof a;
+      return a.text === bb.text && a.level === bb.level;
+    }
+  }
+}
+
+/**
+ * Memoized: during streaming, events flush at ~20 fps and previously forced
+ * EVERY chat item to re-render (O(n²) over a long transcript). Old finalized
+ * items now skip rendering entirely; only the item actually changed by the
+ * last event batch re-renders.
+ */
+export const ChatItemView = memo(function ChatItemView({ item, width }: { item: ChatItem; width?: number }): React.JSX.Element | null {
   switch (item.kind) {
     case "user":
       // User messages stand out with a full colored border + bold label so they're
@@ -292,4 +344,4 @@ export function ChatItemView({ item, width }: { item: ChatItem; width?: number }
         </Box>
       );
   }
-}
+}, (prev, next) => prev.width === next.width && chatItemEqual(prev.item, next.item));
