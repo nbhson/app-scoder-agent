@@ -1,12 +1,12 @@
 import type { AgentConfig } from "../config/config.js";
-import type { AgentDef } from "../agents.js";
-import { discoverAgents } from "../agents.js";
-import { buildAgentGuideBlock } from "../agents-guide.js";
-import { buildRepoMap } from "../repo-map.js";
-import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "../prompt-builder.js";
-import { discoverSkills, findSkill, type Skill } from "../skills.js";
+import type { AgentDef } from "../context/agents.js";
+import { discoverAgents } from "../context/agents.js";
+import { buildAgentGuideBlock } from "../context/agents-guide.js";
+import { buildRepoMap } from "../context/repo-map.js";
+import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "../context/prompt-builder.js";
+import { discoverSkills, findSkill, type Skill } from "../context/skills.js";
 import type { ChatMessage } from "../llm.js";
-import { formatWorkingMemory, memoryIsMeaningful, type WorkingMemory } from "../memory.js";
+import { formatWorkingMemory, memoryIsMeaningful, type WorkingMemory } from "../context/memory.js";
 
 /** Compaction prompt fragment that preserves the working-memory ledger. */
 export function memoryBlock(memory: WorkingMemory, taskNote?: string): { instruction: string; suffix: string } {

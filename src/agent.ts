@@ -5,13 +5,13 @@ import type { ToolResult } from "./tools.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 import { allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
-import { expandMentions } from "./context.js";
+import { expandMentions } from "./context/context.js";
 import { createGuardrailEngine, type GuardrailDecision } from "./guardrails.js";
 import type { VerifyCommands } from "./workspace/diagnostics.js";
-import { PROMPT_VERSION } from "./prompt.js";
+import { PROMPT_VERSION } from "./context/prompt.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session/session.js";
-import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
+import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./context/compaction.js";
 import { SnapshotManager } from "./workspace/snapshot.js";
 import { contextWindowFor } from "./model-catalog.js";
 import { JsonlLogger } from "./session/logger.js";
@@ -19,8 +19,8 @@ import { createRuntime, parseCustomProviders, resolveProvider, splitProviderMode
 import { loadRcFile } from "./config/config.js";
 import { McpManager } from "./mcp.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
-import type { Skill } from "./skills.js";
-import { discoverAgents, findAgent, type AgentDef } from "./agents.js";
+import type { Skill } from "./context/skills.js";
+import { discoverAgents, findAgent, type AgentDef } from "./context/agents.js";
 import {
   emptyWorkingMemory,
   noteFileRead,
@@ -28,7 +28,7 @@ import {
   noteFailure,
   notePlan,
   type WorkingMemory,
-} from "./memory.js";
+} from "./context/memory.js";
 
 import { SteeringInbox } from "./session/steering.js";
 import { randomUUID } from "node:crypto";

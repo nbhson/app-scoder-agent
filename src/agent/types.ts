@@ -3,7 +3,7 @@ import { loadRcFile } from "../config/config.js";
 import { parseCustomProviders, resolveProvider, splitProviderModel } from "../provider-registry.js";
 import type { ToolSpec } from "../llm.js";
 import type { ToolDiff, TodoItem } from "../tools/types.js";
-import { findAgent, filterToolNamesForDef, type AgentDef } from "../agents.js";
+import { findAgent, filterToolNamesForDef, type AgentDef } from "../context/agents.js";
 import { consoleReporter } from "../io/console-reporter.js";
 import type { Reporter } from "../io/reporter.js";
 

@@ -15,8 +15,8 @@ import { Box, Text, useApp, useWindowSize } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../ui.js";
-import { discoverSkills } from "../skills.js";
-import { discoverAgents } from "../agents.js";
+import { discoverSkills } from "../context/skills.js";
+import { discoverAgents } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";
 import { SLASH_COMMANDS, formatSlashHelp } from "../commands/definitions.js";
 import { ChatItemView } from "./chat-views.js"; // T2

@@ -7,7 +7,7 @@ import { listSessions, resolveSessionId } from "../session/session.js";
 import { JsonlLogger } from "../session/logger.js";
 import { collectUsage, formatCostReport } from "../session/cost.js";
 import { getVersion as getPackageVersion } from "../shared/version.js";
-import { selectableAgents } from "../agents.js";
+import { selectableAgents } from "../context/agents.js";
 import * as ui from "../ui.js";
 import { parseArgs, HELP, type CliArgs } from "./args.js";
 import { runOnce } from "./run-once.js";

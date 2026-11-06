@@ -4,7 +4,7 @@ import { getTool, allToolSpecs, type ToolContext, type ToolResult } from "../too
 import { invalidateFileIndex } from "../workspace/file-index.js";
 import { PermissionChecker } from "../security/permissions.js";
 import { McpManager, type McpServerConfig } from "../mcp.js";
-import { summariseOutput } from "../context.js";
+import { summariseOutput } from "../context/context.js";
 import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 import type { AgentEvent } from "./types.js";

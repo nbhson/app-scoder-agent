@@ -5,7 +5,7 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 import type { Agent, AgentEvent } from "../../agent.js";
 import type { AgentConfig } from "../../config/config.js";
-import type { Skill } from "../../skills.js";
+import type { Skill } from "../../context/skills.js";
 import type { CommandHost } from "../../commands/registry.js";
 import { dispatchCommand } from "../../commands/registry.js";
 import { parseSlashCommand } from "../../commands/definitions.js";

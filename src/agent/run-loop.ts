@@ -1,9 +1,9 @@
 import type { AgentConfig } from "../config/config.js";
 import type { BuildResult } from "../workspace/build.js";
-import { trimHistory, summariseOutput, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context.js";
+import { trimHistory, summariseOutput, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context/context.js";
 import { CHAT_DONE_MARKER } from "../guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
-import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../compaction.js";
+import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
 import { redactSecrets, type ChatMessage, type ChatResult } from "../llm.js";
 import type { ProviderRuntimeContract } from "../provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
@@ -12,7 +12,7 @@ import type { SnapshotManager } from "../workspace/snapshot.js";
 import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 import { createGuardrailEngine } from "../guardrails.js";
-import { memoryIsMeaningful, formatWorkingMemory, scanDecisions, type WorkingMemory } from "../memory.js";
+import { memoryIsMeaningful, formatWorkingMemory, scanDecisions, type WorkingMemory } from "../context/memory.js";
 import { READONLY_TOOLS, type ToolExecutor } from "./tool-executor.js";
 import type { AgentEvent, AgentRunResult, UsageTotals } from "./types.js";
 

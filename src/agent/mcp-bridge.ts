@@ -15,7 +15,7 @@ export interface McpBridgeRuntime {
   reporter: Reporter;
   logger: JsonlLogger;
   permissions: PermissionChecker;
-  primaryDef: import("../agents.js").AgentDef | null;
+  primaryDef: import("../context/agents.js").AgentDef | null;
   pendingAllowedTools: string[] | null;
   getMcp: () => McpManager | null;
   setMcp: (manager: McpManager | null) => void;

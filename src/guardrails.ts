@@ -14,7 +14,7 @@
  * Không copy code từ opencode — chỉ tham khảo ý tưởng "guardrails quanh loop".
  */
 import type { AssistantMessage, ToolCall } from "./llm.js";
-import { claimsCompletion } from "./context.js";
+import { claimsCompletion } from "./context/context.js";
 
 /** Marker do system prompt quy ước: lượt chat thuần, không cần build. */
 export const CHAT_DONE_MARKER = "<<CHAT_DONE>>";

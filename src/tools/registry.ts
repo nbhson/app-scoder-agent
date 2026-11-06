@@ -1,5 +1,5 @@
-import { findSkill, discoverSkills, loadSkillSection } from "../skills.js";
-import { buildRepoMap, renderRepoMap } from "../repo-map.js";
+import { findSkill, discoverSkills, loadSkillSection } from "../context/skills.js";
+import { buildRepoMap, renderRepoMap } from "../context/repo-map.js";
 import { toolWebFetch } from "../webfetch.js";
 import { toolReadFile } from "./read-file.js";
 import { toolWriteFile } from "./write-file.js";
