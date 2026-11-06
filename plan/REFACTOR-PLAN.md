@@ -492,6 +492,8 @@ io/    ──▶ ui.ts (chỉ adapter)
    - Dependencies: `getTools()`, permissions, reporter, emit, MCP bridge, interaction broker, snapshot/diff.
    - **Không đổi thứ tự emit event** và cách ghép parallel results.
 
+   **Status:** Hoàn tất extraction move-only cho `executeToolCall`, `parallelMap`, `rejectToolCall`, `READONLY_TOOLS` và permission/MCP dispatch. `Agent` vẫn giữ các stateful message/stream helpers (`pushToolResult`, `handleToolOutput`, `endToolStream`) làm delegates/dependencies để giảm rủi ro event ordering.
+
 6. **`agent/prompt-context.ts`**
    - `memoryBlock`, `buildSystemPrompt` inputs, repo map, skills block, agents block, MCP block, AGENTS.md.
    - `getSkills`, `reloadSkills`, `stageSkill` nếu tách được thành `SkillService`.
