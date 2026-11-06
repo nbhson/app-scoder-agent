@@ -9,7 +9,6 @@ import { trimHistory, summariseOutput, expandMentions, MAX_HISTORY_TOKENS, histo
 import { createGuardrailEngine, CHAT_DONE_MARKER, type GuardrailDecision } from "./guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError, type VerifyCommands } from "./diagnostics.js";
 import { PROMPT_VERSION } from "./prompt.js";
-import { buildSystemPrompt, buildEnvInfo, buildSkillsBlock, buildAgentsBlock, buildMcpBlock } from "./prompt-builder.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session.js";
 import { DEFAULT_COMPACTION, shouldCompact, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./compaction.js";
@@ -20,10 +19,8 @@ import { createRuntime, parseCustomProviders, resolveProvider, splitProviderMode
 import { loadRcFile } from "./config.js";
 import { McpManager } from "./mcp.js";
 import { watchWorkdir, type ReloadWatcher } from "./watch.js";
-import { discoverSkills, findSkill, type Skill } from "./skills.js";
+import type { Skill } from "./skills.js";
 import { discoverAgents, findAgent, type AgentDef } from "./agents.js";
-import { buildRepoMap } from "./repo-map.js";
-import { buildAgentGuideBlock } from "./agents-guide.js";
 import {
   emptyWorkingMemory,
   memoryFromMessages,
@@ -62,6 +59,7 @@ import {
 } from "./agent/mcp-bridge.js";
 import { InteractionBroker, type InteractionRuntime } from "./agent/interaction.js";
 import { ToolExecutor, READONLY_TOOLS, type ToolExecutorRuntime } from "./agent/tool-executor.js";
+import { PromptContext, buildRunMessages, memoryBlock } from "./agent/prompt-context.js";
 
 // CHAT_DONE_MARKER import từ guardrails.js (marker chat thuần, rule 9).
 
@@ -115,14 +113,10 @@ export class Agent {
   private currentToolCall: { step: number; id: string; name: string } | null = null;
   /** True once any file-writing tool succeeded during the current run. */
   private filesModified = false;
-  /** Discovered skills (project + global). */
-  private skills: Skill[] = [];
+  /** Project/global skills and one-shot `/skill` context. */
+  private promptContext: PromptContext;
   /** M4: hot-reload watcher (rc + skills dir). */
   private watcher: ReloadWatcher | null = null;
-  /** Content staged via /skill — injected before the next run/turn. */
-  private pendingContext: string[] = [];
-  /** Skills 2.0: allowed-tools enforced for the next run when a skill is staged. */
-  private pendingAllowedTools: string[] | null = null;
   /** Session plan (write_todos tool). */
   private plan: TodoItem[] = [];
   /** v2: working memory ledger (see src/memory.ts) — kept across compaction. */
@@ -185,12 +179,7 @@ export class Agent {
    * instruction and into the kept summary text, then snapshot it to the log.
    */
   private memoryBlock(taskNote?: string): { instruction: string; suffix: string } {
-    if (!memoryIsMeaningful(this.memory)) return { instruction: "", suffix: "" };
-    const ledger = formatWorkingMemory(this.memory);
-    return {
-      instruction: `\n\nWorking memory ledger accumulated so far (keep ALL of it in the summary):\n${ledger}`,
-      suffix: `\n\n${ledger}${taskNote ?? ""}`,
-    };
+    return memoryBlock(this.memory, taskNote);
   }
 
   /** Log the ledger into the event log (observability; resume rebuilds it). */
@@ -442,7 +431,7 @@ export class Agent {
       this.ctx.taskRunner = runner;
     }
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
-    this.skills = discoverSkills(config.workdir);
+    this.promptContext = new PromptContext(config.workdir);
     // v2: a def may declare skills to pre-stage for every task of this agent.
     for (const s of this.primaryDef?.skills ?? []) {
       const r = this.stageSkill(s);
@@ -453,8 +442,8 @@ export class Agent {
     if (config.noSave !== true && process.env.SCODER_NO_WATCH !== "1") {
       this.watcher = watchWorkdir(config.workdir, (kind) => {
         if (kind === "skills") {
-          this.skills = discoverSkills(config.workdir);
-          this.logger.log({ type: "hot_reload", kind, skills: this.skills.length });
+          this.promptContext.reloadSkills();
+          this.logger.log({ type: "hot_reload", kind, skills: this.promptContext.skillCount() });
         } else if (kind === "config") {
           // MCP servers mới: merge vào manager hiện tại (turn sau advertise).
           const rc = loadRcFile(config.workdir);
@@ -778,7 +767,7 @@ export class Agent {
       logger: this.logger,
       permissions: this.permissions,
       primaryDef: this.primaryDef,
-      pendingAllowedTools: this.pendingAllowedTools,
+      pendingAllowedTools: this.promptContext.pendingTools(),
       getMcp: () => this.mcp,
       setMcp: (manager) => { this.mcp = manager; },
       setTools: (tools) => { this.tools = tools; },
@@ -849,43 +838,27 @@ export class Agent {
     this.verifyStrikes = 0;
     this.lastVerifySignature = "";
     // Skills 2.0: rebuild tool list honouring a staged skill's allowed-tools.
+    const pendingAllowedTools = this.promptContext.pendingTools();
     let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef, this.reporter);
-    if (this.pendingAllowedTools && this.pendingAllowedTools.length > 0) {
-      const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
+    if (pendingAllowedTools && pendingAllowedTools.length > 0) {
+      const allow = new Set(pendingAllowedTools.map((t) => t.toLowerCase()));
       baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
     }
     const mcpSpecs = this.mcp ? [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()] : [];
-    if (this.pendingAllowedTools?.length) {
-      const allow = new Set(this.pendingAllowedTools.map((t) => t.toLowerCase()));
+    if (pendingAllowedTools?.length) {
+      const allow = new Set(pendingAllowedTools.map((t) => t.toLowerCase()));
       this.tools = [...baseTools, ...mcpSpecs.filter((s) => allow.has(s.function.name.toLowerCase()))];
     } else {
       this.tools = [...baseTools, ...mcpSpecs];
     }
-    const skillsBlock = buildSkillsBlock(this.skills); // I3
-    // v2: AGENTS.md conventions + repo map (bounded token budget each).
-    const agentsGuideBlock = buildAgentGuideBlock(this.config.workdir, task);
-    const repoMapBlock = this.config.repoMap === false ? "" : `\n\n${buildRepoMap(this.config.workdir)}`;
-    // v2: a primary/subagent def with a custom prompt replaces the built-in base.
-    const baseOverride = this.primaryDef?.prompt?.trim() ? this.primaryDef.prompt : undefined;
-    this.messages = [
-      {
-        role: "system",
-        content: buildSystemPrompt({
-          workdir: this.config.workdir,
-          buildCmd,
-          envInfo: buildEnvInfo(this.config.workdir),
-          skillsBlock,
-          mcpBlock: buildMcpBlock(this.config),
-          agentsGuideBlock,
-          repoMapBlock,
-          base: baseOverride,
-          promptVersion: this.config.promptVersion,
-        }) + buildAgentsBlock(discoverAgents(this.config.workdir), this.config.allowSubagents !== false),
-      },
-      ...this.pendingContext.map((content) => ({ role: "user" as const, content })),
-      { role: "user", content: task },
-    ];
-    this.pendingContext = [];
+    this.messages = buildRunMessages({
+      config: this.config,
+      primaryDef: this.primaryDef,
+      skills: this.promptContext.getSkills(),
+      buildCmd,
+      task,
+      pendingContext: this.promptContext.takePendingContext(),
+    });
     // Phiên bản system prompt được ghi vào log — giúp so sánh chất lượng
     // giữa các phiên bản prompt khi phân tích JSONL.
     this.logger.log({ type: "prompt_version", version: PROMPT_VERSION });
@@ -902,7 +875,7 @@ export class Agent {
     });
 
     await this.connectMcp();
-    this.pendingAllowedTools = null;
+    this.promptContext.clearPendingTools();
     return this.runLoop(0, buildCmd, null);
   }
 
@@ -948,12 +921,11 @@ export class Agent {
     this.resetUsageTotals();
     this.filesModified = false;
     this.plan = [];
-    for (const content of this.pendingContext) this.messages.push({ role: "user", content });
-    this.pendingContext = [];
+    for (const content of this.promptContext.takePendingContext()) this.messages.push({ role: "user", content });
     this.messages.push({ role: "user", content: task });
     this.rebuildToolList();
     await this.connectMcp();
-    this.pendingAllowedTools = null;
+    this.promptContext.clearPendingTools();
     return this.runLoop(0, buildCmd, null);
   }
 
@@ -968,7 +940,7 @@ export class Agent {
     this.resetRunSignal();
     this.resetUsageTotals();
     this.filesModified = false;
-    this.skills = discoverSkills(this.config.workdir);
+    this.promptContext.reloadSkills();
     this.messages = session.messages ?? [];
     // v2: rebuild the working memory from history (files/decisions/failures/plan)
     // and restore the last write_todos plan so resumed runs keep their ledger.
@@ -1001,8 +973,7 @@ export class Agent {
     this.reporter.info(`previous task: ${session.task} (${session.steps} step(s) done)`);
 
     if (followUp) {
-      for (const content of this.pendingContext) this.messages.push({ role: "user", content });
-      this.pendingContext = [];
+      for (const content of this.promptContext.takePendingContext()) this.messages.push({ role: "user", content });
       this.messages.push({ role: "user", content: expandMentions(followUp, this.config.workdir) });
     } else {
       this.messages.push({
@@ -1454,11 +1425,11 @@ export class Agent {
 
   /** Skills visible to this project (for /skills). */
   getSkills(): Skill[] {
-    return this.skills;
+    return this.promptContext.getSkills();
   }
   /** Skills 2.0: hot-reload skills. */
   reloadSkills(): void {
-    this.skills = discoverSkills(this.config.workdir);
+    this.promptContext.reloadSkills();
   }
 
   /**
@@ -1466,14 +1437,7 @@ export class Agent {
    * Non-destructive: nothing is sent to the LLM until the user submits a task.
    */
   stageSkill(name: string): { ok: boolean; message: string } {
-    const skill = findSkill(this.config.workdir, name);
-    if (!skill) {
-      const names = this.skills.map((s) => s.name).join(", ");
-      return { ok: false, message: `skill "${name}" not found${names ? ` — available: ${names}` : " — no skills discovered (try /skills)"}` };
-    }
-    this.pendingContext.push(`[User loaded skill "${skill.name}" — follow these instructions for the upcoming task]\n\n${skill.body}`);
-    this.pendingAllowedTools = skill.allowedTools?.length ? skill.allowedTools : null;
-    return { ok: true, message: `skill "${skill.name}" staged — it will apply to your next task` };
+    return this.promptContext.stageSkill(name);
   }
 
   /** MCP server overview (for /mcp): config always; tools once connected. */

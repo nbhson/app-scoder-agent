@@ -498,6 +498,8 @@ io/    ──▶ ui.ts (chỉ adapter)
    - `memoryBlock`, `buildSystemPrompt` inputs, repo map, skills block, agents block, MCP block, AGENTS.md.
    - `getSkills`, `reloadSkills`, `stageSkill` nếu tách được thành `SkillService`.
 
+   **Status:** Hoàn tất bước move-only. `PromptContext` giữ discovery/reload/staging của skill và `buildRunMessages` giữ nguyên composition/thứ tự system, staged-context, task; `Agent` vẫn giữ public delegates.
+
 7. **`agent/session-persistence.ts`**
    - `saveSession`, phần load/resume projection, `compactHistory` persistence.
    - Không đổi JSON shape/atomic write.
