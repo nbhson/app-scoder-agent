@@ -11,7 +11,7 @@
  */
 import type { Agent, UsageTotals } from "../agent.js";
 import type { AgentConfig } from "../config/config.js";
-import { discoverSkills, type Skill } from "../context/skills.js";
+import { discoverSkills, matchSkillPrefix, type Skill } from "../context/skills.js";
 import { selectableAgents } from "../context/agents.js";
 import { agentsMdTemplate } from "../context/agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
@@ -166,15 +166,20 @@ export function coreCommands(): CommandEntry[] {
     },
     {
       name: "/skill",
-      description: "list skills, or load one into context: /skill <name>",
+      description: "list skills, or load one into context: /skill <name> [task]",
       run(slash, host, notice) {
         if (!slash.arg) {
           notice(formatSkills(host.agent()?.getSkills() ?? discoverSkills(host.config.workdir)));
           return;
         }
-        const r = host.agent()?.stageSkill(slash.arg);
-        if (!r) return notice("agent not ready", "warn");
+        const agent = host.agent();
+        if (!agent) return notice("agent not ready — start a task first", "warn");
+        // "/skill <name> <task…>": stage rồi CHẠY task luôn — skill áp dụng
+        // ngay cho prompt đó (trước đây task text bị nuốt vào tham số name).
+        const m = matchSkillPrefix(host.config.workdir, slash.arg);
+        const r = agent.stageSkill(m ? m.skill.name : slash.arg);
         notice(r.message, r.ok ? "info" : "error");
+        if (r.ok && m?.rest) return { task: m.rest };
       },
     },
     {

@@ -223,6 +223,25 @@ export function findSkill(workdir: string, name: string): Skill | null {
   return byPrefix ?? null;
 }
 
+/**
+ * Tách "/skill <name> <task text…>": khớp tên skill DÀI NHẤT ở đầu arg
+ * (word boundary) và trả về phần text còn lại. Dùng cho slash command để
+ * stage skill rồi chạy ngay task đi kèm thay vì nuốt task text vào tên.
+ */
+export function matchSkillPrefix(workdir: string, arg: string): { skill: Skill; rest: string } | null {
+  const trimmed = arg.trim();
+  const wanted = trimmed.toLowerCase();
+  const skills = discoverSkills(workdir).sort((a, b) => b.name.length - a.name.length);
+  for (const s of skills) {
+    const n = s.name.toLowerCase();
+    if (wanted === n) return { skill: s, rest: "" };
+    if (wanted.startsWith(n) && /[\s/]/.test(wanted[n.length])) {
+      return { skill: s, rest: trimmed.slice(n.length).trim() };
+    }
+  }
+  return null;
+}
+
 export function formatSkillIndex(skills: Skill[]): string {
   if (skills.length === 0) return "";
   return skills.map((s) => {

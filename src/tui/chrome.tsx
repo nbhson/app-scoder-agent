@@ -14,9 +14,9 @@ import { getVersion } from "../shared/version.js";
 export const GAUGE_CELLS = 12;
 
 /** Sidebar phải: tổng rộng (kể cả border + padding) — pattern opencode. */
-export const SIDEBAR_WIDTH = 40;
+export const SIDEBAR_WIDTH = 60;
 /** Dưới ngưỡng cột này ẩn sidebar — BuildRail fallback sang header đầy đủ. */
-export const SIDEBAR_MIN_COLS = 92;
+export const SIDEBAR_MIN_COLS = 112;
 
 /** Scaled step fuel gauge: ▰ filled / ▱ remaining, e.g. ▰▰▰▰▱▱▱▱ 4/40. */
 export function fuelGauge(step: number, maxSteps: number): string | null {

@@ -3,6 +3,23 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.5] — 2026-11-07
+
+### Changed
+- **Sidebar widened** 40 → 60 cols (`SIDEBAR_MIN_COLS` 92 → 112); chat width
+  math now derives from `SIDEBAR_WIDTH` instead of a hardcoded constant.
+- **Welcome screen**: big block-letter SCoder banner, vertically + horizontally
+  centered in the chat viewport (small panes fall back to the one-line logo;
+  ASCII variant under `SCODER_ASCII=1`/`TERM=dumb`).
+
+### Fixed
+- **`/skill <name> <task>` swallowed the task text** — the skill was staged but
+  the run never started, so MCP-gated workflows (e.g. prompt-gate) never fired.
+  The handler now splits the skill name (`matchSkillPrefix`, longest-name /
+  word-boundary match) from the task text and submits the task immediately with
+  the skill applied to that run.
+- PTY integration test runs at 130 cols so the wider sidebar stays visible.
+
 ## [0.9.4] — 2026-11-07
 
 ### Fixed

@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -69,6 +69,44 @@ describe("dispatchCommand (T1)", () => {
     const s = sink();
     await dispatchCommand("/skill", fakeHost(), s.fn);
     assert.match(s.lines[0].text, /no skills discovered|Skills:/);
+  });
+
+  it("/skill <name> <task> → stage skill rồi trả task để frontend chạy ngay", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "scoder-skill-cmd-"));
+    try {
+      mkdirSync(join(dir, ".scoder", "skills", "review"), { recursive: true });
+      writeFileSync(join(dir, ".scoder", "skills", "review", "SKILL.md"), "---\nname: code-review\ndescription: review code\n---\nbody");
+      const staged = [];
+      const host = fakeHost({
+        config: { workdir: dir, permissionMode: "auto" },
+        agent: () => ({ stageSkill: (n) => { staged.push(n); return { ok: true, message: `staged ${n}` }; } }),
+      });
+      const s = sink();
+      const r = await dispatchCommand("/skill code-review fix the login bug", host, s.fn);
+      assert.equal(r.handled, true);
+      assert.deepEqual(staged, ["code-review"], "stage đúng skill (không dính task text)");
+      assert.equal(r.outcome?.task, "fix the login bug", "task text được trả về để frontend submit ngay");
+      assert.match(s.lines[0].text, /staged/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("/skill <name> không task → chỉ stage, không trả task", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "scoder-skill-cmd-"));
+    try {
+      mkdirSync(join(dir, ".scoder", "skills", "review"), { recursive: true });
+      writeFileSync(join(dir, ".scoder", "skills", "review", "SKILL.md"), "---\nname: code-review\ndescription: review code\n---\nbody");
+      const host = fakeHost({
+        config: { workdir: dir, permissionMode: "auto" },
+        agent: () => ({ stageSkill: () => ({ ok: true, message: "staged" }) }),
+      });
+      const r = await dispatchCommand("/skill code-review", host, sink().fn);
+      assert.equal(r.handled, true);
+      assert.equal(r.outcome?.task, undefined);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("handler ném lỗi → bắt thành error notice (không crash dispatcher)", async () => {

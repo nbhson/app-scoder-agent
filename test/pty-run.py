@@ -50,13 +50,14 @@ def main() -> int:
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
-        os.environ.setdefault("COLUMNS", "100")
+        # 130 cột: đủ rộng để sidebar (60) hiện — dưới SIDEBAR_MIN_COLS nó ẩn.
+        os.environ.setdefault("COLUMNS", "130")
         os.environ.setdefault("LINES", "30")
         os.execvp(args.cmd[0], args.cmd)
         os._exit(127)
 
     # PTYs start at 0x0 — TUI frameworks (Ink) need a real window size.
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 130, 0, 0))
 
     buf = b""
     status = [None]

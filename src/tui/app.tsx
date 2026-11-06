@@ -20,16 +20,36 @@ import { discoverAgents } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";
 import { SLASH_COMMANDS, formatSlashHelp } from "../commands/definitions.js";
 import { ChatItemView } from "./chat-views.js"; // T2
-import { BuildRail, StatusBar, SIDEBAR_MIN_COLS } from "./chrome.js"; // T2
+import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
 import { SessionPicker } from "./session-picker.js"; // session picker modal
 import { fileIndex } from "./at-complete.js";
 import { getTheme, setActiveTheme, theme } from "./theme.js";
-import { boxBorderStyle } from "./charset.js";
+import { boxBorderStyle, isAsciiMode } from "./charset.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
 import { Sidebar } from "./sidebar.js"; // sidebar opencode
 import { getVersion } from "../shared/version.js";
 import { useScrollMetrics } from "./hooks/use-scroll.js";
+
+/**
+ * Logo lớn cho màn hình welcome (block letters, ~49 cols) — chỉ vẽ khi pane
+ * chat đủ rộng, ngược lại fallback dòng "⚑ SCoder". ASCII mode: biến thể '#'.
+ */
+const BANNER = [
+  "███████╗ ██████╗ ██████╗ ██████╗ ███████╗██████╗ ",
+  "██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔══██╗",
+  "███████╗██║     ██║   ██║██║  ██║█████╗  ██████╔╝",
+  "╚════██║██║     ██║   ██║██║  ██║██╔══╝  ██╔══██╗",
+  "███████║╚██████╗╚██████╔╝██████╔╝███████╗██║  ██║",
+  "╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝",
+];
+const BANNER_ASCII = [
+  "#####   ####   ####  #####  ###### ##### ",
+  "#      #      #    # #    # #      #    #",
+  "#####  #      #    # #    # ####   ##### ",
+  "     # #      #    # #    # #      #   # ",
+  "#####   ####   ####  #####  ###### #    #",
+];
 import { useEventQueue } from "./hooks/use-event-queue.js";
 import { useSessionResume } from "./hooks/use-session-resume.js";
 import { useCommandHost } from "./hooks/use-command-host.js";
@@ -197,9 +217,23 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         >
         <Box ref={contentRef} flexDirection="column" paddingX={1} flexShrink={0}>
           {state.items.length === 0 ? (
-            <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
-              {/* Big logo */}
-              <Text bold color={theme.brand}>⚑ SCoder</Text>
+            // Welcome: căn giữa cả 2 chiều — height = chiều cao đo được của
+            // viewport (flexGrow không giãn được vì content box flexShrink=0).
+            <Box
+              flexDirection="column"
+              alignItems="center"
+              justifyContent="center"
+              height={viewport.clientHeight || undefined}
+            >
+              {(columns ?? 100) - (showSidebar ? SIDEBAR_WIDTH + 2 : 4) >= 54 ? (
+                <Box flexDirection="column" alignItems="center">
+                  {(isAsciiMode() ? BANNER_ASCII : BANNER).map((line, i) => (
+                    <Text key={i} bold color={theme.brand}>{line}</Text>
+                  ))}
+                </Box>
+              ) : (
+                <Text bold color={theme.brand}>⚑ SCoder</Text>
+              )}
               <Text dimColor>{`autonomous coding agent · v${getVersion()}`}</Text>
               <Text></Text>
               <Text dimColor>type a task to start — agent plans, edits, and builds</Text>
@@ -209,7 +243,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               </Text>
             </Box>
           ) : (
-            state.items.map((item, i) => <ChatItemView key={i} item={item} width={(columns ?? 100) - (showSidebar ? 42 : 4)} />)
+            state.items.map((item, i) => <ChatItemView key={i} item={item} width={(columns ?? 100) - (showSidebar ? SIDEBAR_WIDTH + 2 : 4)} />)
           )}
           {lastSummary && (
             <Box marginTop={1}>

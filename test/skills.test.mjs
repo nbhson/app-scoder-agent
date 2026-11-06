@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseFrontmatter, loadSkillFile, discoverSkills, findSkill, formatSkillIndex } from "../dist/context/skills.js";
+import { parseFrontmatter, loadSkillFile, discoverSkills, findSkill, matchSkillPrefix, formatSkillIndex } from "../dist/context/skills.js";
 import {getTool} from "../dist/tools/registry.js";
 import { completeSlashCommand, parseSlashCommand, formatSlashHelp } from "../dist/commands/definitions.js";
 
@@ -58,6 +58,16 @@ describe("skills", () => {
     assert.equal(findSkill(proj, "code"), null);
     assert.equal(findSkill(proj, "code-reviewx"), null);
     assert.equal(findSkill(proj, "review mã nguồn"), null);
+  });
+
+  it("matchSkillPrefix tách '/skill <name> <task>' — tên dài nhất thắng, giữ word boundary", () => {
+    assert.deepEqual(
+      matchSkillPrefix(proj, "code-review fix the login bug"),
+      { skill: discoverSkills(proj)[0], rest: "fix the login bug" },
+    );
+    assert.deepEqual(matchSkillPrefix(proj, "code-review"), { skill: discoverSkills(proj)[0], rest: "" });
+    assert.equal(matchSkillPrefix(proj, "code-reviewx task"), null, "không khớp khi dính liền tên");
+    assert.equal(matchSkillPrefix(proj, "unknown task"), null);
   });
 
   it("project skills override global ones with the same name", () => {
