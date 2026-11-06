@@ -6,7 +6,7 @@ import { AnthropicClient } from "./llm/provider-anthropic.js";
 import { allToolSpecs, setMaxOutputChars, type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
 import { expandMentions } from "./context/context.js";
-import { createGuardrailEngine, type GuardrailDecision } from "./guardrails.js";
+import { createGuardrailEngine, type GuardrailDecision } from "./agent/guardrails.js";
 import type { VerifyCommands } from "./workspace/diagnostics.js";
 import { PROMPT_VERSION } from "./context/prompt.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
