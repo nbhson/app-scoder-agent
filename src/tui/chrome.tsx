@@ -8,7 +8,7 @@ import type { AgentConfig } from "../config.js";
 import type { TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
 import { Spinner } from "./chat-views.js";
-import { getVersion } from "../version.js";
+import { getVersion } from "../shared/version.js";
 
 /** Fuel gauge is scaled to this many cells regardless of maxSteps. */
 export const GAUGE_CELLS = 12;

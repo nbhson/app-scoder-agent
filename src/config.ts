@@ -90,7 +90,7 @@ export interface AgentConfig {
   /** Compaction: false disables; object overrides trigger/keep/buffer/contextWindow (H-10). */
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost` estimation */
-  modelPricing?: Record<string, import("./constants.js").ModelPricing>;
+  modelPricing?: Record<string, import("./shared/constants.js").ModelPricing>;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";

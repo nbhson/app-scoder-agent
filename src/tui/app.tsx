@@ -27,7 +27,7 @@ import { fileIndex } from "./at-complete.js";
 import { getTheme, setActiveTheme, theme } from "./theme.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
 import { Sidebar } from "./sidebar.js"; // sidebar opencode
-import { getVersion } from "../version.js";
+import { getVersion } from "../shared/version.js";
 import { useScrollMetrics } from "./hooks/use-scroll.js";
 import { useEventQueue } from "./hooks/use-event-queue.js";
 import { useSessionResume } from "./hooks/use-session-resume.js";

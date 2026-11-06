@@ -6,7 +6,7 @@ import { McpManager, type McpServerConfig } from "../mcp.js";
 import type { AgentConfig } from "../config.js";
 import type { AgentEvent } from "./types.js";
 import type { PermissionChecker } from "../permissions.js";
-import { validateSchema } from "../json-schema.js";
+import { validateSchema } from "../shared/json-schema.js";
 import type { JsonlLogger } from "../logger.js";
 import type { Reporter } from "../io/reporter.js";
 

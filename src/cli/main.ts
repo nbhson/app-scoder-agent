@@ -6,7 +6,7 @@ import { Agent } from "../agent.js";
 import { listSessions, resolveSessionId } from "../session.js";
 import { JsonlLogger } from "../logger.js";
 import { collectUsage, formatCostReport } from "../cost.js";
-import { getVersion as getPackageVersion } from "../version.js";
+import { getVersion as getPackageVersion } from "../shared/version.js";
 import { selectableAgents } from "../agents.js";
 import * as ui from "../ui.js";
 import { parseArgs, HELP, type CliArgs } from "./args.js";

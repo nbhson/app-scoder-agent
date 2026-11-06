@@ -11,7 +11,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { AgentConfig } from "../config.js";
 import { contextWindowFor } from "../model-catalog.js";
-import { resolveModelPricing } from "../constants.js";
+import { resolveModelPricing } from "../shared/constants.js";
 import { latestPlan, type ChatItem, type TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
 import { fuelGauge, gaugeColor, SIDEBAR_WIDTH } from "./chrome.js";

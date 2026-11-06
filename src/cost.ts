@@ -9,7 +9,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { resolveModelPricing, type ModelPricing } from "./constants.js";
+import { resolveModelPricing, type ModelPricing } from "./shared/constants.js";
 
 /** One `llm_usage` event extracted from a JSONL log. */
 export interface UsageEvent {
