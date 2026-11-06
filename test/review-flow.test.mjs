@@ -9,6 +9,8 @@ import { test } from "node:test";
 
 const machine = readFileSync(new URL("../dist/tui/review.js", import.meta.url), "utf8");
 const app = readFileSync(new URL("../dist/tui/app.js", import.meta.url), "utf8");
+// Phase 5.3: the /review relay moved verbatim into the useReview hook.
+const hook = readFileSync(new URL("../dist/tui/hooks/use-review.js", import.meta.url), "utf8");
 
 test("/review prompt-gate flow wiring", () => {
   assert.match(machine, /pending_level_selection/);
@@ -19,7 +21,8 @@ test("/review prompt-gate flow wiring", () => {
   assert.match(machine, /rewritten_prompt/);
   // Level menu light/balanced/detailed mapped by numeric choice.
   assert.match(machine, /\["light",\s*"balanced",\s*"detailed"\]/);
-  // App wires the submit path to the machine.
-  assert.match(app, /reviewFromResponse/);
-  assert.match(app, /reviewAnswerToCall/);
+  // App wires the submit path to the machine (via the extracted hook).
+  assert.match(hook, /reviewFromResponse/);
+  assert.match(hook, /reviewAnswerToCall/);
+  assert.match(app, /useReview/);
 });
