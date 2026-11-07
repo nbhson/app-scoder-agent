@@ -56,3 +56,8 @@ export const charset: Charset = isAsciiMode() ? ASCII : UNICODE;
 export function boxBorderStyle(): "round" | "classic" {
   return isAsciiMode() ? "classic" : "round";
 }
+
+/** Ink borderStyle for one-sided divider rules (app bars): thin, ASCII-safe. */
+export function dividerBorderStyle(): "single" | "classic" {
+  return isAsciiMode() ? "classic" : "single";
+}

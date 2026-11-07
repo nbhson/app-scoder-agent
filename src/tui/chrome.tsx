@@ -9,14 +9,15 @@ import type { TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
 import { Spinner } from "./chat-views.js";
 import { getVersion } from "../shared/version.js";
+import { dividerBorderStyle } from "./charset.js";
 
 /** Fuel gauge is scaled to this many cells regardless of maxSteps. */
 export const GAUGE_CELLS = 12;
 
 /** Sidebar phải: tổng rộng (kể cả border + padding) — pattern opencode. */
-export const SIDEBAR_WIDTH = 60;
+export const SIDEBAR_WIDTH = 48;
 /** Dưới ngưỡng cột này ẩn sidebar — BuildRail fallback sang header đầy đủ. */
-export const SIDEBAR_MIN_COLS = 112;
+export const SIDEBAR_MIN_COLS = 100;
 
 /** Scaled step fuel gauge: ▰ filled / ▱ remaining, e.g. ▰▰▰▰▱▱▱▱ 4/40. */
 export function fuelGauge(step: number, maxSteps: number): string | null {
@@ -62,9 +63,14 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
   const showNarrowMetrics = !wide && (state.status === "running" || state.phases.length > 0);
 
   return (
+    // App-bar style: chỉ 1 divider mảnh dưới đáy thay vì khung "bold" nặng
+    // 3 hàng — tiết kiệm 1 dòng dọc và cho cảm giác hiện đại hơn.
     <Box
-      borderStyle="bold"
+      borderStyle={dividerBorderStyle()}
       borderColor={theme.border}
+      borderTop={false}
+      borderLeft={false}
+      borderRight={false}
       paddingX={1}
       justifyContent="space-between"
       alignItems="center"
@@ -171,9 +177,13 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
   }
 
   return (
+    // App-bar style: chỉ 1 divider mảnh trên đỉnh, đối xứng với BuildRail.
     <Box
-      borderStyle="bold"
+      borderStyle={dividerBorderStyle()}
       borderColor={theme.border}
+      borderBottom={false}
+      borderLeft={false}
+      borderRight={false}
       paddingX={1}
       justifyContent="space-between"
       alignItems="center"

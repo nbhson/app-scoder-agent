@@ -33,7 +33,7 @@ function useSpinner(active: boolean): string {
 export function Spinner({ active }: { active: boolean }): React.JSX.Element | null {
   const frame = useSpinner(active);
   if (!active) return null;
-  return <Text color="cyan">{frame}</Text>;
+  return <Text color={theme.accent}>{frame}</Text>;
 }
 
 const OUTPUT_PREVIEW_LINES = 5;
@@ -95,7 +95,7 @@ function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" 
     <Box flexDirection="column" paddingLeft={2}>
       {/* Step prefix + icon + tool name + args + elapsed */}
       <Text>
-        <Text dimColor>{String(item.step).padStart(2, "0")}▸ </Text>
+        <Text dimColor>{String(item.step).padStart(2, "0")} ▸ </Text>
         <Text color={theme.accent}>{toolIcon(item.name)} </Text>
         <Text color={item.ok === false ? theme.error : theme.accent} bold>{item.name}</Text>
         {keyArg && <Text dimColor> {keyArg}</Text>}
@@ -126,12 +126,12 @@ function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" 
   );
 }
 
-/** One colored line of a unified diff (+ green, - red, @@ cyan, header bold). */
+/** One colored line of a unified diff (+ success, - error, @@ accent, header bold). */
 export function DiffLine({ line }: { line: string }): React.JSX.Element {
   if (line.startsWith("+++") || line.startsWith("---")) return <Text bold>{line}</Text>;
-  if (line.startsWith("@@")) return <Text color="cyan">{line}</Text>;
-  if (line.startsWith("+")) return <Text color="green">{line}</Text>;
-  if (line.startsWith("-")) return <Text color="red">{line}</Text>;
+  if (line.startsWith("@@")) return <Text color={theme.accent}>{line}</Text>;
+  if (line.startsWith("+")) return <Text color={theme.success}>{line}</Text>;
+  if (line.startsWith("-")) return <Text color={theme.error}>{line}</Text>;
   return <Text>{line}</Text>;
 }
 
@@ -161,7 +161,7 @@ function DiffItemView({ item, width }: { item: Extract<ChatItem, { kind: "diff" 
     >
       {/* Header: step badge + ✎ icon + stats + path */}
       <Text>
-        <Text dimColor>{String(item.step).padStart(2, "0")}▸ </Text>
+        <Text dimColor>{String(item.step).padStart(2, "0")} ▸ </Text>
         <Text color={theme.brand} bold>✎</Text>
         <Text>  </Text>
         <Text color={addedColor}>+{item.added}</Text>
@@ -247,8 +247,9 @@ function chatItemEqual(a: ChatItem, b: ChatItem): boolean {
 export const ChatItemView = memo(function ChatItemView({ item, width }: { item: ChatItem; width?: number }): React.JSX.Element | null {
   switch (item.kind) {
     case "user":
-      // User messages stand out with a full colored border + bold label so they're
-      // immediately visible at a glance, distinct from the agent's ◆ markdown.
+      // User messages stand out with a clean left accent border (│) + bold
+      // label — no full-width background block (design-system: subtle,
+      // scannable, không phá nhịp đọc của transcript).
       return (
         <Box marginTop={1} marginLeft={1}>
           <Box
@@ -258,16 +259,13 @@ export const ChatItemView = memo(function ChatItemView({ item, width }: { item: 
             borderRight={false}
             borderTop={false}
             borderBottom={false}
-            backgroundColor="gray"
             width="100%"
             paddingX={1}
-            paddingTop={1}
-            paddingBottom={1}
             flexDirection="column"
           >
             <Text>
-              <Text color="white" bold>you ▸ </Text>
-              <Text color="white" bold>{item.text}</Text>
+              <Text color={theme.user} bold>you ▸ </Text>
+              <Text bold>{item.text}</Text>
             </Text>
           </Box>
         </Box>

@@ -2,9 +2,10 @@
  * Sidebar bên phải (pattern opencode) — "mission control" panel: session,
  * plan live, metrics (tok/s · ctx · cost), phases, build lamp, MCP servers.
  *
- * Tách khỏi chat transcript để chat sạch và trạng thái luôn nhìn thấy mà
- * không cần scroll. Ẩn hoàn toàn trên terminal hẹp (< SIDEBAR_MIN_COLS) —
- * khi đó BuildRail fallback sang header đầy đủ (chrome.tsx).
+ * Nền panel theo theme (theme.panelBg) tạo chiều sâu, tách khỏi chat
+ * transcript để chat sạch và trạng thái luôn nhìn thấy mà không cần scroll.
+ * Ẩn hoàn toàn trên terminal hẹp (< SIDEBAR_MIN_COLS) — khi đó BuildRail
+ * fallback sang header đầy đủ (chrome.tsx).
  * (Guardrail notice trước đây nằm cuối sidebar — đã chuyển lên header, căn giữa.)
  *
  * Height budget (xem Sidebar root): nội dung thường cao hơn chiều cao khả dụng
@@ -20,15 +21,23 @@ import { contextWindowFor } from "../llm/model-catalog.js";
 import { resolveModelPricing } from "../shared/constants.js";
 import { type ChatItem, type TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
+import { charset } from "./charset.js";
 import { fuelGauge, gaugeColor, SIDEBAR_WIDTH } from "./chrome.js";
 
 const INNER = SIDEBAR_WIDTH - 4; // border + paddingX
 const MAX_PLAN_ROWS = 14; // cap chiều cao — plan dài thì gộp "+N more"
 
 function Section({ title, children }: { title: string; children: React.ReactNode }): React.JSX.Element {
+  // Header chuẩn design-system: rule mảnh + tiêu đề bold + rule lấp đầy chiều
+  // ngang còn lại — phân tách section rõ ràng mà không cần khung nặng.
+  const rule = charset.h.repeat(Math.max(0, INNER - title.length - 3));
   return (
     <Box flexDirection="column" marginBottom={1} flexShrink={0}>
-      <Text dimColor bold>─ {title}</Text>
+      <Text wrap="truncate">
+        <Text dimColor>{charset.h} </Text>
+        <Text bold>{title}</Text>
+        <Text dimColor> {rule}</Text>
+      </Text>
       {children}
     </Box>
   );

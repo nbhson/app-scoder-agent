@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { DiffLine } from "./chat-views.js";
 import { theme } from "./theme.js";
+import { boxBorderStyle } from "./charset.js";
 
 export interface PermissionModalProps {
   prompt: {
@@ -38,7 +39,7 @@ export function PermissionModal({ prompt }: PermissionModalProps): React.JSX.Ele
   const hasMoreBelow = start + MODAL_DIFF_WINDOW < lines.length;
 
   return (
-    <Box flexDirection="column" borderStyle="bold" borderColor={theme.warn} paddingX={1} paddingY={1}>
+    <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.warn} paddingX={1} paddingY={1}>
       {/* Header bar */}
       <Box justifyContent="space-between" marginBottom={1}>
         <Text color={theme.warn} bold>⚠ permission — {prompt.kind}</Text>

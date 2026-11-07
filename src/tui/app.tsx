@@ -3,7 +3,8 @@
  *
  * Identity (deliberately distinct from chat-first agent UIs): the build is
  * the mission, so the screen is organized around it —
- *   · Build Rail (top): brand, model/permission badges, build lamp, fuel gauge
+ *   · Build Rail (top): brand, permission badge, build lamp
+ *   · Sidebar (right panel): session · MCP · metrics · phases · plan · build
  *   · Flight-recorder log: each tool entry is stamped `07 ▸ name(args)`
  *   · `✎` diff cards rendered inline for every file edit
  *   · Assistant messages render as markdown (code fences, headers, lists)
@@ -236,10 +237,18 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               )}
               <Text dimColor>{`autonomous coding agent · v${getVersion()}`}</Text>
               <Text></Text>
-              <Text dimColor>type a task to start — agent plans, edits, and builds</Text>
+              <Text dimColor>type a task to start — the agent plans, edits, and builds</Text>
               <Text></Text>
-              <Text dimColor>
-                ⏎ send · <Text bold>ctrl+s</Text> sessions · tab complete · /help
+              {/* Key hints: phím tắt bold nổi bật, nhãn dim — quét nhanh hơn. */}
+              <Text>
+                <Text bold color={theme.accent}>⏎</Text>
+                <Text dimColor> send   </Text>
+                <Text bold color={theme.accent}>ctrl+s</Text>
+                <Text dimColor> sessions   </Text>
+                <Text bold color={theme.accent}>tab</Text>
+                <Text dimColor> complete   </Text>
+                <Text bold color={theme.accent}>/help</Text>
+                <Text dimColor> commands</Text>
               </Text>
             </Box>
           ) : (
@@ -248,15 +257,15 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           {lastSummary && (
             <Box marginTop={1}>
               {state.status === "success" ? (
-                <Text color="green" bold>
+                <Text color={theme.success} bold>
                   ✔ {lastSummary}
                 </Text>
               ) : state.status === "aborted" ? (
-                <Text color="yellow" bold>
+                <Text color={theme.warn} bold>
                   ⏹ {lastSummary}
                 </Text>
               ) : (
-                <Text color="red" bold>
+                <Text color={theme.error} bold>
                   ✘ {lastSummary}
                 </Text>
               )}
@@ -293,7 +302,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}
-      <Box paddingX={1} paddingTop={1} paddingBottom={1} flexShrink={0} alignSelf="stretch">
+      <Box paddingX={1} paddingTop={0} paddingBottom={0} flexShrink={0} alignSelf="stretch">
         <Input
           valueRef={inputRef}
           value={input}

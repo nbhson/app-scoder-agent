@@ -69,9 +69,14 @@ export const THEMES: Record<string, Theme> = {
   light: LIGHT, "high-contrast": HIGH_CONTRAST, solarized: SOLARIZED,
 };
 
+/** NO_COLOR spec (no-color.org): mọi giá trị non-empty ≠ "0" đều tắt màu. */
+function noColorSet(v: string | undefined): boolean {
+  return v !== undefined && v !== "" && v !== "0";
+}
+
 export function defaultThemeName(env: NodeJS.ProcessEnv = process.env): string {
   if (env.SCODER_THEME && THEMES[env.SCODER_THEME]) return env.SCODER_THEME;
-  if (env.SCODER_PLAIN === "1" || env.NO_COLOR === "1" || process.env.NO_COLOR === "1") return "mono";
+  if (env.SCODER_PLAIN === "1" || noColorSet(env.NO_COLOR) || noColorSet(process.env.NO_COLOR)) return "mono";
   if (env.TERM === "dumb" || !env.TERM) return "mono";
   if (env.COLOR_COUNT && Number(env.COLOR_COUNT) < 16) return "mono";
   return "mission";

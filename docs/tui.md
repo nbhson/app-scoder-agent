@@ -14,49 +14,50 @@ scoder tui "fix the bug"       # auto-submit initial task
 ## Layout
 
 ```
-┌─ Build Rail (single row) ──────────────────────────────────────────────┐
-│ ⚑ scoder   [auto] ✓ ok    ⚠ <guardrail notice, full width>            │
-├─ Chat Pane ────────────────────────────────────────────────────────────┤
-│ ┌──────────────┐                                                      │
-│ │ you ▸        │                                                      │
-│ │ fix the bug  │                                                      │
-│ └──────────────┘                                                      │
-│                                                                    ▋  │
-│ 03▸ agent  Reading src/user.ts...                                     │
-│ 03▸ ✎ write_file  src/user.ts  +3 -1                                   │
-│ 03▸ ⚙ run_command  npm run build                                      │
-│         ├── npm run build                                             │
-│         └── ✓ 2s                                                      │
-├─ Status Bar ───────────────────────────────────────────────────────────┤
-│ gpt-4o-mini  ·  step 12  ·  scroll: 40%                               │
-└───────────────────────────────────────────────────────────────────────┘
-                            ┌─ Sidebar (≥92 cols) ─┐
-                            │ ─ SESSION           │
-                            │   model …           │
-                            │   dir …             │
-                            │ ─ METRICS           │
-                            │   steps ▰▱▱… 3/40   │
-                            │   toks …            │
-                            │   speed …           │
-                            │   ctx …             │
-                            │   elapsed …         │
-                            │ ─ PHASES            │
-                            │   ◆ explore …       │
-                            │ ─ BUILD             │
-                            │   ● build ok        │
-                            │ ─ MCP               │
-                            │   ● fs ready        │
-                            │ ─ PLAN              │
-                            │   1/3 steps         │
-                            │   ✔ read lib.js     │
-                            │   ◆ fix add()       │
-                            │   ○ run build       │
-                            └─────────────────────┘
+ ⚑ scoder (v…)   plan › explore › edit › build › verify        [auto] ✓ ok
+────────────────── Build Rail (app bar, thin divider) ─────────────────────
+ ┌─ Chat Pane ───────────────────────────────────────────────────────────┐
+ │ │ you ▸ fix the bug                                                   │
+ │  ◆ agent — markdown answer…                                        ▋  │
+ │  03 ▸ 📖 read_file  src/user.ts · 0.4s                                │
+ │  ╭─ 05 ▸ ✎ +3 -1  src/user.js ──────────────────────────────────╮     │
+ │  │ @@ -10,3 +10,5 @@ …colored diff…                            │  │
+ │  ╰───────────────────────────────────────────────────────────────╯     │
+ │  07 ▸ ⚡ run_command  npm run build · 1.2s                              │
+ │    └ ✓ build passed                                                   │
+ └───────────────────────────────────────────────────────────────────────┘
+────────────────── Status Bar (app bar, thin divider) ────────────────────
+ ⠙ running · gpt-4o-mini          ⏎ send · ctrl+s sessions · ctrl+c quit
+                            ┌─ Sidebar (≥100 cols) ─┐
+                            │ ─ SESSION ──────────  │
+                            │   model …             │
+                            │   dir …               │
+                            │ ─ METRICS ──────────  │
+                            │   steps ▰▱▱… 3/40     │
+                            │   toks …              │
+                            │   speed …             │
+                            │   ctx …               │
+                            │   elapsed …           │
+                            │ ─ PHASES ───────────  │
+                            │   ◆ explore …         │
+                            │ ─ BUILD ────────────  │
+                            │   ● build ok          │
+                            │ ─ MCP ──────────────  │
+                            │   ● fs ready          │
+                            │ ─ PLAN ─────────────  │
+                            │   1/3 steps           │
+                            │   ✔ read lib.js       │
+                            │   ◆ fix add()         │
+                            │   ○ run build         │
+                            └───────────────────────┘
 ```
 
 ## Features
 
-### Build Rail (Top Bar — single row)
+### Build Rail (Top Bar — app-bar style)
+- **Thin bottom divider** instead of a full heavy box — the brand row floats
+  over a single hairline rule, saving one terminal row and matching the
+  Status Bar at the bottom (which mirrors it with a top divider)
 - **Brand** — ⚑ scoder logo
 - **Permission Mode** — [auto] / [ask] / [readonly]
 - **Build Lamp** — ✓ ok / ✗ fail / ○ — (no build yet)
@@ -67,12 +68,12 @@ scoder tui "fix the bug"       # auto-submit initial task
   they live in the sidebar METRICS section only (avoiding duplication)
 
 ### Chat Pane
-- User messages with a full colored border + `you ▸` label (bold) so they stand
-  out from agent output at a glance
+- User messages with a left accent border (`│`, theme `user` color) + `you ▸`
+  label (bold) — clean and scannable, no full-width background block
 - Streaming assistant text (live cursor ▋)
 - Tool calls with status (`✔`/`✘`, spinner while running)
 - Diff cards (`✎`) for file writes/edits
-- Flight-recorder step prefix (`03▸`)
+- Flight-recorder step prefix (`03 ▸`)
 - Live command output (dimmed block)
 - Rich assistant display is terminal-native and dependency-free:
   - GFM tables use measured pane width, bounded cells, Unicode borders, and
@@ -114,7 +115,7 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 - **MCP** — per-server state (ready / connecting / reconnecting / dead)
 - **PLAN** — top of the sidebar (right after SESSION); live checklist from `write_todos` (✔/◆/○);
   resets in real time on each new user message so the previous task's plan doesn't linger
-- On narrow terminals (< 92 cols) the sidebar is hidden and the BuildRail falls back
+- On narrow terminals (< 100 cols) the sidebar is hidden and the BuildRail falls back
   to showing the phase breadcrumb + metrics inline
 
 ### Status Bar
