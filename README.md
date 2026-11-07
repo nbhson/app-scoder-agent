@@ -1,6 +1,6 @@
 # scoder — Autonomous Coding Agent CLI
 
-**Current version: 0.9.2**
+**Current version: 0.9.6**
 
 [![CI](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/nbhson/app-scoder-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
