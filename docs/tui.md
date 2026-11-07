@@ -1,6 +1,6 @@
 # TUI Guide — Mission Control
 
-**Version 0.9.6** — rich display, responsive rendering, chart and timeline support.
+**Version 0.9.7** — rich display, responsive rendering, chart and timeline support.
 
 Full-screen terminal UI built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals).
 

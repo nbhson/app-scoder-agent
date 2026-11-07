@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.7] — 2026-11-07
+
+### Changed
+- **Default system prompt compacted into V6**: ~37% fewer tokens while preserving
+  the same agent behavior and instructions.
+
 ## [0.9.5] — 2026-11-07
 
 ### Changed
