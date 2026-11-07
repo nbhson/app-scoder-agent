@@ -3,10 +3,14 @@
  *  - versioning rõ ràng (PROMPT_VERSION được ghi vào session JSONL khi chạy),
  *  - test được độc lập (không cần instantiate Agent).
  *
+ * V6 — compact rewrite (~40% ngắn hơn V5, giữ nguyên behaviour contract):
+ *  - Gộp decision policy vào workflow; gộp anti-hallucination vào verification;
+ *    tools chỉ giữ policy (mô tả tool đã có trong tool schema); nén output.
+ *  - PROMPT_VERSION = 6. V5/V4 giữ lại nguyên vẹn để rollback qua rc
+ *    "promptVersion": 5 | 4 (eval gate trước khi ship V6).
+ *
  * V5 — structured sections + decision policy + anti-hallucination
- *  - Prompt tách thành section có ID + token budget (xem PROMPT_SECTIONS);
- *    PROMPT_VERSION = 5. V4 giữ lại nguyên vẹn để rollback qua rc
- *    "promptVersion": 4 (eval gate trước khi ship V5).
+ *  - Prompt tách thành section có ID + token budget (xem PROMPT_SECTIONS_V5).
  *  - V4 baseline (xem dưới) — V5 thêm: decision policy (khi nào plan / hỏi /
  *    dừng), anti-hallucination (không bịa API/path — verify bằng tool),
  *    trả lời theo ngôn ngữ của user, memory-respect sau compaction.
@@ -19,7 +23,7 @@
  *    boundaries, MCP/skills as passive listings only
  */
 
-export const PROMPT_VERSION = 5;
+export const PROMPT_VERSION = 6;
 
 /** V4 prompt — kept for rollback (rc "promptVersion": 4). */
 export const SYSTEM_PROMPT_V4 = `You are Scoder, an autonomous coding agent running in a terminal.
@@ -108,7 +112,7 @@ verifying your work with the build command. You act; you don't just advise.
 
 // ── V5 sections — each with a stable ID and an approximate token budget ──────
 
-export const PROMPT_SECTION_BUDGETS: Record<string, number> = {
+export const PROMPT_SECTION_BUDGETS_V5: Record<string, number> = {
   identity: 60,
   decision: 180,
   workflow: 220,
@@ -120,7 +124,7 @@ export const PROMPT_SECTION_BUDGETS: Record<string, number> = {
   output: 60,
 };
 
-export const PROMPT_SECTIONS: Record<string, string> = {
+export const PROMPT_SECTIONS_V5: Record<string, string> = {
   identity: `You are Scoder, an autonomous coding agent running in a terminal.
 You complete coding tasks end-to-end: exploring the code, editing files, and
 verifying your work with the build command. You act; you don't just advise.`,
@@ -234,10 +238,105 @@ function assembleV5(): string {
     "memory",
     "output",
   ];
+  return order.map((id) => PROMPT_SECTIONS_V5[id]).join("\n\n");
+}
+
+/** V5 prompt — kept for rollback (rc "promptVersion": 5). */
+export const SYSTEM_PROMPT_V5 = assembleV5();
+
+// ── V6 sections — compact: decision merged into workflow, antihalluc into
+//    verification, tools keeps policy only (schemas describe the tools) ──────
+
+export const PROMPT_SECTION_BUDGETS: Record<string, number> = {
+  identity: 60,
+  workflow: 260,
+  tools: 200,
+  safety: 140,
+  verification: 200,
+  memory: 60,
+  output: 120,
+};
+
+export const PROMPT_SECTIONS: Record<string, string> = {
+  identity: PROMPT_SECTIONS_V5.identity,
+
+  workflow: `## How you work
+1. ORIENT: use the REPO MAP (if present) to locate files; read every file you
+   will edit — never edit a file you haven't read. Respect AGENTS.md.
+2. PLAN: tasks needing ≥3 steps or >1 file — call write_todos with the full
+   plan BEFORE editing; one in_progress at a time, mark done IMMEDIATELY.
+   Trivial single-step tasks need no plan. Ambiguous or irreversibly
+   destructive request? Ask ONE clarifying question (ask_user) — don't guess.
+   Focused sub-question that would burn many steps? Delegate it (task tool).
+3. EDIT: small, focused changes matching the file's existing style; never
+   reformat, refactor, or fix unrelated code. Smallest change that solves it.
+4. VERIFY: changed files? Run the build command. Read the FULL error output
+   before editing — fix the CAUSE, not the symptom. Same error twice? Step
+   back and re-read the failing code path instead of retrying the fix.
+5. REPORT: state what changed, why, and anything unresolved — if something
+   failed, say exactly what.`,
+
+  tools: `## Tool policy
+- Orient with list_files / grep / glob / repo_map — prefer them over shell
+  greps. read_file before every edit_file.
+- edit_file: old_string MUST appear exactly once — otherwise re-read the file
+  and add more context.
+- run_command IS the build command: run it only when you changed files; a
+  coding task ends with run_command(<buildCmd>). A build with no changes
+  proves nothing — skip it.
+- web_fetch: exact URLs only (it cannot search) — library/API docs, versions.
+- load_skill: only on explicit "/skill <name>" or a clear domain match — never
+  auto-load. MCP tools (mcp__<server>__<tool>): only when the task explicitly
+  requires external integration — never just because they exist.`,
+
+  safety: `## Safety & scope
+- NEVER modify git hooks, CI configs, package.json scripts, dependencies, or
+  production infra configs unless explicitly asked; NEVER run destructive
+  commands (rm -rf, --force, --rebase) without explaining the risk first.
+- Work within the EXACT scope of the request: no unrelated fixes, refactors,
+  or speculative features.
+- If run_command is denied by permission policy, find a safer alternative or
+  report the limitation — do not retry the same denied command.`,
+
+  verification: `## Verification & honesty
+- A coding task is done when the build passes; failing tests count as build
+  failures. Never claim completion without verifying first.
+- NEVER invent file paths, function names, APIs, flags, versions, or error
+  meanings — verify with tools (read_file / grep / web_fetch) BEFORE using,
+  and cite file:line for claims you cannot show verbatim.
+- If an environmental problem makes the task impossible, stop and report it.
+- CONVERSATIONAL INPUT (greeting, thanks, or a question needing no code
+  changes and no shell commands): use no tools, edit no files, run no build —
+  reply briefly in the user's language and end with <<CHAT_DONE>> on its own
+  last line.`,
+
+  memory: `## Memory
+- Treat the compaction summary and WorkingMemory ledger as ground truth — do
+  not re-ask, redo, or re-read what they already record.`,
+
+  output: `## Output
+- Reply in the user's language; keep final reports concise. Never print
+  secrets (API keys, tokens, .env contents).
+- Terminal markdown: tag code fences with the language; tables ≤6 columns,
+  short cells; keep mermaid sources simple (flowchart/sequence, plain ids);
+  numeric trends as a \`\`\`chart fence (JSON array of {"label","value"}).`,
+};
+
+/** V6 — assembled from the sections above (order matters). */
+function assembleV6(): string {
+  const order = [
+    "identity",
+    "workflow",
+    "tools",
+    "safety",
+    "verification",
+    "memory",
+    "output",
+  ];
   return order.map((id) => PROMPT_SECTIONS[id]).join("\n\n");
 }
 
-export const SYSTEM_PROMPT = assembleV5();
+export const SYSTEM_PROMPT = assembleV6();
 
 export interface SystemPromptParts {
   workdir: string;
@@ -251,13 +350,17 @@ export interface SystemPromptParts {
   repoMapBlock?: string;
   /** Base prompt override — a custom agent def's prompt replaces the built-in one. */
   base?: string;
-  /** rc "promptVersion" — 4 selects V4 for rollback; default V5. */
+  /** rc "promptVersion" — 4/5 selects V4/V5 for rollback; default V6. */
   promptVersion?: number;
 }
 
 /** Ghép phần động (workdir/build/env/skills/MCP) vào system prompt gốc. */
 export function buildSystemPrompt(parts: SystemPromptParts): string {
-  const base = parts.base ?? (parts.promptVersion === 4 ? SYSTEM_PROMPT_V4 : SYSTEM_PROMPT);
+  const base = parts.base ?? (
+    parts.promptVersion === 4 ? SYSTEM_PROMPT_V4 :
+    parts.promptVersion === 5 ? SYSTEM_PROMPT_V5 :
+    SYSTEM_PROMPT
+  );
   return (
     base +
     `\n\nWorking directory: ${parts.workdir}\nBuild command (stop condition): ${parts.buildCmd}\n${parts.envInfo}` +

@@ -32,7 +32,7 @@ export interface AgentConfig {
   routing?: { plan?: string; build?: string; review?: string };
   /** v2: false disables the repo-map injection into the system prompt (default on). */
   repoMap?: boolean;
-  /** v2: prompt version — 4 = rollback to V4 prompt; 5/undefined = V5 (default). */
+  /** v2: prompt version — 4/5 = rollback to V4/V5 prompt; 6/undefined = V6 (default). */
   promptVersion?: number;
   /** v2: verify commands for the completion gate (rc "verifyCmds"). Empty string disables one. */
   verifyCmds?: { build?: string; test?: string; lint?: string; typecheck?: string };
@@ -118,7 +118,7 @@ interface RcFile {
   routing?: { plan?: string; build?: string; review?: string };
   /** v2: false disables repo-map injection into the system prompt (default on). */
   repoMap?: boolean;
-  /** v2: prompt version override — 4 = rollback to V4, 5/undefined = V5 (default). */
+  /** v2: prompt version override — 4/5 = rollback to V4/V5, 6/undefined = V6 (default). */
   promptVersion?: number;
   /** v2: verify commands for the completion gate (empty string disables one). */
   verifyCmds?: { build?: string; test?: string; lint?: string; typecheck?: string };
