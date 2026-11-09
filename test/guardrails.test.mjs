@@ -136,7 +136,7 @@ describe("guardrails — Guardrail Engine", () => {
   it("build-stop: tool chạy đúng build command thành công → finish; thất bại → verify-build", async () => {
     const eng = new GuardrailEngine();
     const ok = await eng.evaluate(
-      baseCtx({ hasToolCalls: true, buildCallPresent: true, buildPassedThisStep: true, text: "Fixed it" }),
+      baseCtx({ hasToolCalls: true, buildCallPresent: true, buildPassedThisStep: true, filesModified: true, text: "Fixed it" }),
     );
     const dOk = ok.find((x) => x.rule === "build-stop");
     assert.ok(dOk);

@@ -369,10 +369,16 @@ export function tokenBudgetRule(capTokens: number): GuardrailRule {
  */
 const buildStopRule: GuardrailRule = {
   name: "build-stop",
-  description: "a tool call ran the exact build command — success ends the run, failure re-verifies",
+  description: "a tool call ran the exact build command — success ends the run (coding tasks), failure re-verifies",
   evaluate(ctx) {
     if (!ctx.hasToolCalls || !ctx.buildCallPresent) return null;
     const summary = ctx.text || "Build passed.";
+    // Review/report/read-only tasks do not modify files: a passing build is only
+    // verification, not a stop condition — do not end the run on it, so the
+    // agent can deliver its final report instead of stopping on the build result.
+    if (!ctx.filesModified && ctx.buildPassedThisStep) {
+      return null;
+    }
     if (ctx.buildPassedThisStep) {
       return {
         action: { kind: "finish", success: true, summary },
