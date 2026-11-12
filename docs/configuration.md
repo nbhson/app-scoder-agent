@@ -58,6 +58,65 @@ See [.scoderrc.example.json](../.scoderrc.example.json) for full config referenc
 3. **`.scoderrc.json`** — project root, merged with global `~/.scoder/config.json`
 4. **Built-in defaults**
 
+## Runtime Limits (`limits`)
+
+Numeric thresholds, all optional. Defaults live in `LIMIT_DEFAULTS`
+(`src/config/config.ts`) — a wrong value (0, negative, string) is ignored.
+
+```json
+{
+  "limits": {
+    "requestTimeoutMs": 120000,
+    "maxOutputChars": 20000,
+    "toolConcurrency": 4,
+    "renderCap": 200,
+    "toolOutputChars": 8000,
+    "mcpSchemaTokens": 0,
+    "buildTimeoutSecs": 600
+  }
+}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `requestTimeoutMs` | 120000 | LLM request timeout |
+| `maxOutputChars` | 20000 | Hard cap on one tool's raw output |
+| `toolConcurrency` | 4 | Parallel tool calls per step |
+| `renderCap` | 200 | Tail items rendered by the TUI |
+| `toolOutputChars` | 8000 | Budget for **one tool result in history**; `read_file` cuts at it line-aware and prints the `offset` to continue with |
+| `mcpSchemaTokens` | 0 (= off) | Ceiling for all MCP tool schemas advertised per call; tools past the ceiling are not advertised (warning names the count) |
+| `buildTimeoutSecs` | 600 | Timeout of one verify command (build/test/typecheck/lint) |
+
+## Local Models
+
+When `baseUrl` points at a loopback host (`localhost`, `127.0.0.1`, `::1`,
+`0.0.0.0`, `*.local`) the agent applies a profile tuned for slow prefill —
+each change is skipped if you set the key yourself:
+
+| Applied | Value | Why |
+|---|---|---|
+| `maxSteps` | 24 | 40 steps on a local model is hours |
+| `limits.requestTimeoutMs` | 600000 | A 30k-token prefill can exceed 120s |
+| `limits.toolOutputChars` | 6000 | Smaller per-tool-result history budget |
+| `limits.mcpSchemaTokens` | 6000 | 46 GitHub-MCP tools cost ~12k tokens **per call** |
+| `selfReview` | false | One extra LLM turn with a nearly full prompt |
+
+Disable with `"localProfile": false`, or override individual keys (they win).
+`repoMap` and `snapshots` are deliberately **not** disabled: the repo map lives
+in the stable system-prompt prefix (no cache cost) and snapshots are local git
+ops that cost no tokens.
+
+Related top-level keys:
+
+- `"verifyCache": false` — re-run build/test/typecheck/lint even when no file
+  changed (default: reuse the last passing result, keyed on a workspace
+  fingerprint).
+- `"contextWindow": 32768` — pin the model window. Without it the agent asks
+  the server (Ollama `/api/show` `num_ctx`, llama.cpp `/props`, vLLM
+  `max_model_len`) before falling back to the catalog/128k guess.
+- `"mcpTools": { "include": [...], "exclude": [...] }` — global allow/deny for
+  MCP tool names (see [mcp.md](mcp.md)).
+
 ## Permission Modes
 
 | Mode | Behavior |

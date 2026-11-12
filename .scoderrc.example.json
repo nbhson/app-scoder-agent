@@ -29,7 +29,18 @@
     "requestTimeoutMs": 120000,
     "maxOutputChars": 20000,
     "toolConcurrency": 4,
-    "renderCap": 200
+    "renderCap": 200,
+    "toolOutputChars": 8000,
+    "mcpSchemaTokens": 0,
+    "buildTimeoutSecs": 600
+  },
+
+  "verifyCache": true,
+  "localProfile": true,
+
+  "mcpTools": {
+    "include": [],
+    "exclude": ["mcp__github-mcp__*notifications*", "mcp__github-mcp__*codespaces*"]
   },
 
   "mcpServers": {

@@ -1,7 +1,7 @@
 import { readFileSync, statSync, realpathSync } from "node:fs";
 import { relative } from "node:path";
 import { detectImageBytes } from "../media/image.js";
-import { clamp, MAX_FILE_SIZE_BYTES, safePath, toPosInt, toResult } from "./path-safety.js";
+import { clamp, MAX_FILE_SIZE_BYTES, MAX_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, safePath, toPosInt, toResult } from "./path-safety.js";
 import { isProtectedEnvFile } from "./path-safety.js";
 import type { ToolResult } from "./types.js";
 
@@ -54,10 +54,31 @@ export function toolReadFile(workdir: string, args: { path: string; offset?: num
   const offset = Math.min(toPosInt(args.offset, 1), total);
   const limit = Math.min(toPosInt(args.limit, total - offset + 1), 2000);
   const slice = lines.slice(offset - 1, offset - 1 + limit);
-  const numbered = slice.map((l, i) => `${offset + i}: ${l}`).join("\n");
-  const end = offset + slice.length - 1;
+  const numberedAll = slice.map((l, i) => `${offset + i}: ${l}`);
+
+  // P0-2 (RC-3): cắt theo DÒNG ngay tại ngân sách history (limits.toolOutputChars)
+  // và nói rõ phần còn lại nằm ở dòng nào + lấy tiếp bằng tham số nào. Trunc mù
+  // kiểu "... more chars" từng khiến agent đọc lại cả file bằng "cách khác".
+  const budget = Math.max(200, Math.min(MAX_TOOL_OUTPUT_CHARS, MAX_OUTPUT_CHARS));
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of numberedAll) {
+    if (used + line.length + 1 > budget && kept.length > 0) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  const dropped = numberedAll.length - kept.length;
+  const end = offset + kept.length - 1;
   const header = offset > 1 || end < total ? `[lines ${offset}-${end} of ${total} — ${args.path}]\n` : "";
-  return { ok: true, output: clamp(header + numbered) };
+  const footer =
+    dropped > 0
+      ? `\n... [${dropped} more line(s): ${end + 1}-${offset + slice.length - 1} of ${total}. ` +
+        `Read the next chunk with read_file({"path":"${args.path}","offset":${end + 1}}) — ` +
+        `do NOT re-read from the start.]`
+      : "";
+  // clamp cho dòng kếch xù (một dòng 40k ký tự vẫn phải nằm trong ngân sách).
+  const numbered = clamp(kept.join("\n"), budget);
+  return { ok: true, output: header + numbered + footer };
   });
 }
 

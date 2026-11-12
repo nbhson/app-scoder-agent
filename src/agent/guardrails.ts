@@ -72,6 +72,12 @@ export interface GuardrailContext {
   /** G6: tổng token tích luỹ cả run (budget rule). */
   totalTokensIn?: number;
   totalTokensOut?: number;
+  /**
+   * P0-1: áp lực history so với ngân sách token (loop ước lượng bằng
+   * `historyPressure()` trước khi evaluate). Không truyền → rule history-trim
+   * không kích hoạt (mặc định an toàn: không phá KV-cache).
+   */
+  historyPressure?: { tokens: number; budget: number; over: boolean };
 }
 
 // ── Per-run tracker state (G1) — sống trong engine, không còn trong runLoop ──
@@ -328,12 +334,25 @@ export function doomLoopRule(opts: GuardrailOptions): GuardrailRule {
   };
 }
 
-/** Context management: luôn cắt gọn lịch sử sau mỗi bước. */
-const historyTrimRule: GuardrailRule = {
+/**
+ * Context management: chỉ cắt gọn lịch sử khi history THẬT SỰ vượt ngân sách.
+ *
+ * Trước đây rule này trả `trim` vô điều kiện mỗi bước (RC-1) → `trimHistory()`
+ * chạy mỗi bước và dịch chuyển boundary prune → prefix prompt đổi từng token
+ * → local model (llama.cpp/Ollama) re-prefill toàn bộ history mỗi lượt.
+ * Loop truyền `historyPressure` (tokens/budget đã ước lượng sẵn); thiếu nó thì
+ * rule không kích hoạt — an toàn theo hướng "không phá cache".
+ */
+export const historyTrimRule: GuardrailRule = {
   name: "history-trim",
-  description: "trim message history after every step (token budget)",
-  evaluate() {
-    return { action: { kind: "trim" }, reason: "routine context management" };
+  description: "trim message history only when it exceeds the token budget (KV-cache stable prefix)",
+  evaluate(ctx) {
+    const p = ctx.historyPressure;
+    if (!p || !p.over) return null;
+    return {
+      action: { kind: "trim" },
+      reason: `history ${p.tokens} tokens > budget ${p.budget}`,
+    };
   },
 };
 

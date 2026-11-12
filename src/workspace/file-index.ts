@@ -12,9 +12,14 @@ const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycac
 
 let cache: { files: string[]; built: number } | null = null;
 
-/** File index for `workdir` (cached, TTL 5s; invalidateFileIndex on tool writes). */
-export function fileIndex(workdir: string): string[] {
-  if (cache && Date.now() - cache.built < 5_000) return cache.files;
+/**
+ * File index for `workdir` (cached, TTL 5s; invalidateFileIndex on tool writes).
+ * `force` (P1-2) bỏ qua cache — dùng cho fingerprint, nơi một file mới được tạo
+ * bởi `run_command`/trình sửa ngoài PHẢI đổi hash, nếu không kết quả verify cũ
+ * sẽ được tái sử dụng sai.
+ */
+export function fileIndex(workdir: string, force = false): string[] {
+  if (!force && cache && Date.now() - cache.built < 5_000) return cache.files;
   const files: string[] = [];
   // Fast path: ripgrep --files (gitignore-aware). Bare-name globs match at any
   // depth; `!**/x/**` does NOT match absolute paths (I-07 lesson).

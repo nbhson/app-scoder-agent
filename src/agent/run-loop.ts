@@ -1,10 +1,10 @@
 import type { AgentConfig } from "../config/config.js";
 import type { BuildResult } from "../workspace/build.js";
-import { trimHistory, summariseOutput, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context/context.js";
+import { trimHistory, summariseOutput, historyPressure, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context/context.js";
 import { CHAT_DONE_MARKER } from "./guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
-import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
-import { redactSecrets, type ChatMessage, type ChatResult } from "../llm/llm.js";
+import { shouldCompact, estimateTokens, estimateSchemaTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
+import { redactSecrets, type ChatMessage, type ChatResult, type ToolSpec } from "../llm/llm.js";
 import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
 import type { EventSessionStore } from "../session/session.js";
@@ -15,6 +15,9 @@ import { createGuardrailEngine } from "./guardrails.js";
 import { memoryIsMeaningful, formatWorkingMemory, scanDecisions, type WorkingMemory } from "../context/memory.js";
 import { READONLY_TOOLS, type ToolExecutor } from "./tool-executor.js";
 import type { AgentEvent, AgentRunResult, UsageTotals } from "./types.js";
+
+/** P0-1: số bước tối thiểu giữa hai lần trim cơ học trong một run. */
+export const TRIM_COOLDOWN_STEPS = 3;
 
 /** Dependencies for the autonomous loop. Agent owns state; this module preserves its order of effects. */
 export interface RunLoopRuntime {
@@ -42,6 +45,8 @@ export interface RunLoopRuntime {
   steerCounts(): { pending: number; steering: number };
   chatWithStream(): Promise<ChatResult & { incomplete?: boolean }>;
   recordLlmUsage(usage: ChatResult["usage"]): void;
+  /** P1-1: tool specs đang quảng cáo — chi phí cố định của mỗi lượt gọi. */
+  tools(): ToolSpec[];
   emit(event: AgentEvent): void;
   emitContextEvent(force?: boolean): void;
   toolExecutor(): ToolExecutor;
@@ -75,12 +80,56 @@ export async function runAgentLoop(
     // Compaction-aware trim: mechanical trim scales with the model window and
     // starts AFTER compaction (95% vs 80% trigger). Disabled compaction keeps
     // the legacy conservative 90k cap.
+    // P1-1 (RC-4): ngân sách history = window − tool schema − chỗ cho reply.
+    // Tool schema không nằm trong messages nên trước đây nó bị tính thiếu
+    // ~16–20k token, compaction/trim kích hoạt muộn hơn thực tế đúng bằng
+    // chừng đó.
+    const fixedPromptTokens = (): number => estimateSchemaTokens(runtime.tools());
+    const window = compactionCfg?.contextWindow ?? 0;
     const trimBudget = compactionCfg
-      ? historyTokenBudget(compactionCfg.contextWindow)
+      ? historyTokenBudget(window, fixedPromptTokens(), runtime.config.maxTokens)
       : MAX_HISTORY_TOKENS;
     // When a run ends early (guardrail finish/build verification) compaction is
     // skipped, so never leave a near-full window for the next turn.
     const safeTrimBudget = Math.min(trimBudget, MAX_HISTORY_TOKENS);
+    runtime.logger.log({
+      type: "context_budget",
+      contextWindow: window,
+      toolSchemaTokens: fixedPromptTokens(),
+      outputReserve: runtime.config.maxTokens,
+      trimBudget,
+      tools: runtime.tools().length,
+    });
+    // Cảnh báo sớm: riêng chi phí cố định đã ăn gần hết window thì mọi tối ưu
+    // history đều vô nghĩa — user cần tắt MCP tool hoặc tăng num_ctx.
+    const baseline = fixedPromptTokens();
+    if (window > 0 && baseline > window * 0.5) {
+      runtime.reporter.warn(
+        `context window ${window} token nhưng riêng tool schema đã ${baseline} token (${runtime.tools().length} tools) — ` +
+        `giảm tool MCP ("mcpTools": {"include":[…]}, "limits": {"mcpSchemaTokens": …}) hoặc tăng num_ctx của server.`,
+      );
+    }
+    // P0-1: trim phá KV-cache từ điểm cắt trở về sau → cooldown giữa hai lần
+    // cắt cơ học (trừ khi sắp finish, lúc đó cache không còn giá trị).
+    let lastTrimStep = -Infinity;
+    const applyTrim = (budget: number, force = false): void => {
+      const before = runtime.messages.length;
+      const pressure = historyPressure(runtime.messages, budget);
+      if (!pressure.over) return;
+      if (!force && steps - lastTrimStep < TRIM_COOLDOWN_STEPS) return;
+      const next = trimHistory(runtime.messages, budget);
+      if (next === runtime.messages) return;
+      lastTrimStep = steps;
+      runtime.messages = next;
+      runtime.logger.log({
+        type: "context_trim",
+        step: steps,
+        tokens: pressure.tokens,
+        budget,
+        messagesBefore: before,
+        messagesAfter: next.length,
+      });
+    };
 
     while (steps < runtime.config.maxSteps && !runtime.aborted) {
       // ── Safe step boundary: deliver steered user input (H-08) ────────────
@@ -252,6 +301,9 @@ export async function runAgentLoop(
         outputTokensThisStep: usage?.completion_tokens,
         totalTokensIn: runtime.usageTotals.inputTokens, // G6 budget rule
         totalTokensOut: runtime.usageTotals.outputTokens,
+        // P0-1: rule history-trim chỉ fires khi history THẬT SỰ vượt ngân sách
+        // (trước đây nó fires mỗi bước → trim mỗi bước → mất KV-cache).
+        historyPressure: historyPressure(runtime.messages, trimBudget),
       });
 
       // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
@@ -278,7 +330,7 @@ export async function runAgentLoop(
               reminders.push(`[self-review] blocking findings — fix these, then verify again:\n${reviewNote}`);
               continue;
             }
-            if (doTrim) runtime.messages = trimHistory(runtime.messages, safeTrimBudget);
+            if (doTrim) applyTrim(safeTrimBudget, true);
             return runtime.finish(true, steps, buildCmd, a.successSummary);
           }
           // Structured diagnostics + error class instead of a raw log tail.
@@ -291,7 +343,7 @@ export async function runAgentLoop(
           reminders.push(`${a.failReminder}\n${failBlock}\nError class: ${errClass.kind} — ${errClass.strategy}\nFix and continue.`);
           if (runtime.verifyStrikes >= 4) {
             for (const r of reminders) runtime.messages.push({ role: "user", content: r });
-            if (doTrim) runtime.messages = trimHistory(runtime.messages, safeTrimBudget);
+            if (doTrim) applyTrim(safeTrimBudget, true);
             return runtime.finish(false, steps, buildCmd, `Verification failed the same way ${runtime.verifyStrikes} times — stopping. Last error class: ${errClass.kind}.`);
           }
           if (runtime.verifyStrikes >= 2) {
@@ -310,7 +362,7 @@ export async function runAgentLoop(
             }
           }
           for (const r of reminders) runtime.messages.push({ role: "user", content: r });
-          if (doTrim) runtime.messages = trimHistory(runtime.messages, safeTrimBudget);
+          if (doTrim) applyTrim(safeTrimBudget, true);
           return runtime.finish(a.success, steps, buildCmd, a.summary, a.chatOnly ?? false);
         }
       }
@@ -319,10 +371,14 @@ export async function runAgentLoop(
       // H-10: LLM compaction when history approaches the context window.
       // Runs BEFORE mechanical trim: trim drops whole turns, which could push
       // the history below the trigger before compaction ever sees it.
-      if (compactionCfg && shouldCompact(runtime.messages, compactionCfg)) {
+      // P1-1 (RC-4): cộng thêm tool schema (chi phí cố định của mỗi lượt) —
+      // nếu không, ngưỡng 80% bị đánh giá thấp đúng bằng số token schema
+      // (~16k với 46 tool MCP) và compaction đến muộn gần 20k token.
+      const schemaTokens = fixedPromptTokens();
+      if (compactionCfg && shouldCompact(runtime.messages, compactionCfg, schemaTokens)) {
         try {
           runtime.reporter.info("compaction: summarizing older history…");
-          const tokensBefore = estimateTokens(runtime.messages);
+          const tokensBefore = estimateTokens(runtime.messages, schemaTokens);
           const summaryInput = extractSummaryInput(runtime.currentTask, runtime.messages);
           const mem = runtime.memoryBlock();
           const summaryRes = await runtime.client.chat(
@@ -337,7 +393,7 @@ export async function runAgentLoop(
           const summary =
             redactSecrets(summaryRes.message.content ?? "History summarized.") + mem.suffix;
           runtime.messages = applyCompaction(runtime.messages, summary, compactionCfg);
-          const tokensAfter = estimateTokens(runtime.messages);
+          const tokensAfter = estimateTokens(runtime.messages, schemaTokens);
           runtime.events.append({
             type: "compaction.ran",
             tokensBefore,
@@ -353,10 +409,12 @@ export async function runAgentLoop(
           runtime.reporter.warn(`compaction failed (${(err as Error).message.slice(0, 100)}) — using mechanical trim`);
           // Fallback uses the legacy conservative cap: the next LLM call must
           // not leave a near-full window if summarization failed.
-          runtime.messages = trimHistory(runtime.messages, safeTrimBudget);
+          applyTrim(safeTrimBudget, true);
         }
       }
-      if (doTrim) runtime.messages = trimHistory(runtime.messages, trimBudget);
+      // P0-1: trim cơ học CHỈ khi guardrail báo over budget (doTrim) và có
+      // cooldown — mỗi lần cắt là một lần mất KV-cache của phần còn lại.
+      if (doTrim) applyTrim(trimBudget);
 
       // Persist session state after every step (enables resume after crash/SIGINT)
       runtime.saveSession(steps, buildCmd, lastBuild);

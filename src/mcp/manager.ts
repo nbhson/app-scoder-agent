@@ -1,6 +1,7 @@
 import { redactSecrets, type ToolSpec } from "../llm/llm.js";
 import type { McpConnState, McpPrompt, McpResource, McpResourceTemplate, McpServerConfig, McpTool } from "./types.js";
 import { MCP_RESOURCE_TOOL_NAMES, mcpToolKey } from "./types.js";
+import { filterToolNames } from "./tool-filter.js";
 import { McpConnection } from "./connection.js";
 
 const schemaObj = (properties: Record<string, unknown>, required: string[]) => ({
@@ -172,21 +173,8 @@ export class McpManager {
 
   /** MCP A: apply per-server tool include/exclude filters to a tool list. */
   private filterToolDefs(name: string, defs: McpTool[]): McpTool[] {
-    const filter = this.configs[name]?.tools;
-    if (!filter) return defs;
-    const include = filter.include?.filter(Boolean) ?? [];
-    const exclude = new Set((filter.exclude ?? []).map((s) => s.toLowerCase()));
-    const match = (pat: string, n: string): boolean => {
-      if (!pat.includes("*")) return n === pat.toLowerCase();
-      const rx = new RegExp("^" + pat.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
-      return rx.test(n);
-    };
-    return defs.filter((t) => {
-      const n = t.name.toLowerCase();
-      if (include.length > 0 && !include.some((pat) => match(pat, n))) return false;
-      if ([...exclude].some((e) => match(e, n))) return false;
-      return true;
-    });
+    // P0-3: matcher dùng chung với bộ lọc toàn cục rc "mcpTools" (tool-filter.ts).
+    return filterToolNames(defs, (t) => t.name, this.configs[name]?.tools);
   }
 
   /** Replace một server's tool registrations (reconnect refresh) — honor config filters. */

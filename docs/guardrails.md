@@ -15,7 +15,7 @@ The Guardrail Engine wraps the autonomous loop with safety and progress rules. E
 | `error-loop` | Force strategy change after N same tool+error repeats |
 | `token-no-progress` | End run after N near-empty LLM responses |
 | `build-stop` | End when build command succeeds |
-| `history-trim` | Routine context trimming |
+| `history-trim` | Trim message history **only when it exceeds the token budget** (P0-1: keeping the prefix byte-stable protects the local engine's KV-cache; no cooldown-free per-step trimming) |
 | `token-budget` | End when total session tokens exceed cap |
 
 ## Configuring Thresholds

@@ -10,7 +10,7 @@
  * Invariant: an assistant tool_calls message is never separated from its tool
  * results — compaction only cuts at whole turn boundaries (user → next user).
  */
-import type { ChatMessage } from "../llm/llm.js";
+import type { ChatMessage, ToolSpec } from "../llm/llm.js";
 import { encode } from "gpt-tokenizer";
 
 export interface CompactionConfig {
@@ -32,10 +32,42 @@ export const DEFAULT_COMPACTION: CompactionConfig = {
 };
 
 /**
+ * P1-1 (RC-4): tool schema KHÔNG nằm trong messages nhưng chiếm phần lớn
+ * prompt thật. Session baseline: 25.799 input token cho một câu "chào", trong
+ * đó ~20.300 token là schema (46 tool GitHub MCP + prompt-gate + built-ins).
+ * Counting only messages made compaction trigger ~20k token quá muộn.
+ */
+const schemaTokenCache = new WeakMap<ToolSpec[], number>();
+
+export function estimateSchemaTokens(tools: ToolSpec[] | readonly ToolSpec[] | undefined): number {
+  if (!tools || tools.length === 0) return 0;
+  const key = tools as ToolSpec[];
+  const hit = schemaTokenCache.get(key);
+  if (hit !== undefined) return hit;
+  let text = "";
+  for (const t of tools) {
+    text += t.function.name + "\n" + (t.function.description ?? "") + "\n" + JSON.stringify(t.function.parameters ?? {}) + "\n";
+  }
+  let n: number;
+  try {
+    n = encode(text).length;
+  } catch {
+    n = Math.ceil(text.length / 4);
+  }
+  try {
+    schemaTokenCache.set(key, n);
+  } catch {
+    /* readonly array from a frozen literal — cache bỏ qua */
+  }
+  return n;
+}
+
+/**
  * Token-accurate count (I-10): gpt-tokenizer (offline, MIT) thay heuristic
  * ~4 chars/token. Fallback char/4 nếu encode lỗi (never throw).
+ * `extraTokens` (P1-1): phần chi phí cố định ngoài messages — tool schemas.
  */
-export function estimateTokens(messages: ChatMessage[]): number {
+export function estimateTokens(messages: ChatMessage[], extraTokens = 0): number {
   let chars = 0;
   const texts: string[] = [];
   for (const m of messages) {
@@ -45,17 +77,17 @@ export function estimateTokens(messages: ChatMessage[]): number {
     }
   }
   try {
-    return encode(texts.join("\n")).length + texts.length;
+    return encode(texts.join("\n")).length + texts.length + extraTokens;
   } catch {
     for (const t of texts) chars += t.length;
-    return Math.ceil(chars / 4);
+    return Math.ceil(chars / 4) + extraTokens;
   }
 }
 
 /** True when the history should be compacted now. */
-export function shouldCompact(messages: ChatMessage[], cfg: CompactionConfig): boolean {
+export function shouldCompact(messages: ChatMessage[], cfg: CompactionConfig, extraTokens = 0): boolean {
   const budget = cfg.contextWindow * cfg.trigger;
-  return estimateTokens(messages) >= budget;
+  return estimateTokens(messages, extraTokens) >= budget;
 }
 
 /** Index where the verbatim tail begins (never inside a tool_calls/tool pair). */

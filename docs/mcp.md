@@ -125,6 +125,42 @@ Each server entry supports additional fields:
 - `timeoutMs` — per-server request timeout (default 120s)
 - `type` — force `stdio` or `http` transport (auto-detected from `url`/`command`)
 
+## Global Tool Filter & Schema Budget
+
+Every advertised tool costs schema tokens on **every** LLM call. GitHub MCP
+alone measured 11,773 tokens for 46 tools (`node scripts/measure-mcp-schema.mjs`),
+which is paid even when the task has nothing to do with GitHub.
+
+Two levers, applied in this order:
+
+```json
+{
+  "mcpTools": {
+    "include": ["mcp__github-mcp__get_*", "mcp__github-mcp__search_code"],
+    "exclude": ["mcp__github-mcp__*codespaces*"]
+  },
+  "limits": { "mcpSchemaTokens": 6000 }
+}
+```
+
+- `mcpTools` (`src/mcp/tool-filter.ts`) — same glob syntax as
+  `mcpServers.<name>.tools`, but matched against the full
+  `mcp__<server>__<tool>` name across all servers. `include` empty = all
+  tools; `exclude` always wins. Explicit allowlists beat any heuristic.
+- `limits.mcpSchemaTokens` (default `0` = off) — ceiling for the total schema
+  of advertised MCP tools. Tools are kept in config order until the budget is
+  spent; the rest are simply not advertised and the agent warns once with the
+  dropped count. The local model profile turns this on at 6000.
+
+Measured with the cap at 6000: 53 advertised tools → 24, MCP schema 13,977 →
+~6,300 tokens per call.
+
+Callers may also request a per-agent tool subset (`tools` in an agent
+definition). That filter runs on the **builtin** tools only — MCP tools are
+governed by the three levers above, and `mcp__…` names written in an agent's
+`tools` list are simply not matched (they stay advertised unless a filter
+removes them).
+
 ## MCP Resources & Prompts
 
 Connected servers may expose resources and prompts (Phase 4). The agent has

@@ -38,6 +38,19 @@ export interface AgentConfig {
   verifyCmds?: { build?: string; test?: string; lint?: string; typecheck?: string };
   /** v2: run a self-review pass over the run's diff before finishing (default true). */
   selfReview?: boolean;
+  /**
+   * P1-2: cache kết quả verify theo trạng thái workspace. true (mặc định): lần
+   * verify tiếp mà fingerprint các file không đổi và lần trước PASS thì dùng lại
+   * kết quả, không chạy lại build/test/typecheck/lint.
+   */
+  verifyCache?: boolean;
+  /**
+   * P0-3: allowlist/filter tool MCP toàn cục (glob trên tên đầy đủ
+   * `mcp__<server>__<tool>`). include rỗng = tất cả; exclude luôn thắng.
+   */
+  mcpTools?: { include?: string[]; exclude?: string[] };
+  /** P2: tắt profile tự động cho model cục bộ (default true). */
+  localProfile?: boolean;
   /** Max tokens for chat completions */
   maxTokens: number;
   temperature: number;
@@ -63,6 +76,16 @@ export interface AgentConfig {
     toolConcurrency?: number;
     /** TUI render cap — số item cuối được render (default 200). */
     renderCap?: number;
+    /** P0-2: ngân sách ký tự cho MỘT tool result trong history (default 8_000). */
+    toolOutputChars?: number;
+    /**
+     * P0-3: trần token cho TOÀN BỘ MCP tool schema gửi mỗi lượt.
+     * 0 = không giới hạn (mặc định cũ). Vượt trần → giữ tool theo thứ tự khai
+     * báo đến khi hết ngân sách, số còn lại bị bỏ quảng cáo (kèm cảnh báo).
+     */
+    mcpSchemaTokens?: number;
+    /** P1-2: timeout của một lệnh verify (build/test/typecheck/lint), giây. */
+    buildTimeoutSecs?: number;
   };
   /**
    * I-12: LLM client factory override (eval harness). Called once per Agent
@@ -124,6 +147,14 @@ interface RcFile {
   verifyCmds?: { build?: string; test?: string; lint?: string; typecheck?: string };
   /** v2: self-review pass over the run's diff before finishing (default true). */
   selfReview?: boolean;
+  /** P1-2: reuse a passing verification when workspace files did not change. */
+  verifyCache?: boolean;
+  /** P0-3: global MCP tool allow/deny (glob on `mcp__<server>__<tool>`). */
+  mcpTools?: { include?: string[]; exclude?: string[] };
+  /** P2: false = không áp dụng profile mặc định cho model cục bộ. */
+  localProfile?: boolean;
+  /** P1-1: ghi đè context window (token) thay vì probe/fallback catalog. */
+  contextWindow?: number;
   /** Custom providers (I-01): id -> {baseUrl, apiKeyEnv, kind}. */
   providers?: unknown;
   /** Max steps before wrap-up reminder injection. */
@@ -143,12 +174,7 @@ interface RcFile {
   /** G4: sandbox profile for run_command — "off" (default) | "readonly" | "workspace-write"; optional wrapper override. */
   sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
   /** G7: runtime thresholds (rc "limits"). */
-  limits?: {
-    requestTimeoutMs?: number;
-    maxOutputChars?: number;
-    toolConcurrency?: number;
-    renderCap?: number;
-  };
+  limits?: AgentConfig["limits"];
   /** Auto-compaction (H-10): false = off, object = overrides. */
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;  /** I-11: post-edit formatter — true = auto-detect, string = binary or "npm:<script>". */
   formatter?: boolean | string;
@@ -162,7 +188,15 @@ interface RcFile {
  * G7: parse + validate rc "limits" — số nguyên dương; giá trị sai bỏ qua
  * (dùng default). Defaults là nguồn sự thật duy nhất (resolveLimits).
  */
-export const LIMIT_DEFAULTS = { requestTimeoutMs: 120_000, maxOutputChars: 20_000, toolConcurrency: 4, renderCap: 200 } as const;
+export const LIMIT_DEFAULTS = {
+  requestTimeoutMs: 120_000,
+  maxOutputChars: 20_000,
+  toolConcurrency: 4,
+  renderCap: 200,
+  toolOutputChars: 8_000,
+  mcpSchemaTokens: 0,
+  buildTimeoutSecs: 600,
+} as const;
 
 function parseLimits(raw: unknown): AgentConfig["limits"] | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -170,16 +204,99 @@ function parseLimits(raw: unknown): AgentConfig["limits"] | undefined {
   const num = (v: unknown): number | undefined =>
     typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
   const out: NonNullable<AgentConfig["limits"]> = {};
-  for (const k of ["requestTimeoutMs", "maxOutputChars", "toolConcurrency", "renderCap"] as const) {
+  for (const k of [
+    "requestTimeoutMs",
+    "maxOutputChars",
+    "toolConcurrency",
+    "renderCap",
+    "toolOutputChars",
+    "buildTimeoutSecs",
+  ] as const) {
     const v = num(r[k]);
     if (v !== undefined) out[k] = v;
   }
+  // mcpSchemaTokens: 0 có nghĩa "tắt" — nhận cả 0, chỉ bỏ số âm/NaN.
+  const mcpCap = r.mcpSchemaTokens;
+  if (typeof mcpCap === "number" && Number.isFinite(mcpCap) && mcpCap >= 0) out.mcpSchemaTokens = Math.floor(mcpCap);
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** G7: limits đã resolve (defaults + rc override) — các module đọc từ đây. */
-export function resolveLimits(limits: AgentConfig["limits"]): { requestTimeoutMs: number; maxOutputChars: number; toolConcurrency: number; renderCap: number } {
+export type ResolvedLimits = { [K in keyof typeof LIMIT_DEFAULTS]: number };
+
+export function resolveLimits(limits: AgentConfig["limits"]): ResolvedLimits {
   return { ...LIMIT_DEFAULTS, ...limits };
+}
+
+// ── P2 (plan/performance-issue.md): profile cho model chạy cục bộ ───────────
+
+/**
+ * Model chạy trên máy của user (Ollama / LM Studio / vLLM / llama.cpp server)?
+ * Nhận diện theo host của baseUrl — loopback là tín hiệu đáng tin duy nhất mà
+ * không cần gọi network.
+ */
+export function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const u = new URL(baseUrl);
+    const h = u.hostname.replace(/^\[|\]$/g, "");
+    return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "0.0.0.0" || h.endsWith(".local");
+  } catch {
+    return false;
+  }
+}
+
+/** Mặc định của profile local — chỉ áp dụng khi user KHÔNG set tường minh. */
+export const LOCAL_PROFILE_DEFAULTS = {
+  /** P2-1: local model chậm, 40 bước là nhiều giờ; bao việc hơn trong 24 bước. */
+  maxSteps: 24,
+  /** P2-3: prefill 20–60k token trên máy cá nhân có thể vượt 120s → timeout + retry. */
+  requestTimeoutMs: 600_000,
+  /** P0-2: history của MỘT tool result nhỏ hơn mặc định cloud (8k). */
+  toolOutputChars: 6_000,
+  /** P0-3: trần token cho MCP schema; 46 tool GitHub MCP ≈ 12k token mỗi lượt. */
+  mcpSchemaTokens: 6_000,
+} as const;
+
+/**
+ * Áp mặc định phù hợp cho local engine. Trả về danh sách thay đổi đã áp (để
+ * log/kiểm thử); rỗng khi không áp dụng (cloud, hoặc localProfile:false).
+ *
+ * Lý do KHÔNG tắt repoMap/snapshots trong profile:
+ *  - repoMap: nằm trong system prompt → prefix ổn định, không phá KV-cache, và
+ *    giảm số bước khám phá (mỗi bước mới = một lượt prefill).
+ *  - snapshots: git ops cục bộ, không tốn token.
+ *  - selfReview: thêm MỘT lượt LLM với prompt gần đầy → tắt thật.
+ */
+export function applyLocalProfile(
+  cfg: AgentConfig,
+  explicit: { maxSteps?: boolean } = {},
+): string[] {
+  if (cfg.localProfile === false) return [];
+  if (!isLocalBaseUrl(cfg.baseUrl)) return [];
+  const applied: string[] = [];
+  const limits = { ...cfg.limits };
+  if (!explicit.maxSteps && cfg.maxSteps > LOCAL_PROFILE_DEFAULTS.maxSteps) {
+    cfg.maxSteps = LOCAL_PROFILE_DEFAULTS.maxSteps;
+    applied.push(`maxSteps=${cfg.maxSteps}`);
+  }
+  if (limits.requestTimeoutMs === undefined) {
+    limits.requestTimeoutMs = LOCAL_PROFILE_DEFAULTS.requestTimeoutMs;
+    applied.push(`requestTimeoutMs=${LOCAL_PROFILE_DEFAULTS.requestTimeoutMs}`);
+  }
+  if (limits.toolOutputChars === undefined) {
+    limits.toolOutputChars = LOCAL_PROFILE_DEFAULTS.toolOutputChars;
+    applied.push(`toolOutputChars=${LOCAL_PROFILE_DEFAULTS.toolOutputChars}`);
+  }
+  if (limits.mcpSchemaTokens === undefined) {
+    limits.mcpSchemaTokens = LOCAL_PROFILE_DEFAULTS.mcpSchemaTokens;
+    applied.push(`mcpSchemaTokens=${LOCAL_PROFILE_DEFAULTS.mcpSchemaTokens}`);
+  }
+  cfg.limits = limits;
+  if (cfg.selfReview === undefined) {
+    cfg.selfReview = false;
+    applied.push("selfReview=false");
+  }
+  return applied;
 }
 
 function readRcFile(path: string, label: string): RcFile {
@@ -335,6 +452,10 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   // (steps < NaN is always false → the loop never runs).
   const rawMaxSteps = Number(process.env.SCODER_MAX_STEPS ?? rc.maxSteps ?? 40);
   const validatedMaxSteps = Number.isFinite(rawMaxSteps) && rawMaxSteps >= 1 ? Math.floor(rawMaxSteps) : 40;
+  // P2-1: profile local CHỈ hạ maxSteps khi user không đặt tường minh ở
+  // flag/env/rc — tôn trọng cấu hình rõ ràng của user.
+  const maxStepsExplicit =
+    overrides.maxSteps !== undefined || process.env.SCODER_MAX_STEPS !== undefined || rc.maxSteps !== undefined;
 
   const cfg: AgentConfig = {
     provider,
@@ -349,7 +470,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       "",
     model: modelFromSlash || (overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL)),
     providerDef,
-    contextWindow: (providerDef as { contextWindow?: number } | undefined)?.contextWindow,
+    contextWindow: rc.contextWindow ?? (providerDef as { contextWindow?: number } | undefined)?.contextWindow,
     workdir,
     buildCmd: overrides.buildCmd ?? process.env.SCODER_BUILD_CMD ?? rc.buildCmd ?? null,
     maxSteps: overrides.maxSteps ?? validatedMaxSteps,
@@ -366,6 +487,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
         ? true
         : process.env.SCODER_LOG_FILE || undefined),
     mcpServers: rc.mcpServers,
+    mcpTools: rc.mcpTools,
     guardrails: rc.guardrails,
     stream: overrides.stream ?? (process.env.SCODER_STREAM !== "0" ? true : false),
     reasoning:
@@ -387,8 +509,18 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     promptVersion: rc.promptVersion,
     verifyCmds: rc.verifyCmds,
     selfReview: rc.selfReview,
+    verifyCache: rc.verifyCache,
+    localProfile: rc.localProfile,
     modelPricing: parsePricing(rc.modelPricing),
   };
+
+  // P2: local engine → mặc định rẻ hơn (maxSteps, timeout, output cap, MCP
+  // schema budget, self-review). Danh sách thay đổi được log qua reporter để
+  // `scoder cost`/JSONL giải thích được vì sao run này khác cloud.
+  const localChanges = applyLocalProfile(cfg, { maxSteps: maxStepsExplicit });
+  if (localChanges.length > 0) {
+    overrides.reporter?.info(`local model profile (plan/performance-issue.md P2): ${localChanges.join(", ")} — ghi đè bằng rc "localProfile": false hoặc đặt từng key trong "limits"`);
+  }
 
   // Secrets hygiene: warn if apiKey is set in the rc file (risk of accidental commit)
   if (rc.apiKey && !process.env.SCODER_NO_APIKEY_WARNING) {

@@ -34,13 +34,17 @@ export function detectBuildCommand(workdir: string): string | null {
  * Run the build command. This is the agent's stop condition:
  * exit code 0 == task complete.
  * `onOutput` (optional) receives stdout/stderr chunks live while the build runs.
+ * `timeoutSecs` (P1-2) tới từ `limits.buildTimeoutSecs` — trước đây hardcode
+ * 600s, không điều chỉnh được khi verify trên máy chậm.
  */
 export async function runBuild(
   workdir: string,
   command: string,
   onOutput?: (stream: "stdout" | "stderr", delta: string) => void,
+  timeoutSecs?: number,
 ): Promise<BuildResult> {
-  const res = await toolRunCommand(workdir, { command, timeout_secs: 600 }, undefined, onOutput);
+  const timeout = Number.isFinite(timeoutSecs ?? NaN) && (timeoutSecs ?? 0) > 0 ? Math.floor(timeoutSecs as number) : 600;
+  const res = await toolRunCommand(workdir, { command, timeout_secs: timeout }, undefined, onOutput);
   return {
     success: res.ok,
     command,

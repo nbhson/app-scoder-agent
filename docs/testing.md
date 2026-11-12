@@ -3,7 +3,7 @@
 ## Run Tests
 
 ```bash
-npm test          # build + full unit suite + e2e + MCP smoke (867 tests)
+npm test          # build + full unit suite + e2e + MCP smoke (942 tests)
 npm run lint      # ESLint flat config
 npm run typecheck # tsc --noEmit
 npm run build     # tsc
@@ -12,6 +12,8 @@ npm run check:layers       # architecture dependency guard
 npm run check:layers:graph # regenerate docs/architecture-graph.md
 npm run eval               # 11 scripted end-to-end scenarios (mock LLM)
 node scripts/bench.mjs     # performance benchmark (see docs/performance.md)
+node scripts/bench-context.mjs       # wasted prefill: legacy vs current trim strategy
+node scripts/measure-mcp-schema.mjs  # tool-schema token cost
 ```
 
 `npm test` does not run lint/typecheck — run them explicitly (or rely on CI).
@@ -29,8 +31,10 @@ Tests are auto-discovered via `test/*.test.mjs`:
 | `test/server.test.mjs` | HTTP API: run lifecycle, abort, auth |
 | `test/tui.test.mjs` | Full-screen TUI in real PTY |
 | `test/tui-state.test.mjs` | Event reducer unit tests |
-| `test/core.test.mjs` | Diff, retry, context trimming, @file mentions |
+| `test/core.test.mjs` | Diff, retry, context trimming (`trimHistory` identity/hysteresis/orphan-safe cuts), @file mentions |
 | `test/config.test.mjs` | Env/rc/cli precedence, logFile mapping |
+| `test/limits.test.mjs` | rc `limits` parse/validate + new keys (`toolOutputChars`, `mcpSchemaTokens`, `mcpTools`, `verifyCache`, `contextWindow`) + local model profile — hermetic via `SCODER_CONFIG` |
+| `test/perf-p0-p1.test.mjs` | Performance fixes: schema-aware token estimate, MCP tool filter + schema cap, `read_file` line-aware truncation, workspace fingerprint + verification cache, usage/prompt metrics |
 | `test/session.test.mjs` | Session store, prune, resolve |
 | `test/cost.test.mjs` | Token usage & cost aggregation |
 | `test/guardrails.test.mjs` | Guardrail Engine: rule registry, thresholds |

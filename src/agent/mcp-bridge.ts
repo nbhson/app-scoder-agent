@@ -1,7 +1,10 @@
 import { saveApproval } from "../config/config.js";
 import { redactSecrets, type ToolSpec } from "../llm/llm.js";
+import { clamp } from "../tools/path-safety.js";
 import {allToolSpecs} from "../tools/registry.js";
 import { applyToolFilter } from "./types.js";
+import { filterToolNames } from "../mcp/tool-filter.js";
+import { estimateSchemaTokens } from "../context/compaction.js";
 import {McpManager} from "../mcp/manager.js";
 import { type McpServerConfig } from "../mcp/types.js";
 import type { AgentConfig } from "../config/config.js";
@@ -25,16 +28,72 @@ export interface McpBridgeRuntime {
   confirmMcpTool: (fullName: string) => Promise<boolean>;
 }
 
-export function rebuildToolList(runtime: McpBridgeRuntime): void {
+let schemaCapWarned = new Set<string>();
+
+/**
+ * P0-3 (RC-2): trần token cho toàn bộ MCP schema gửi mỗi lượt.
+ *
+ * Tool schema là chi phí CỐ ĐỊNH: session baseline của plan
+ * performance-issue.md trả ~20.300 token schema cho một câu "chào" (53 tool
+ * MCP ≈ 14.000 token). Vượt trần → giữ theo thứ tự khai báo đến khi hết
+ * ngân sách, phần còn lại không được quảng cáo (model vẫn gọi được tool đã
+ * giữ; tool bị bỏ sẽ nhận "not available" — kèm danh sách thay thế).
+ * Mặc định 0 = tắt (không đổi hành vi cũ); local profile bật 6.000.
+ */
+export function capMcpSchemaTokens(specs: ToolSpec[], capTokens: number, report: (line: string) => void): ToolSpec[] {
+  if (capTokens <= 0 || specs.length === 0) return specs;
+  const total = estimateSchemaTokens(specs);
+  if (total <= capTokens) return specs;
+  const kept: ToolSpec[] = [];
+  let used = 0;
+  for (const spec of specs) {
+    const cost = estimateSchemaTokens([spec]);
+    if (used + cost > capTokens) continue;
+    kept.push(spec);
+    used += cost;
+  }
+  const dropped = specs.length - kept.length;
+  // Warn một lần cho mỗi (trần, số tool bị bỏ) — đổi server/model thì báo lại.
+  const signature = `${capTokens}:${dropped}`;
+  if (dropped > 0 && !schemaCapWarned.has(signature)) {
+    schemaCapWarned.add(signature);
+    if (schemaCapWarned.size > 8) schemaCapWarned = new Set([signature]);
+    report(
+      `MCP tool schema ${total} token > trần ${capTokens} (limits.mcpSchemaTokens) — bỏ quảng cáo ${dropped} tool, giữ ${kept.length} (${used} token). ` +
+      `Cần tool nào, ghi rõ trong rc: "mcpTools": {"include":["mcp__server__tool"]} hoặc "mcpServers.<server>.tools.include", hoặc đặt "limits": {"mcpSchemaTokens": 0} để tắt trần.`,
+    );
+  }
+  return kept;
+}
+
+/**
+ * P0-3: toàn bộ phần quản trị MCP tool specs — allowlist toàn cục (rc
+ * "mcpTools") rồi tới trần schema (`limits.mcpSchemaTokens`); người dùng chọn
+ * tường minh luôn thắng heuristic.
+ *
+ * Hàm này DÙNG CHUNG cho `rebuildToolList()` và `Agent.run()`: khi MCP đã
+ * kết nối sẵn, `connectMcp()` return sớm và run() tự ghép tools — nếu chỗ đó
+ * lấy raw specs thì trần schema bị bỏ qua (model lại nhận 53 tool như cũ).
+ */
+export function governedMcpSpecs(runtime: McpBridgeRuntime): ToolSpec[] {
   const manager = runtime.getMcp();
-  const mcpSpecs = manager ? [...manager.toToolSpecs(), ...manager.resourceToolSpecs()] : [];
+  const specs = manager ? [...manager.toToolSpecs(), ...manager.resourceToolSpecs()] : [];
+  return capMcpSchemaTokens(
+    filterToolNames(specs, (spec) => spec.function.name, runtime.config.mcpTools),
+    runtime.config.limits?.mcpSchemaTokens ?? 0,
+    (line) => runtime.reporter.warn(line),
+  );
+}
+
+export function rebuildToolList(runtime: McpBridgeRuntime): void {
+  const governed = governedMcpSpecs(runtime);
   let base = applyToolFilter(allToolSpecs(), runtime.primaryDef, runtime.reporter);
   if (runtime.pendingAllowedTools && runtime.pendingAllowedTools.length > 0) {
     const allow = new Set(runtime.pendingAllowedTools.map((tool) => tool.toLowerCase()));
     base = base.filter((spec) => allow.has(spec.function.name.toLowerCase()));
-    runtime.setTools([...base, ...mcpSpecs.filter((spec) => allow.has(spec.function.name.toLowerCase()))]);
+    runtime.setTools([...base, ...governed.filter((spec) => allow.has(spec.function.name.toLowerCase()))]);
   } else {
-    runtime.setTools([...base, ...mcpSpecs]);
+    runtime.setTools([...base, ...governed]);
   }
 }
 
@@ -83,7 +142,8 @@ export async function invokeMcpTool(runtime: McpBridgeRuntime, name: string, arg
   const result = await registration.conn.callTool(registration.toolName, args);
   return {
     ok: result.ok,
-    output: result.output.length > 20_000 ? result.output.slice(0, 20_000) + "\n... [truncated]" : result.output,
+    // P0-2: dùng trần cấu hình được (limits.maxOutputChars) thay vì 20k cứng.
+    output: clamp(result.output),
     untrusted: true,
   };
 }

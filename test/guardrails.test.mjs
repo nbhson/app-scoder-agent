@@ -151,6 +151,14 @@ describe("guardrails — Guardrail Engine", () => {
     assert.equal(dFail.action.kind, "verify-build");
   });
 
+  it("build-stop: task review/read-only (không sửa file) KHÔNG finish vì build pass (aec95ef)", async () => {
+    const eng = new GuardrailEngine();
+    const ds = await eng.evaluate(
+      baseCtx({ hasToolCalls: true, buildCallPresent: true, buildPassedThisStep: true, filesModified: false, text: "Đang tổng hợp báo cáo" }),
+    );
+    assert.ok(!ds.find((x) => x.rule === "build-stop"), "build pass chỉ là verification — agent phải được viết báo cáo");
+  });
+
   it("wrap-up: cách N bước hết budget → inject reminder đúng một lần", async () => {
     const eng = new GuardrailEngine();
     const n = DEFAULT_GUARDRAIL_OPTIONS.wrapUpStepsBeforeEnd;
@@ -168,12 +176,20 @@ describe("guardrails — Guardrail Engine", () => {
     assert.equal(n, 2);
   });
 
-  it("history-trim: luôn yêu cầu trim context sau mỗi bước", async () => {
+  it("history-trim: chỉ yêu cầu trim khi history thật sự vượt ngân sách (P0-1)", async () => {
     const eng = new GuardrailEngine();
-    const ds = await eng.evaluate(baseCtx());
-    const d = ds.find((x) => x.rule === "history-trim");
-    assert.ok(d);
+    // Không truyền historyPressure / under budget => KHÔNG trim (mặc định an
+    // toàn: giữ KV-cache prefix, không sửa history mỗi bước).
+    const idle = await eng.evaluate(baseCtx());
+    assert.ok(!idle.find((x) => x.rule === "history-trim"), "dưới ngân sách: không trim");
+    const under = await eng.evaluate(baseCtx({ historyPressure: { tokens: 10, budget: 100, over: false } }));
+    assert.ok(!under.find((x) => x.rule === "history-trim"), "over=false: không trim");
+    // Vượt ngân sách => trim
+    const over = await eng.evaluate(baseCtx({ historyPressure: { tokens: 120, budget: 100, over: true } }));
+    const d = over.find((x) => x.rule === "history-trim");
+    assert.ok(d, "over budget phải trim");
     assert.equal(d.action.kind, "trim");
+    assert.match(d.reason, /120/);
   });
 
   it("ngưỡng cấu hình được qua GuardrailOptions (không sửa runLoop)", async () => {
@@ -191,7 +207,8 @@ describe("guardrails — Guardrail Engine", () => {
 
   it("thứ tự ưu tiên: chat-done đứng trước continue-nudge (không nudge lượt chat)", async () => {
     const eng = new GuardrailEngine();
-    const ds = await eng.evaluate(baseCtx({ text: "hi there", chatDone: true }));
+    const over = { historyPressure: { tokens: 120, budget: 100, over: true } };
+    const ds = await eng.evaluate(baseCtx({ text: "hi there", chatDone: true, ...over }));
     const names = ds.map((x) => x.rule);
     assert.ok(names.includes("chat-done"));
     assert.ok(!names.includes("continue-nudge"), "lượt chat không được nudge");

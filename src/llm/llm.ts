@@ -180,6 +180,24 @@ export function combinedSignal(
 const SSE_PREFIX = "data: ";
 const SSE_DONE = "[DONE]";
 
+/**
+ * P1-3: chuẩn hoá usage từ OpenAI-compatible server.
+ *
+ * llama.cpp/Ollama báo số token lấy từ KV-cache ở `usage.prompt_tokens_details
+ * .cached_tokens` (kiểu OpenAI mới), không phải `cached_tokens` — nếu không
+ * map thì `scoder cost` hiện cached=0 dù server thật có reuse cache, tức là
+ * đúng cái metric cần để phát hiện "prefix bị đổi".
+ */
+export function normalizeUsage(usage: TokenUsage | undefined): TokenUsage | undefined {
+  if (!usage) return undefined;
+  const out: TokenUsage = { ...usage };
+  const details = (out as { prompt_tokens_details?: { cached_tokens?: number } }).prompt_tokens_details;
+  if (typeof out.cached_tokens !== "number" && typeof details?.cached_tokens === "number") {
+    out.cached_tokens = details.cached_tokens;
+  }
+  return out;
+}
+
 /** Parse SSE chunks from an OpenAI-compatible stream. */
 function parseSSELine(line: string): string | null {
   if (!line.startsWith(SSE_PREFIX)) return null;
@@ -306,14 +324,7 @@ export class LlmClient {
 
     // Extract cached prompt tokens when the provider reports them
     // (OpenAI-style: usage.prompt_tokens_details.cached_tokens).
-    let usage: TokenUsage | undefined;
-    if (data.usage) {
-      usage = { ...data.usage };
-      const details = (usage as { prompt_tokens_details?: { cached_tokens?: number } }).prompt_tokens_details;
-      if (usage.cached_tokens === undefined && typeof details?.cached_tokens === "number") {
-        usage.cached_tokens = details.cached_tokens;
-      }
-    }
+    const usage = normalizeUsage(data.usage);
 
     return {
       message: {
@@ -474,7 +485,7 @@ export class LlmClient {
 
           // Usage-only final chunk: many providers send usage in a chunk with
           // an empty choices array — must not be skipped.
-          if (chunkData.usage) finalUsage = { ...chunkData.usage };
+          if (chunkData.usage) finalUsage = normalizeUsage(chunkData.usage);
 
           const choice = chunkData.choices?.[0];
           if (!choice) continue;
@@ -535,7 +546,7 @@ export class LlmClient {
                 tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
                 reasoning: reasoningAccum || undefined,
               },
-              usage: chunkData.usage,
+              usage: normalizeUsage(chunkData.usage),
             };
           }
         }

@@ -1,5 +1,6 @@
 import type { AgentConfig } from "../config/config.js";
 import { runBuild, type BuildResult } from "../workspace/build.js";
+import { workspaceFingerprint } from "../workspace/fingerprint.js";
 import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
 import type { ChatResult } from "../llm/llm.js";
 import { parseDiagnostics, detectVerifyCmds, type VerifyCommands } from "../workspace/diagnostics.js";
@@ -17,6 +18,15 @@ export interface VerificationRuntime {
   onToolOutput: (stream: "stdout" | "stderr", delta: string) => void;
   endToolStream: () => void;
   setLastBuildResult: (result: BuildResult) => void;
+  /**
+   * P1-2 (RC-5): cache verify theo fingerprint workspace. Agent giữ Map sống
+   * trong một run (không ghi ra đĩa — kết quả build không còn nghĩa sau khi
+   * process khác đã sửa code).
+   */
+  verifyCache: {
+    read(key: string): { fingerprint: string; result: BuildResult } | undefined;
+    write(key: string, entry: { fingerprint: string; result: BuildResult }): void;
+  };
 }
 
 /** Resolve the configured verification commands without changing precedence. */
@@ -39,9 +49,35 @@ export function resolveVerify(config: AgentConfig, buildCmd: string): VerifyComm
 /** Run build → test → typecheck → lint, preserving the existing event order. */
 export async function verifyAll(runtime: VerificationRuntime, buildCmd: string): Promise<BuildResult> {
   const commands = resolveVerify(runtime.config, buildCmd);
+  const cmdList = [commands.build, commands.test, commands.typecheck, commands.lint];
+  // P1-2: fingerprint chỉ khi bật cache (rc "verifyCache": false để tắt).
+  const cacheEnabled = runtime.config.verifyCache !== false;
+  const cacheKey = cmdList.join("\u0000");
+  const fingerprint = cacheEnabled ? workspaceFingerprint(runtime.config.workdir) : "";
+  if (fingerprint) {
+    const hit = runtime.verifyCache.read(cacheKey);
+    if (hit && hit.fingerprint === fingerprint && hit.result.success) {
+      runtime.setLastBuildResult(hit.result);
+      runtime.logger.log({
+        type: "build",
+        success: true,
+        command: hit.result.command,
+        cached: true,
+        output: hit.result.output.slice(0, 2_000),
+      });
+      runtime.events.append({ type: "build.checked", success: true, command: hit.result.command, output: hit.result.output.slice(0, 10_000), cached: true });
+      runtime.reporter.info(`verify: bỏ qua (${hit.result.command}) — không file nào thay đổi từ lần verify trước`);
+      return hit.result;
+    }
+  }
   const outputs: Array<{ cmd: string; res: BuildResult }> = [];
   const runOne = async (cmd: string): Promise<BuildResult> => {
-    const result = await runBuild(runtime.config.workdir, cmd, runtime.onToolOutput);
+    const result = await runBuild(
+      runtime.config.workdir,
+      cmd,
+      runtime.onToolOutput,
+      runtime.config.limits?.buildTimeoutSecs,
+    );
     runtime.endToolStream();
     runtime.reporter.buildStatus(result.success, result.output);
     runtime.emit({ type: "build", success: result.success, command: cmd, output: result.output });
@@ -49,7 +85,7 @@ export async function verifyAll(runtime: VerificationRuntime, buildCmd: string):
     return result;
   };
 
-  for (const cmd of [commands.build, commands.test, commands.typecheck, commands.lint]) {
+  for (const cmd of cmdList) {
     if (!cmd) continue;
     const result = await runOne(cmd);
     outputs.push({ cmd, res: result });
@@ -67,6 +103,9 @@ export async function verifyAll(runtime: VerificationRuntime, buildCmd: string):
   };
   runtime.setLastBuildResult(lastBuild);
   runtime.events.append({ type: "build.checked", success: allOk, command: lastBuild.command, output: combined.slice(0, 10_000) });
+  // CHỈ cache kết quả PASS: thất bại phải chạy lại (agent có thể đã sửa code,
+  // và lặp-y-nguyên đã có verify strikes + error-loop lo).
+  if (fingerprint && allOk) runtime.verifyCache.write(cacheKey, { fingerprint, result: lastBuild });
   return lastBuild;
 }
 

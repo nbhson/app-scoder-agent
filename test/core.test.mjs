@@ -8,7 +8,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unifiedDiff, diffCounts } from "../dist/workspace/diff.js";
 import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/llm/retry.js";
-import { trimHistory, summariseOutput, claimsCompletion, expandMentions, MAX_HISTORY_TOKENS, historyTokenBudget } from "../dist/context/context.js";
+import {
+  trimHistory,
+  summariseOutput,
+  claimsCompletion,
+  expandMentions,
+  historyPressure,
+  MAX_HISTORY_TOKENS,
+  PRUNED_TOOL_RESULT,
+  TRIM_RECOVERY_FRACTION,
+  historyTokenBudget,
+} from "../dist/context/context.js";
 
 // ── diff ────────────────────────────────────────────────────────────────────
 
@@ -239,11 +249,72 @@ describe("trimHistory", () => {
       { role: "user", content: "t" },
       ...Array.from({ length: 30 }, (_, i) => ({ role: "tool", tool_call_id: `c${i}`, content: `r${i}` + "y".repeat(300) })),
     ];
-    const out = trimHistory(msgs);
+    // P0-1: prune CHỈ xảy ra khi history vượt ngân sách — dưới ngân sách thì
+    // history phải được giữ nguyên từng byte (KV-cache prefix ổn định).
+    assert.equal(trimHistory(msgs), msgs, "dưới ngân sách: không sửa gì (identity)");
+    const out = trimHistory(msgs, 2_000);
     const toolMsgs = out.filter((m) => m.role === "tool");
-    const pruned = toolMsgs.filter((m) => m.content === "[pruned — old tool result]");
+    const pruned = toolMsgs.filter((m) => m.content === PRUNED_TOOL_RESULT);
     assert.ok(pruned.length > 0, "phải prune tool cũ");
     assert.equal(toolMsgs[toolMsgs.length - 1].content.startsWith("r29"), true, "tool mới nhất giữ nguyên");
+    assert.equal(out.length, msgs.length, "prune nội dung, không xoá message");
+  });
+  it("P0-1: history một task (không có message user thứ hai) vẫn bỏ được block cũ", () => {
+    const turn = (i) => [
+      { role: "assistant", content: null, tool_calls: [{ id: `c${i}`, name: "read_file", arguments: "{}" }] },
+      { role: "tool", tool_call_id: `c${i}`, content: "z".repeat(20_000) },
+      { role: "assistant", content: `note ${i}` },
+    ];
+    const msgs = [{ role: "system", content: "sys" }, { role: "user", content: "task" }, ...turn(1), ...turn(2), ...turn(3), ...turn(4)];
+    const out = trimHistory(msgs, 4_000);
+    assert.ok(out.length < msgs.length, `phải bỏ được block cũ ( còn ${out.length}/${msgs.length})`);
+    assert.equal(out[0].role, "system");
+    // không assistant nào có tool_calls bị cắt mất tool result của nó
+    for (let i = 0; i < out.length; i++) {
+      const m = out[i];
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        const ids = m.tool_calls.map((t) => t.id);
+        assert.ok(
+          out.slice(i + 1).some((t) => t.role === "tool" && ids.includes(t.tool_call_id)),
+          `tool_calls ${ids.join(",")} không bị mồ côi`,
+        );
+      }
+    }
+    assert.equal(out[out.length - 1].content, "note 4", "block cuối giữ nguyên");
+  });
+  it("P0-1: TRIM_RECOVERY_FRACTION — cắt sâu để thưa số lần trim", () => {
+    const msgs = [
+      { role: "system", content: "sys" },
+      ...Array.from({ length: 60 }, (_, i) => ({ role: "user", content: `u${i}-` + "word ".repeat(40) })),
+    ];
+    const out = trimHistory(msgs, 2_000);
+    assert.ok(out.length < msgs.length, "phải cắt");
+    assert.equal(historyPressure(out, 2_000).over, false, "sau trim phải dưới ngân sách");
+    // Hysteresis: cắt tới 70% ngân sách => gọi lại KHÔNG đổi gì thêm. Đây chính
+    // là tính chất cần có để prefix KV-cache ổn định giữa nhiều bước.
+    assert.equal(TRIM_RECOVERY_FRACTION, 0.7);
+    assert.equal(trimHistory(out, 2_000), out, "trim lại lần hai phải là no-op (identity)");
+  });
+});
+
+describe("historyPressure", () => {
+  it("under budget: không tokenize, over=false", () => {
+    const msgs = [{ role: "user", content: "short" }];
+    const p = historyPressure(msgs, 10_000);
+    assert.equal(p.over, false);
+    assert.equal(p.budget, 10_000);
+  });
+  it("vượt budget theo token thật -> over=true", () => {
+    // 4000 ký tự 'a' lặp -> số token nhỏ hơn số ký tự: budget 1000 vẫn over
+    const msgs = [{ role: "user", content: "alpha beta gamma ".repeat(200) }];
+    assert.equal(historyPressure(msgs, 100_000).over, false);
+    assert.equal(historyPressure(msgs, 100).over, true);
+  });
+  it("tool_calls shape OpenAI (function.arguments) không làm crash", () => {
+    const msgs = [
+      { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "x", arguments: "{}" } }] },
+    ];
+    assert.equal(historyPressure(msgs, 10).over, false);
   });
 });
 

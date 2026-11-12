@@ -4,7 +4,7 @@ import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, 
 import type {ToolResult} from "./tools/types.js";
 import { AnthropicClient } from "./llm/provider-anthropic.js";
 import {allToolSpecs} from "./tools/registry.js";
-import {setMaxOutputChars} from "./tools/path-safety.js";
+import {setMaxOutputChars, setMaxToolOutputChars} from "./tools/path-safety.js";
 import { type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools/types.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
 import { expandMentions } from "./context/context.js";
@@ -13,9 +13,11 @@ import type { VerifyCommands } from "./workspace/diagnostics.js";
 import { PROMPT_VERSION } from "./context/prompt.js";
 import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session/session.js";
-import { DEFAULT_COMPACTION, estimateTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./context/compaction.js";
+import { DEFAULT_COMPACTION, estimateTokens, estimateSchemaTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./context/compaction.js";
 import { SnapshotManager } from "./workspace/snapshot.js";
 import { contextWindowFor } from "./llm/model-catalog.js";
+import { probeContextWindow, type ProbedWindow } from "./llm/context-probe.js";
+import { promptMetrics, type PromptMetrics } from "./llm/prompt-metrics.js";
 import { JsonlLogger } from "./session/logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
 import { loadRcFile } from "./config/config.js";
@@ -49,6 +51,7 @@ import {
   callMcpTool as callMcpToolBridge,
   confirmMcpTool as confirmMcpToolBridge,
   connectMcp as connectMcpBridge,
+  governedMcpSpecs,
   invokeMcpTool as invokeMcpToolBridge,
   mcpStatus as mcpStatusBridge,
   rebuildToolList as rebuildMcpToolList,
@@ -100,6 +103,8 @@ export class Agent {
   private sessionCreatedAt: string | undefined;
   private currentTask = "";
   private lastBuildResult: BuildResult | null = null;
+  /** P1-2 (RC-5): kết quả verify thành công gần nhất theo (lệnh, fingerprint). */
+  private verifyCacheStore = new Map<string, { fingerprint: string; result: BuildResult }>();
   /** Accumulated token usage across the current run (session state). */
   private usageTotals: UsageTotals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
   private mcp: McpManager | null = null;
@@ -228,6 +233,13 @@ export class Agent {
       onToolOutput: (stream, delta) => this.handleToolOutput("build", stream, delta),
       endToolStream: () => this.endToolStream(),
       setLastBuildResult: (result) => { this.lastBuildResult = result; },
+      // P1-2: verify cache sống trong run (key = chuỗi lệnh verify).
+      verifyCache: {
+        read: (key) => this.verifyCacheStore.get(key),
+        write: (key, entry) => {
+          this.verifyCacheStore.set(key, entry);
+        },
+      },
     };
     return runVerification(runtime, buildCmd);
   }
@@ -327,6 +339,9 @@ export class Agent {
     };
     // G7: thresholds từ rc limits.
     if (config.limits?.maxOutputChars) setMaxOutputChars(config.limits.maxOutputChars);
+    // P0-2: ngân sách ký tự của một tool result trong history (read_file cắt
+    // theo dòng theo giá trị này).
+    if (config.limits?.toolOutputChars) setMaxToolOutputChars(config.limits.toolOutputChars);
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
     this.snapshots = new SnapshotManager(config.workdir, config.snapshots !== false);
@@ -633,7 +648,9 @@ export class Agent {
   private emitContextEvent(compacted = false): void {
     try {
       const window = this.compactionSettings().contextWindow;
-      const tokens = estimateTokens(this.messages);
+      // P1-1: token áp lực context phải tính cả tool schema (chi phí cố định
+      // mỗi lượt) — UI/`/compact` mới hiện đúng mức "còn thở" thật.
+      const tokens = estimateTokens(this.messages, estimateSchemaTokens(this.tools));
       const pct = window > 0 ? Math.min(100, Math.round((tokens / window) * 100)) : 0;
       this.emit({ type: "context", tokens, window, pct, ...(compacted ? { compacted: true } : {}) });
     } catch {
@@ -645,6 +662,10 @@ export class Agent {
     const input = usage.prompt_tokens ?? 0;
     const output = usage.completion_tokens ?? 0;
     const cached = usage.cached_tokens ?? 0;
+    // P1-3: metrics của lượt vừa rồi (consumed one-shot — lượt summarizer
+    // của compaction đi đường khác nên không có perf).
+    const perf = this.lastPerf;
+    this.lastPerf = null;
     this.usageTotals.calls += 1;
     this.usageTotals.inputTokens += input;
     this.usageTotals.outputTokens += output;
@@ -663,8 +684,33 @@ export class Agent {
         output_tokens: output,
         cached_tokens: cached,
       },
+      ...(perf
+        ? {
+            perf: {
+              ttftMs: perf.ttftMs,
+              callMs: perf.callMs,
+              /** token/s vùng prefill — TTFT ≈ prefill trên máy local. */
+              prefillTokPerSec: perf.ttftMs > 0 && input > 0 ? Math.round((input / perf.ttftMs) * 1000) : undefined,
+              ...(perf.prompt
+                ? {
+                    promptChars: perf.prompt.promptChars,
+                    promptMessages: perf.prompt.messages,
+                    promptTools: perf.prompt.tools,
+                    promptHash: perf.prompt.promptHash,
+                    historyHash: perf.prompt.historyHash,
+                    /** RC-1: history lượt trước có còn là tiền tố của lượt này? */
+                    prefixReused: perf.prompt.prefixReused,
+                    commonPrefixMessages: perf.prompt.commonPrefixMessages,
+                  }
+                : {}),
+            },
+          }
+        : {}),
     });
   }
+
+  /** prefixHash của lượt trước — phát hiện invalidation KV-cache (P1-3). */
+  private lastPromptRef: { messageHashes: string[] } | null = null;
 
   /** Reset per-run usage accumulation (called when a fresh run starts). */
   private resetUsageTotals(): void {
@@ -680,7 +726,44 @@ export class Agent {
    * result (flagged `incomplete`) instead of discarding it — the run loop
    * executes the tool calls and continues with a synthetic instruction.
    */
+  /**
+   * P1-3: một lượt gọi LLM được đo: thời gian tới token đầu (TTFT ≈ prefill
+   * trên máy local), tổng thời gian, và hash prompt/prefix. `prefixHash` đổi
+   * giữa hai lượt = có gì đó sửa history ⇒ mất KV-cache (RC-1).
+   * Consumed one-shot bởi recordLlmUsage (lượt summarizer không có perf).
+   */
+  private pendingPerf: { t0: number; ttftMs: number; prompt: PromptMetrics | null } | null = null;
+  private lastPerf: { ttftMs: number; callMs: number; prompt: PromptMetrics | null } | null = null;
+
+  /** One LLM turn (wrapper) — see chatWithStreamInner for the streaming logic. */
   private async chatWithStream(): Promise<ChatResult & { incomplete?: boolean }> {
+    const t0 = Date.now();
+    let prompt: PromptMetrics | null = null;
+    try {
+      prompt = promptMetrics(this.messages, this.tools);
+    } catch {
+      // metrics không được phép làm hỏng lượt gọi
+    }
+    this.pendingPerf = { t0, ttftMs: 0, prompt };
+    // Keep the per-message hashes for the NEXT call: `prefixReused` in the log
+    // is the direct answer to "KV-cache còn dùng được không?" (RC-1).
+    this.lastPromptRef = prompt ? { messageHashes: prompt.messageHashes } : null;
+    try {
+      return await this.chatWithStreamInner();
+    } finally {
+      const p = this.pendingPerf;
+      this.pendingPerf = null;
+      if (p) this.lastPerf = { ttftMs: p.ttftMs, callMs: Date.now() - t0, prompt: p.prompt };
+    }
+  }
+
+  /** Đánh dấu token đầu tiên tới (best-effort, cho TTFT). */
+  private markFirstToken(): void {
+    const p = this.pendingPerf;
+    if (p && p.ttftMs === 0) p.ttftMs = Date.now() - p.t0;
+  }
+
+  private async chatWithStreamInner(): Promise<ChatResult & { incomplete?: boolean }> {
     const signal = this.runSignal.signal;
     if (!this.config.stream) {
       return this.client.chat(this.messages, this.tools, { signal });
@@ -691,6 +774,9 @@ export class Agent {
     let sawToolCallDelta = false;
     try {
       for await (const chunk of this.client.streamChat(this.messages, this.tools, { signal })) {
+        // P1-3: TTFT tính từ lúc request bắt đầu tới delta đầu tiên (bất kể
+        // loại — content/reasoning/tool_call đều nghĩa là prefill đã xong).
+        if (chunk.contentDelta || chunk.reasoningDelta || chunk.toolCallDelta) this.markFirstToken();
         if (chunk.reasoningDelta) {
           // I-05: reasoning hiển thị dim qua UI stream; không vào llm_delta.
           this.emit({ type: "llm_reasoning", delta: chunk.reasoningDelta });
@@ -781,6 +867,31 @@ export class Agent {
     await connectMcpBridge(this.mcpBridgeRuntime());
   }
 
+  /**
+   * P1-1 (RC-4): hỏi server lấy context window THẬT khi user chưa đặt tường
+   * minh (rc `contextWindow` / provider def). Fallback 128k của catalog khiến
+   * compaction và trim kích hoạt muộn hơn server thật hàng chục nghìn token —
+   * server tự cắt history, và mỗi lần nó cắt là một lần mất KV-cache.
+   */
+  private async applyContextProbe(): Promise<void> {
+    if (this.config.contextWindow) return;
+    let probe: ProbedWindow | null = null;
+    try {
+      probe = await probeContextWindow(this.config.baseUrl, this.client.model);
+    } catch {
+      // probe là best-effort — không được làm hỏng run
+    }
+    if (!probe) return;
+    this.config.contextWindow = probe.tokens;
+    this.logger.log({ type: "context_window", tokens: probe.tokens, source: probe.source, detail: probe.detail, model: this.client.model });
+    const catalog = contextWindowFor(this.config.provider, this.config.model);
+    if (probe.tokens !== catalog) {
+      this.reporter.info(
+        `context window: ${probe.tokens} token (${probe.detail}) — thay fallback ${catalog} token, compaction/trim tính theo số này`,
+      );
+    }
+  }
+
   /** Rebuild built-in and connected MCP tool specs for the current skill scope. */
   private rebuildToolList(): void {
     rebuildMcpToolList(this.mcpBridgeRuntime());
@@ -844,7 +955,10 @@ export class Agent {
       const allow = new Set(pendingAllowedTools.map((t) => t.toLowerCase()));
       baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
     }
-    const mcpSpecs = this.mcp ? [...this.mcp.toToolSpecs(), ...this.mcp.resourceToolSpecs()] : [];
+    // P0-3: MCP specs đi qua đúng một cửa (allowlist "mcpTools" + trần
+    // schema). Trước đây chỗ này tự ghép raw specs → run nối tiếp trên cùng
+    // Agent (MCP đã connect, connectMcp return sớm) gửi lại đủ 53 tool.
+    const mcpSpecs = governedMcpSpecs(this.mcpBridgeRuntime());
     if (pendingAllowedTools?.length) {
       const allow = new Set(pendingAllowedTools.map((t) => t.toLowerCase()));
       this.tools = [...baseTools, ...mcpSpecs.filter((s) => allow.has(s.function.name.toLowerCase()))];
@@ -874,6 +988,7 @@ export class Agent {
       agent: this.config.agent ?? "build",
     });
 
+    await this.applyContextProbe();
     await this.connectMcp();
     this.promptContext.clearPendingTools();
     return this.runLoop(0, buildCmd, null);
@@ -924,6 +1039,7 @@ export class Agent {
     for (const content of this.promptContext.takePendingContext()) this.messages.push({ role: "user", content });
     this.messages.push({ role: "user", content: task });
     this.rebuildToolList();
+    await this.applyContextProbe();
     await this.connectMcp();
     this.promptContext.clearPendingTools();
     return this.runLoop(0, buildCmd, null);
@@ -974,6 +1090,7 @@ export class Agent {
     // v2: opening a resumed run stamps a fresh run.started (event log continuity).
     this.events.append({ type: "run.started", task: this.currentTask });
 
+    await this.applyContextProbe();
     await this.connectMcp();
     return this.runLoop(session.steps ?? 0, buildCmd, lastBuild);
   }
@@ -1038,6 +1155,7 @@ export class Agent {
       steerCounts: () => this.steerInbox.counts(),
       chatWithStream: () => this.chatWithStream(),
       recordLlmUsage: (usage) => this.recordLlmUsage(usage),
+      tools: () => this.tools,
       emit: (event) => this.emit(event),
       emitContextEvent: (force) => this.emitContextEvent(force),
       toolExecutor: () => this.toolExecutor(),
