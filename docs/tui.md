@@ -110,6 +110,14 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 - **SESSION** — model + workdir (no permission line; permission stays in the header)
 - **METRICS** — step fuel gauge (`▰▰▰▱▱▱▱▱▱▱`), tokens in→out, tok/s, ctx with
   input/limit (pct%), cost, elapsed, guardrail count
+  - All of these are anchored to the `run_start` event, which `run()`,
+    `runTurn()` **and** `resume()` emit (`emitRunBoundary()` in `src/agent.ts`).
+    The reducer clears `startedAt`/`endedAt`/`usage`/`context`/tok-s there — so
+    `elapsed = (endedAt ?? now) − startedAt` keeps ticking. `run_start` with
+    `quiet: true` (resume) resets the anchors without appending the task again,
+    because the transcript is already restored. A turn that starts without
+    `run_start` renders a *frozen* sidebar: `endedAt` still holds the previous
+    turn's finish timestamp.
 - **PHASES** — plan › explore › edit › build › verify (current phase highlighted)
 - **BUILD** — build lamp + build command
 - **MCP** — per-server state (ready / connecting / reconnecting / dead)

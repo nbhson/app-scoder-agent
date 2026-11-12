@@ -470,7 +470,7 @@ không dùng `buildStopRule`. Sau P0–P2:
 ### 11.5 Cách tự kiểm chứng trên máy
 
 ```bash
-npm run build && npm test           # 953 unit + e2e + MCP smoke
+npm run build && npm test           # 959 unit + e2e + MCP smoke
 node scripts/measure-mcp-schema.mjs            # baseline schema
 node scripts/measure-mcp-schema.mjs --cap 6000 # projected sau trần
 node scripts/bench-context.mjs                 # wasted prefill: legacy vs hiện tại
@@ -486,3 +486,66 @@ SCODER_NO_APIKEY_WARNING=1 node dist/index.js --log-file --no-save -y "chào"
 #   curl -s -H "Authorization: Bearer $KEY" localhost:8080/props | jq '.default_generation_settings.n_ctx, .total_slots'
 ```
 
+
+---
+
+## 12. Phát hiện thêm: sidebar TUI hết realtime từ câu hỏi thứ hai
+
+Báo cáo của user (13/11/2026): sau lượt generate đầu, sidebar vẫn chạy realtime;
+từ câu hỏi thứ 2 trở đi thì đứng im.
+
+**Chẩn đoán** (mô phỏng đúng reducer trong `src/tui/state.ts`, không cần mở TUI):
+
+| Mốc | `startedAt` | `endedAt` | sidebar hiển thị |
+|---|---|---|---|
+| hết câu 1 (`finish`) | mốc câu 1 | đóng | elapsed = đúng thời lượng câu 1 |
+| giữa câu 2 (chỉ `step` + `llm_delta`) | **vẫn mốc câu 1** | **vẫn đóng** | elapsed đóng băng, usage/ctx/tok-s không đổi |
+
+Nguyên nhân: sidebar METRICS lấy anchor từ event `run_start`:
+
+```ts
+elapsedMs = (state.endedAt ?? Date.now()) - state.startedAt
+```
+
+nhưng `run_start` chỉ `run()` phát (`src/agent.ts:1041`). `runTurn()` — đường đi
+của mọi câu hỏi từ thứ 2 trong TUI/REPL — nhảy thẳng vào `runLoop()`, nên
+`endedAt` của lượt trước không được mở lại ⇒ `(endedAt ?? now)` luôn là
+`endedAt` ⇒ mọi con số theo thời gian đứng im. Các field cùng reset trong nhánh
+đó (`usage`, `context`, `phases`, `queue`, `subagents`, `verification`,
+`lastLlmTokPerSec`, `guardrailCount`) cũng rò rỉ sang lượt mới. `resume()` cùng
+lỗi (không stamp `run.started` vào event log, chỉ append thô).
+
+**Fix** — gộp dấu mốc run vào một hàm `Agent.emitRunBoundary()`, dùng cho cả
+ba entry point:
+
+| Entry point | `run_start.task` | quiet | Ghi chú |
+|---|---|---|---|
+| `run()` | nguyên văn user gõ (trước `expandMentions`) | — | `run.started` trong event log vẫn ghi task đã expand (nội dung model thực thấy) |
+| `runTurn()` | nguyên văn user gõ | — | hết lỗi; đồng thời stamp `run.started` để event log liền mạch |
+| `resume()` | `currentTask` (task gốc) | `true` | transcript đã restore ⇒ reducer không append lại dòng user |
+
+Vì `runTurn` giờ phát `run_start` với đúng text user vừa gửi, dedupe sẵn có
+trong reducer (`last.kind === "user" && last.text === ev.task`) chặn nhân đôi
+dòng chat — không cần thay đổi `use-submit` ngoài comment mô tả lại.
+
+**Test:**
+- `test/trim-turn.test.mjs` — 3 case: 2 event `run_start` cho run+runTurn (và
+  tới trước `step` đầu tiên của lượt), 2 dòng `run.started` trong event log,
+  `resume()` phát `run_start` với `quiet: true`.
+- `test/tui-sidebar.test.mjs` — 3 case reducer: `run_start` lượt 2 mở `endedAt`
+  + reset usage/context/tok-s; chứng minh hành vi cũ đóng băng; `quiet` không
+  append dòng user nhưng vẫn reset anchor.
+
+**Bài học khi test đồng hồ:** phiên chạy full suite đầu tiên fail đúng 1 case —
+`assert.notEqual(run_start2.startedAt, run_start1.startedAt)` vì reducer gọi
+`Date.now()` và hai event nằm trong cùng một millisecond (standalone thì qua
+vì có thời gian khởi động module). Các test liên quan `startedAt`/`endedAt` vì
+thế dùng đồng hồ nhân tạo (`withFakeClock`: ghim `Date.now()` rồi `tick(ms)`),
+vừa tất định vừa kiểm được cả giá trị elapsed tuyệt đối.
+
+**Cổng vòng 3:** `npm test` = 959/959 (+6 case so với vòng 2), typecheck sạch,
+lint 0 error (23 warning baseline), `check:layers` ✓, `docs:check` ✓.
+
+**Lưu ý khi review code liên quan UI:** bất cứ đường nào vào `runLoop()` đều
+phải đi qua `emitRunBoundary()`. Thêm entry point mới (ví dụ "retry from step
+N") mà quên nó thì triệu chứng không phải lỗi crash mà là UI chạy sai im lặng.

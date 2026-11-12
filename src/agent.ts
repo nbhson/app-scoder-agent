@@ -976,6 +976,38 @@ export class Agent {
   }
 
   /**
+   * Dấu mốc "một lượt run bắt đầu": stamp `run.started` vào event log VÀ emit
+   * `run_start` cho UI.
+   *
+   * Trước đây chỉ `run()` làm việc này; `runTurn()` (câu hỏi thứ 2+ trong
+   * TUI/REPL) và `resume()` bỏ qua, mà reducer TUI lại reset mọi anchor
+   * per-run trong nhánh `run_start` (`startedAt`, `endedAt = null`, `usage`,
+   * `context`, `phases`, `lastLlmTokPerSec`...). Hệ quả đo được: từ câu hỏi
+   * thứ hai, `endedAt` vẫn đóng của lượt trước ⇒ thanh elapsed đứng im, áp lực
+   * ctx và tok/s không nhảy nữa — dù text vẫn stream bình thường.
+   *
+   * `taskForUi` là NGUYÊN VĂN user gõ (chưa expand mentions) để dedupe trong
+   * reducer khớp đúng item user mà TUI/REPL đã tự append. `loggedTask` (đã
+   * expand) ghi vào event log để resume/phân tích giữ đúng nội dung model thấy.
+   * `quiet` = UI đã tự hiển thị task (resume) ⇒ reducer không append thêm.
+   */
+  private emitRunBoundary(taskForUi: string, buildCmd: string, loggedTask?: string, quiet = false): void {
+    this.events.append({ type: "run.started", task: loggedTask ?? taskForUi });
+    this.emit({
+      type: "run_start",
+      task: taskForUi,
+      model: this.client.model,
+      provider: this.config.provider,
+      workdir: this.config.workdir,
+      buildCmd,
+      permission: this.config.permissionMode,
+      schemaVersion: EVENT_SCHEMA_VERSION,
+      agent: this.config.agent ?? "build",
+      ...(quiet ? { quiet: true } : {}),
+    });
+  }
+
+  /**
    * Autonomous closed loop:
    * task -> LLM plans -> tool calls -> build -> on failure: read error, patch, retry.
    */
@@ -987,6 +1019,7 @@ export class Agent {
     }
 
     const buildCmd = this.buildCmd;
+    const rawTask = task;
     // @file mention expansion — task trước khi build messages.
     task = expandMentions(task, this.config.workdir);
     this.reporter.banner("scoder", [
@@ -998,7 +1031,6 @@ export class Agent {
     ]);
 
     this.currentTask = task;
-    this.events.append({ type: "run.started", task });
     this.resetRunSignal();
     this.resetUsageTotals();
     this.filesModified = false;
@@ -1037,17 +1069,7 @@ export class Agent {
     // Phiên bản system prompt được ghi vào log — giúp so sánh chất lượng
     // giữa các phiên bản prompt khi phân tích JSONL.
     this.logger.log({ type: "prompt_version", version: PROMPT_VERSION });
-    this.emit({
-      type: "run_start",
-      task,
-      model: this.client.model,
-      provider: this.config.provider,
-      workdir: this.config.workdir,
-      buildCmd,
-      permission: this.config.permissionMode,
-      schemaVersion: EVENT_SCHEMA_VERSION,
-      agent: this.config.agent ?? "build",
-    });
+    this.emitRunBoundary(rawTask, buildCmd, task);
 
     await this.applyContextProbe();
     await this.connectMcp();
@@ -1091,6 +1113,7 @@ export class Agent {
       return this.run(task);
     }
     const buildCmd = this.buildCmd;
+    const rawTask = task;
     task = expandMentions(task, this.config.workdir);
     this.currentTask = `${this.currentTask}\n${task}`.trim();
     this.resetRunSignal();
@@ -1099,6 +1122,8 @@ export class Agent {
     this.plan = [];
     for (const content of this.promptContext.takePendingContext()) this.messages.push({ role: "user", content });
     this.messages.push({ role: "user", content: task });
+    // Cùng một dấu mốc run_start mà run() phát — UI reset anchor per-run ở đó.
+    this.emitRunBoundary(rawTask, buildCmd, task);
     this.rebuildToolList();
     await this.applyContextProbe();
     await this.connectMcp();
@@ -1148,8 +1173,10 @@ export class Agent {
     }
 
     const lastBuild = restored.lastBuild;
-    // v2: opening a resumed run stamps a fresh run.started (event log continuity).
-    this.events.append({ type: "run.started", task: this.currentTask });
+    // v2: opening a resumed run stamps a fresh run.started + run_start (event log
+    // continuity VÀ UI anchor reset). quiet: transcript đã được restore, đừng
+    // append lại task thành một dòng user mới.
+    this.emitRunBoundary(this.currentTask, buildCmd, undefined, true);
 
     await this.applyContextProbe();
     await this.connectMcp();

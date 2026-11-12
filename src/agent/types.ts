@@ -42,7 +42,23 @@ export interface UsageTotals {
  * (the `scoder serve` HTTP/SSE API) can render runs without touching the UI.
  */
 export type AgentEvent =
-  | { type: "run_start"; task: string; model: string; provider: string; workdir: string; buildCmd: string; permission: string; schemaVersion?: number; agent?: string }
+  | {
+      type: "run_start";
+      task: string;
+      model: string;
+      provider: string;
+      workdir: string;
+      buildCmd: string;
+      permission: string;
+      schemaVersion?: number;
+      agent?: string;
+      /**
+       * UI đã tự hiển thị task này (case `resume()` — transcript được restore
+       * từ session). Reducer vẫn reset anchor per-run nhưng KHÔNG append thêm
+       * dòng user, để task cũ không xuất hiện hai lần.
+       */
+      quiet?: boolean;
+    }
   | { type: "step"; step: number; maxSteps: number }
   | { type: "llm_delta"; delta: string }
   /** I-05: reasoning/thinking stream delta (rendered dim, toggleable). */

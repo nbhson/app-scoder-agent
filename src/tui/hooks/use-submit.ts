@@ -110,9 +110,9 @@ export function useSubmit(deps: {
       setScrollOffset(0);
       // isFirst must be computed BEFORE pushing the user item below.
       const isFirst = stateRef.current.items.every((i) => i.kind !== "user");
-      // runTurn() doesn't emit run_start, so the TUI shows the user's message
-      // itself; applyEvent's run_start dedupe keeps turn 1 from doubling.
-      // runTurn cũng không reset plan — reset ở đây (user message mới).
+      // run_start (cả run() lẫn runTurn() đều phát) dedupe với dòng user mà TUI
+      // vừa push ở dòng trên, nên câu hỏi thứ 2+ không hiển thị hai lần.
+      // runTurn cũng reset plan — cùng semantics với run_start.
       update((s) => ({ ...s, plan: null, items: [...s.items, { kind: "user", text: task }], status: "running", summary: null }));
 
       const agent = createAgent();

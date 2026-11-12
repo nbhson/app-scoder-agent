@@ -3,7 +3,7 @@
 ## Run Tests
 
 ```bash
-npm test          # build + full unit suite + e2e + MCP smoke (953 tests)
+npm test          # build + full unit suite + e2e + MCP smoke (959 tests)
 npm run lint      # ESLint flat config
 npm run typecheck # tsc --noEmit
 npm run build     # tsc

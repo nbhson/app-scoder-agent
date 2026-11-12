@@ -49,7 +49,11 @@ curl -N localhost:4114/api/runs/<id>/events
 ```
 
 Event types:
-- `run_start` — task, model, workdir
+- `run_start` — task, model, workdir (+ `provider`, `buildCmd`, `permission`,
+  `agent`, `schemaVersion`). Emitted by `run()`, `runTurn()` and `resume()` —
+  every entry point into the loop, so frontends can reset per-run timers and
+  counters. `quiet: true` (only `resume()`) means "the transcript is already on
+  screen, don't re-append the task".
 - `step` — current step number
 - `llm_delta` — assistant text delta (streaming)
 - `llm_reasoning` — reasoning/thinking delta (if enabled)

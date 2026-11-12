@@ -254,3 +254,93 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
     assert.ok(!out.includes("step 14"), "không vẽ tràn hết 14 dòng plan");
   });
 });
+
+// ── Anchor per-run: câu hỏi thứ 2+ phải chạy realtime trở lại ────────────────
+
+describe("tui sidebar — anchor elapsed/tok-s reset theo từng lượt", () => {
+  const turn1 = (s) => {
+    s = applyEvent(s, baseEvent);
+    s = applyEvent(s, { type: "step", step: 1, maxSteps: 24 });
+    s = applyEvent(s, { type: "llm_delta", delta: "trả lời 1 " });
+    s = applyEvent(s, { type: "llm_usage", usage: { input_tokens: 120, output_tokens: 9, cached_tokens: 0 } });
+    return applyEvent(s, { type: "finish", success: true, steps: 1, summary: "xong" });
+  };
+
+  /**
+   * Đồng hồ nhân tạo: `startedAt`/`endedAt` đều lấy từ Date.now(), nên nếu để
+   * giờ thật thì hai run_start liên tiếp dễ trùng 1 ms và test flaky.
+   * `tick(ms)` dịch đồng hồ tới trước — đúng như người dùng chờ giữa 2 lượt.
+   */
+  function withFakeClock(body) {
+    const realNow = Date.now;
+    let t = 1_700_000_000_000;
+    Date.now = () => t;
+    try {
+      body((ms) => {
+        t += ms;
+      });
+    } finally {
+      Date.now = realNow;
+    }
+  }
+
+  it("sau finish, run_start của lượt 2 mở khóa endedAt (elapsed chạy tiếp)", () => {
+    withFakeClock((tick) => {
+      let s = turn1(initialState());
+      assert.ok(s.endedAt, "lượt 1 kết thúc thì endedAt đóng");
+      const started1 = s.startedAt;
+      tick(5_000); // user ngồi nghĩ 5s rồi gõ câu 2
+
+      s = applyEvent(s, { ...baseEvent, task: "câu 2" });
+      assert.equal(s.endedAt, null, "endedAt phải mở lại — nếu không, elapsed đứng im cả lượt");
+      assert.equal(s.startedAt, started1 + 5_000, "startedAt phải là mốc của lượt mới");
+      assert.equal(s.status, "running");
+      assert.deepEqual(s.usage, { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0 });
+      assert.equal(s.context, null);
+      assert.equal(s.lastLlmTokPerSec, null);
+
+      // Và elapsed của sidebar phải chạy tiếp trong lúc lượt 2 đang stream.
+      const started2 = s.startedAt;
+      s = applyEvent(s, { type: "step", step: 1, maxSteps: 24 });
+      s = applyEvent(s, { type: "llm_delta", delta: "trả lời 2 " });
+      tick(3_000);
+      const elapsed = (s.endedAt ?? Date.now()) - s.startedAt;
+      assert.equal(started2, started1 + 5_000, "lượt 2 tính giờ từ lúc nó bắt đầu");
+      assert.equal(elapsed, 3_000, "elapsed đếm tiếp trong lượt 2, không đóng băng");
+      assert.ok(
+        s.streamingOutputChars > 0 && s.streamStartedAt != null,
+        "delta vẫn được tính cho tok/s",
+      );
+    });
+  });
+
+  it("tái hiện bug cũ: thiếu run_start thì elapsed đóng băng ở con số của lượt trước", () => {
+    withFakeClock((tick) => {
+      let s = turn1(initialState());
+      const frozen = s.endedAt;
+      tick(60_000);
+      // Lượt 2 chỉ có step/delta (hành vi CŨ của runTurn) -> mọi anchor giữ nguyên.
+      s = applyEvent(s, { type: "step", step: 1, maxSteps: 24 });
+      s = applyEvent(s, { type: "llm_delta", delta: "trả lời 2 " });
+      assert.equal(s.endedAt, frozen, "không có run_start ⇒ endedAt không mở");
+      assert.equal(
+        (s.endedAt ?? Date.now()) - s.startedAt,
+        frozen - s.startedAt,
+        "elapsed vẫn bằng đúng thời lượng lượt 1 dù đã qua 60s",
+      );
+    });
+  });
+
+  it("run_start trùng text không nhân đôi dòng user; quiet cũng không", () => {
+    let s = initialState();
+    s = applyEvent(s, { ...s, items: [{ kind: "user", text: "câu 2" }] });
+    s = applyEvent(s, { ...baseEvent, task: "câu 2" });
+    assert.equal(s.items.filter((i) => i.kind === "user").length, 1);
+    // resume: transcript đã restore, task không nằm ở item cuối vẫn không được append
+    let r = applyEvent({ ...initialState(), items: [{ kind: "assistant", text: "…" }] }, { ...baseEvent, quiet: true });
+    assert.equal(r.items.length, 1, "quiet ⇒ không append dòng user");
+    assert.ok(r.startedAt, "quiet vẫn reset anchor");
+    let n = applyEvent({ ...initialState(), items: [{ kind: "assistant", text: "…" }] }, baseEvent);
+    assert.equal(n.items.length, 2, "không quiet thì vẫn append như cũ");
+  });
+});

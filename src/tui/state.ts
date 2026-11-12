@@ -228,9 +228,10 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.llmCallStartedAt = null;
       state.lastLlmTokPerSec = null;
       // The TUI pushes the user's message itself when submitting; avoid a
-      // duplicate when run_start carries the same task.
+      // duplicate when run_start carries the same task. `quiet` (resume) =
+      // transcript đã hiển thị rồi, không append nữa.
       const last = lastItem(state);
-      if (!(last && last.kind === "user" && last.text === ev.task)) {
+      if (!ev.quiet && !(last && last.kind === "user" && last.text === ev.task)) {
         appendItem(state, { kind: "user", text: ev.task });
       }
       // Plan của task trước không được lọt sang task mới.
