@@ -73,6 +73,20 @@ node scripts/measure-mcp-schema.mjs --cap 6000 # projected after the schema budg
 node scripts/bench-context.mjs                 # wasted prefill: legacy vs current strategy
 ```
 
+For engine ground truth on a *real* request (not an estimate), capture the
+exact body the agent sends and replay it with `max_tokens: 1` — the server
+then reports `prompt_tokens` and `prompt_tokens_details.cached_tokens` with
+its own tokenizer and chat template:
+
+```bash
+SCODER_CAPTURE_DIR=/tmp/cap node scripts/capture-prompt-proxy.mjs 8099 http://0.0.0.0:8080 &
+# point baseUrl at http://127.0.0.1:8099/v1, run the agent, then:
+node scripts/measure-prompt-anatomy.mjs anatomy  /tmp/cap 1        # FULL / -tools / -system split
+node scripts/measure-prompt-anatomy.mjs blocks   /tmp/cap 1        # cost of each dynamic system block
+node scripts/measure-prompt-anatomy.mjs warmcold /tmp/cap 1        # identical replay vs 1-char prefix change
+node scripts/measure-prompt-anatomy.mjs scatter  /tmp/cap 1 4 --pin 0  # interleaved prompts, slot pinning
+```
+
 Ask the server for ground truth instead of estimating (needs the API key the
 server was started with):
 
@@ -109,6 +123,11 @@ turns the cap off entirely. The estimator is accurate on schema *content*
 (2.086 estimated vs 2.098 real for the builtins) but blind to ChatML framing,
 which is why the run-time calibration above exists.
 
+None of the 14k is a hard floor: the instruction text alone is 954 tokens and
+ChatML framing costs ~10; everything else is a choice (schema disclosure,
+repo map, per-turn prefill count). The block-by-block breakdown and the
+ranked reductions are in `plan/performance-issue.md` §13.
+
 ### Cold vs warm is the whole story on a local chat
 
 Same prompt, same process, only the KV state of the server differs:
@@ -122,7 +141,10 @@ Same prompt, same process, only the KV state of the server differs:
 `llama.cpp` reports `total_slots: 2` on this machine: consecutive requests land
 on different slots and each slot has its own cache, so a "warm" run can still
 pay a full prefill. Run the server with one slot (`--parallel 1` / `-np 1`), or
-keep `n_ctx` in one slot large enough, if single-message latency matters. There
+keep `n_ctx` in one slot large enough, if single-message latency matters. The
+request body's `slot_id` field is honored by the server and pins a slot from
+the client side: with two 8.5k/11.3k-token prompts interleaved, unpinned gave
+2/6 cold rounds (17.9–38.0 s), `slot_id: 0` gave 0/6 (73–81 ms). There
 is no API to clear a slot cache (`POST /slots {"action":"clear"}` 404s), so to
 reproduce a cold run, restart the server.
 

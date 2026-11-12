@@ -549,3 +549,176 @@ lint 0 error (23 warning baseline), `check:layers` ✓, `docs:check` ✓.
 **Lưu ý khi review code liên quan UI:** bất cứ đường nào vào `runLoop()` đều
 phải đi qua `emitRunBoundary()`. Thêm entry point mới (ví dụ "retry from step
 N") mà quên nó thì triệu chứng không phải lỗi crash mà là UI chạy sai im lặng.
+
+---
+
+## 13. So sánh với OpenCode trên CÙNG engine: vì sao nhanh/ổn định hơn, và 14k có bắt buộc không?
+
+**Câu hỏi của người dùng:** model local thì OpenCode chạy nhanh và "ổn định" hơn
+scoder; scoder mở màn đã ~11–14k token — giảm được không hay đó là bắt buộc?
+
+**Cách đo (không suy đoán):** `scripts/capture-prompt-proxy.mjs` đứng giữa agent
+và llama.cpp, ghi lại ĐÚNG request body + `usage` + ttft của phản hồi;
+`scripts/measure-prompt-anatomy.mjs` replay các body đó vào engine với
+`max_tokens: 1` để lấy `prompt_tokens` và `prompt_tokens_details.cached_tokens`
+— số engine tự đếm, cùng tokenizer, cùng chat template, cho cả hai agent.
+Cùng model `qwen3.6:35b`, cùng workdir, cùng task `chào`, config thật của từng
+agent. OpenCode chạy `opencode run --standalone` (bản 2.2.7) — bắt buộc
+`--standalone` vì dịch vụ nền `opencode serve --service` bỏ qua config theo lệnh.
+
+### 13.1 Chi phí cố định của lượt đầu tiên
+
+| case | tools trong request | schema | system | `prompt_tokens` |
+|---|---|---|---|---|
+| scoder, MCP tắt | 13 | 2,876 | 4,099 | **6,993** |
+| OpenCode, MCP tắt (config tối giản) | 13 | 3,835 | 4,725 | **8,578** |
+| scoder, MCP bật (đúng `~/.scoder/config.json`) | 24 (sau trần schema) | 7,139 = builtin 2,876 + MCP 4,263 | 4,169 | **11,309** |
+| OpenCode, MCP bật (đúng `opencode.jsonc`) | 13 | 3,835 | 3,114 | **6,968** |
+
+Lưu ý tính công bằng: hai dòng OpenCode đo ở hai môi trường khác nhau — dòng
+"MCP tắt" dùng config tối giản tôi tự viết (OpenCode vẫn quảng bá ~39 dòng skill
+list ≈ 1,6k token), dòng "MCP bật" chạy với `XDG_CONFIG_HOME` sạch nên **không**
+có skill list. Vì vậy so sánh "cùng quảng bá skill" phải cộng thêm ~1,6k cho dòng
+cuối: OpenCode ≈ 8,5k. Khoảng cách với scoder vẫn là ~2,8k token và nó nằm
+đúng ở phần schema MCP (13.2b), không phải ở docs.
+
+Kết luận từ bảng: khi **cùng tắt MCP**, OpenCode nặng hơn scoder 1,585 token
+(8,578 vs 6,993) — nên "cắt prompt cho giống OpenCode" không phải hướng đi.
+Khi **cùng bật MCP**, OpenCode nhẹ hơn scoder ~2,8–4,3k token, và toàn bộ
+khoảng cách nằm ở đúng một thứ: scoder gửi JSON schema của tool MCP trong mọi
+request, OpenCode thì không.
+
+### 13.2 Ba khác biệt thật, đo được
+
+**(a) Số lần prefill cho một lượt chat.** Với `chào`, scoder có thể tốn **hai**
+lần gọi model: 6,993 + 7,069 = 14,062 token (~56s). Lý do: loop chỉ kết thúc
+khi model in ra marker `<<CHAT_DONE>>` (rule `chat-done`) hoặc khi đã
+`textOnlyStreakLimit = 2` bước chỉ-text — model local hay quên marker nên
+đường "2 bước" mới là đường thường đi, và bước 2 = một lần prefill full.
+OpenCode kết thúc ngay khi không có tool call ⇒ đúng 1 lần prefill.
+(OpenCode có gửi thêm một request nhỏ ~2.1KB không tools cho việc đặt tiêu đề
+session — phụ, không đáng kể so với 30s.)
+
+**(b) MCP không nằm trong `tools[]` phía OpenCode.** kể cả khi config khai báo
+`mcp.servers.github-mcp` (46 tool) + `prompt-gate`, request vẫn chỉ 13 tool:
+OpenCode quảng bá tool MCP dưới dạng **catalog text** trong system prompt
+(khối `# Code Mode`) rồi gọi qua một tool `execute` duy nhất. scoder gửi
+full JSON schema ⇒ 4,263 token cho 11 tool được giữ sau trần; hai tool
+`prompt-gate` một mình đã ~1,8k token. Đây là chỗ scoder đắt hơn hẳn và là
+chỗ cắt có ích nhất cho các task không cần bên ngoài.
+
+**(c) Prefix của scoder đổi theo trạng thái repo.** REPO MAP (2,558 token)
+render "N files" + kích thước từng file. Bằng chứng thực nghiệm: thêm đúng một
+file 900 byte vào repo ⇒ map đổi "315 files" → "316 files", `promptHash` đổi
+`77c186f6` → `bc07a25f`, `cached_tokens = 0`, ttft 30,145ms. OpenCode không có
+nội dung dễ đổi kiểu đó trong fixed prompt (nên prefix của nó sống được qua
+nhiều phiên). Lưu ý: trong MỘT run, map chỉ build một lần (`buildRunMessages`)
+nên các bước trong run vẫn reuse tốt — vấn đề nằm ở **giữa các run/lượt mới**.
+
+### 13.3 "Ổn định" = KV-cache, không phải prompt nhỏ
+
+| phép đo (engine tự báo) | reuse | ttft |
+|---|---|---|
+| gửi lại đúng 1 request scoder 11,309 tok | 99–100% | **80ms** (có pin slot) / 277–1,487ms |
+| gửi lại đúng 1 request OpenCode 8,578 tok | 100% | 74ms (pin) / 658–810ms |
+| cold prefill scoder 11,309 tok | 0% | 30,145–37,988ms |
+| cold prefill OpenCode 8,578 tok | 0% | 16,264–17,900ms |
+| scoder, đổi tools (24 → 3, prompt 5,113 tok) | 0% | 13,737ms |
+| llama.cpp 2 slot, 2 prompt xen kẽ, **không** pin | — | **2/6 lượt lạnh** |
+| như trên nhưng client gửi `slot_id: 0` | — | **0/6 lượt lạnh**, 75–81ms |
+
+Qua một đêm số liệu thì kết luận rất gọn: **một lượt 11.3k token hoặc tốn
+~30–38s hoặc tốn ~0.1s**, tuỳ prefix có được giữ nguyên và có rơi đúng slot
+đã cache hay không. "Ổn định" của OpenCode phần lớn là nó ít khi tự làm vỡ
+prefix của mình, cộng với ít lần prefill hơn mỗi lượt.
+
+### 13.4 11,309 token đó mua cái gì (đo từng block, không phải estimate)
+
+Hai cách đo cho cùng một đáp số, nên bảng này đáng tin:
+- `measure-prompt-anatomy.mjs blocks`: dựng lại message qua đúng
+  `buildRunMessages()`, tắt từng nguồn một, replay → hiệu số token.
+- thủ tục "nối đuôi": gửi prefix đã được gỡ mọi block động (ấm KV), rồi gửi
+  prefix + đúng một block; phần trùng được reuse nên mỗi phép đo chỉ mất
+  0.5–9s thay vì 40s.
+
+| thành phần | token | ghi chú |
+|---|---|---|
+| JSON schema 13 tool builtin | **2,876** | `task` 1,559c / `write_todos` 1,424c là hai mục lớn |
+| JSON schema 11 tool MCP (sau trần) | **4,263** | riêng `prompt-gate` ~1,800; `github-mcp` 9 tool ~2,460 |
+| REPO MAP (137 dòng, 316 file) | **2,558** | render cả "N files" + kích thước từng file |
+| chỉ dẫn lõi (identity/workflow/tools/safety/verification/output) | 954 | sàn thật sự, không cắt được |
+| skills advertised | 492 | 2,436c |
+| SUBAGENTS | 106 | |
+| MCP SERVERS (danh sách tên server) | 59 | |
+| message user "chào" + framing ChatML | 7 | đo trực tiếp: system một mình = 4,163 tok, full 0-tools = 4,170 |
+| **tổng** | **11,309** | = 4,170 (system+messages) + 7,139 (schema); tổng các Δ block (4,169) khớp 4,163 trong sai số ±6 |
+
+Nhìn theo tỷ lệ: **63% chi phí mở màn là tool schema** (7,139/11,309), trong đó
+4,263 là MCP; **23% là REPO MAP**. Phần "hướng dẫn cách làm việc" — thứ mọi
+người hay đổ lỗi — chỉ 954 token (8%). OpenCode cũng trả tiền cho docs của nó
+(khối `# Code Mode` 2,765 token) nhưng không trả gì cho tool MCP.
+
+### 13.5 Vì sao 11.3k fixed là vấn đề *cấu trúc*, không phải vấn đề tốc độ
+
+- Server: llama.cpp, `n_ctx = 16,128`, 2 slot (`/props`, `/slots`).
+- Fixed cost 11,309 ⇒ chỉ còn **4,819** token cho history + output.
+- `compaction.trigger = 0.8` ⇒ ngưỡng 12,902 token ⇒ history chỉ còn **~1,593**
+  token trước khi compaction chạy. Nghĩa là sau 1–2 tool result là compaction.
+- Mỗi lần compaction = thêm MỘT prefill ~7.6k token. Đo trong run thật (task B):
+  call #4 `prompt=7,584 cached=440 ttft=38,225ms` — call này rơi vào slot
+  không giữ prefix nên trả giá cold full.
+- Khép kín vòng xoáy: compaction viết lại history ⇒ prefix bước sau khác ⇒ mất
+  reuse ⇒ cold tiếp. Đây chính là cơ chế "6 giờ" còn sót lại, không phải token
+  nào bị "thừa" theo nghĩa vô nghĩa.
+
+Vì vậy câu trả lời cho "có bắt buộc 14k ctx không?" là: **không**, và con số
+11–14k cũng không phải *trần* mà là *chi phí trả trước*. Trần thật là 16,128
+của server. Chọn một trong hai (hoặc cả hai): nâng trần (`--ctx-size 32768`,
+`--parallel 1`), hoặc giảm chi phí trả trước xuống ~4–7k như mục 13.6 — cả hai
+đều để history đủ sống mà không cần compaction mỗi 2 bước.
+
+### 13.6 Đề xuất, xếp theo tiền đo được
+
+| # | việc | tiết kiệm (đo) | chi phí/rủi ro |
+|---|---|---|---|
+| P0-7 | **Không quảng bá schema MCP khi task không cần**: intent-gate (chat/đọc repo ⇒ `tools` chỉ builtin), hoặc theo kiểu OpenCode — catalog text + fetch schema khi model gọi | −4,263 tok/lượt (~13s cold, và ~0 khi đã ấm nhưng đỡ vỡ prefix) | model không biết tool MCP tồn tại cho tới khi được "mở"; cần một đường bật động (tool `enable_mcp_tools` hoặc tự mở khi model gọi tên đã quảng bá) |
+| P0-8 | **Một lượt chat = một prefill**: step text-only, không tool call, không plan pending ⇒ finish ngay (không đợi `<<CHAT_DONE>>`, không đợi `textOnlyStreakLimit` = 2) | −7,069 tok = −~20s cho mọi câu chào | phải giữ đúng guardrail bắt build khi CÓ sửa file (bài học `aec95ef`) — chỉ nới cho nhánh không sửa gì |
+| P0-9 | **Pin `slot_id` khi engine là llama.cpp** (một session một slot) | 2/6 lượt lạnh → 0/6; cold 30s → 80ms | chỉ đúng cho llama.cpp; server nhiều user thì phản tác dụng — bật theo `provider === "openai"` + probe `/slots.total_slots === 1..N` |
+| P1-5 | **REPO MAP ra khỏi fixed prompt khi task chat**, hoặc render mà không kèm "N files"+kích thước từng file (nội dung bền) | −2,558 tok và hết cảnh vỡ prefix khi có file mới | mất bớt khả năng "orient" — model phải gọi tool `repo_map`/`list_files` (đã có sẵn) |
+| P1-6 | Tool subset theo intent cho chat (bỏ `task`/`write_todos`/`web_fetch`/`load_skill` ≈ 1,000 tok) | −~1,000 tok | model không gợi ý được plan/subagent trong lượt chat (vốn không cần) |
+| P1-7 | `compaction.trigger` tính theo **history**, không theo tổng (fixed đã trừ sẵn), hoặc tự nâng trigger khi fixed/window > 0.6 | bỏ ~1 lần compaction mỗi 2 bước | phải chứng minh không vượt trần: history budget = window − fixed − output reserve |
+
+Không đề xuất bắt chước docs của OpenCode: docs của nó còn đắt hơn (2,765 token
+cho khối `# Code Mode`), cái nó rẻ hơn là **cấu trúc request** (không MCP
+schema) và **stability của prefix**.
+
+### 13.7 Cách tái hiện (và hai giả thuyết đã bị phản chứng)
+
+```bash
+# 1) proxy đứng giữa agent và llama.cpp
+SCODER_CAPTURE_DIR=/tmp/cap-scoder node scripts/capture-prompt-proxy.mjs 8099 http://0.0.0.0:8080 &
+# 2) chạy từng agent với baseUrl trỏ vào proxy (giữ nguyên rc thật)
+SCODER_CONFIG=/tmp/cap-scoder/rc.json SCODER_LOG_FILE=1 node dist/index.js -y --no-save "chào"
+OPENCODE_CONFIG=/tmp/cap-oc/cfg.json opencode run --standalone --model llama-cpp/qwen3.6:35b "chào"
+# 3) đo
+node scripts/measure-prompt-anatomy.mjs anatomy /tmp/cap-scoder,/tmp/cap-oc 1
+node scripts/measure-prompt-anatomy.mjs blocks  /tmp/cap-scoder 1
+node scripts/measure-prompt-anatomy.mjs warmcold /tmp/cap-scoder 1 --reps 3
+node scripts/measure-prompt-anatomy.mjs scatter /tmp/cap-scoder 1 4 --pin 0
+```
+
+Hai giả thuyết tôi nghiêng về trước khi đo và đã **sai**:
+
+1. *"Compaction gửi `tools: []` làm vỡ toàn bộ prefix."* Phản chứng: cùng
+   history, giữ tools = `12,279 tok cached=11,295 (92%)`; bỏ tools =
+   `5,140 tok cached=4,156 (81%)`. llama.cpp đặt schema SAU phần messages nên
+   bỏ tools chỉ mất đúng phần schema, hệ thống+history vẫn reuse. Cái làm mất
+   cache ở call compaction là **rải slot**, không phải `tools: []`.
+2. *".scoder/logs mỗi run thêm file vào REPO MAP ⇒ tự phá prefix."* Phản chứng:
+   `SKIP_DIRS` đã có `.scoder` (đo: map không chứa dòng `.scoder` nào). Prefix
+   vẫn đổi, nhưng là vì **file thật của repo** thay đổi kích thước/số lượng.
+
+Số liệu thô: `/private/var/folders/bl/8cp9kd_s0yx6q541cqdz3tpm0000gn/T/opencode/`
+— `prompt-capture/` (MCP tắt, 2 agent), `bc7/` (MCP bật, 2 agent), `bc15/`
+(chứng minh thêm 1 file đổi promptHash), `bc20/` (ma trận 5 task × block),
+`anatomy-all.json`, `final-table.json`.

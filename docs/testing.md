@@ -14,6 +14,8 @@ npm run eval               # 11 scripted end-to-end scenarios (mock LLM)
 node scripts/bench.mjs     # performance benchmark (see docs/performance.md)
 node scripts/bench-context.mjs       # wasted prefill: legacy vs current trim strategy
 node scripts/measure-mcp-schema.mjs  # tool-schema token cost
+node scripts/capture-prompt-proxy.mjs        # record exact request bodies + usage/ttft
+node scripts/measure-prompt-anatomy.mjs      # replay captures: anatomy|blocks|warmcold|scatter
 ```
 
 `npm test` does not run lint/typecheck — run them explicitly (or rely on CI).
