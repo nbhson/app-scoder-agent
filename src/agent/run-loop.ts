@@ -3,7 +3,7 @@ import type { BuildResult } from "../workspace/build.js";
 import { trimHistory, summariseOutput, historyPressure, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context/context.js";
 import { CHAT_DONE_MARKER } from "./guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
-import { shouldCompact, estimateTokens, estimateSchemaTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
+import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
 import { redactSecrets, type ChatMessage, type ChatResult, type ToolSpec } from "../llm/llm.js";
 import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
@@ -47,6 +47,9 @@ export interface RunLoopRuntime {
   recordLlmUsage(usage: ChatResult["usage"]): void;
   /** P1-1: tool specs đang quảng cáo — chi phí cố định của mỗi lượt gọi. */
   tools(): ToolSpec[];
+  /** P1-1: chi phí cố định/lượt (schema + chat template), ưu tiên số đo thật. */
+  fixedPromptTokens(): number;
+  fixedPromptSource(): "measured" | "estimate";
   emit(event: AgentEvent): void;
   emitContextEvent(force?: boolean): void;
   toolExecutor(): ToolExecutor;
@@ -84,7 +87,7 @@ export async function runAgentLoop(
     // Tool schema không nằm trong messages nên trước đây nó bị tính thiếu
     // ~16–20k token, compaction/trim kích hoạt muộn hơn thực tế đúng bằng
     // chừng đó.
-    const fixedPromptTokens = (): number => estimateSchemaTokens(runtime.tools());
+    const fixedPromptTokens = (): number => runtime.fixedPromptTokens();
     const window = compactionCfg?.contextWindow ?? 0;
     const trimBudget = compactionCfg
       ? historyTokenBudget(window, fixedPromptTokens(), runtime.config.maxTokens)
@@ -96,6 +99,9 @@ export async function runAgentLoop(
       type: "context_budget",
       contextWindow: window,
       toolSchemaTokens: fixedPromptTokens(),
+      /** "measured" = suy ra từ prompt_tokens thật của engine (có cả chat
+       * template); "estimate" = bộ đếm cl100k trên tool defs, trước lượt gọi đầu. */
+      fixedSource: runtime.fixedPromptSource(),
       outputReserve: runtime.config.maxTokens,
       trimBudget,
       tools: runtime.tools().length,

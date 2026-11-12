@@ -333,8 +333,47 @@ check:layers` ✓. Test mới: `test/perf-p0-p1.test.mjs` (16 case cho P0-2/P0-3
  orphan-safe cut), `test/guardrails.test.mjs` cho history-trim có điều kiện,
 `test/limits.test.mjs` hermetic qua `SCODER_CONFIG`.
 
-**Chưa đo:** run thật trên `qwen3.6:35b` cùng task mẫu (§10) — cần máy đó, cùng
-`num_ctx`, rồi so `llm_usage.perf` (`prefixReused`, `cached_tokens`) giữa hai session.
+### 8.2 Đo trên máy thật sau vòng fix thứ hai (13/11/2026)
+
+Bối cảnh: user build xong, chat "chào" vẫn **56 s** và "mất 12k ctx". Máy chạy
+llama.cpp (`http://0.0.0.0:8080/v1`), model `Qwen3.6-35B-A3B-UD-IQ2_M`,
+**`n_ctx` thật = 16.128**, `total_slots: 2`.
+
+Kết luận: không phải bug trim/schema — hai hiện tượng riêng, đều do chi phí cố
+định của một lượt gọi:
+
+| # | Phát hiện (đo bằng `/tokenize`, `prompt_tokens` của server) | Fix đã merge |
+|---|---|---|
+| 1 | `probeContextWindow` trả `null`: llama.cpp để window ở `default_generation_settings.n_ctx` (không phải top level) và `/props` cần API key → 401. Agent lập kế hoạch trên 128k trong khi server chỉ 16k | probe gửi Authorization, đọc per-slot `n_ctx` (không lấy `total_n_ctx`), `baseUrl.trim()` (rc thật có space thừa), ưu tiên `{base}/models` rồi `{origin}/v1/models`, và **warn** khi server cục bộ không probe được |
+| 2 | Prompt "chào" = **14.480 token**: schema 37 tool ≈ **10.320**, system prompt **4.156** (riêng repo map 2.561), task 2. Ước lượng cl100k chỉ ra 8.065 cho schema — thiếu ~22 % vì không tính token đóng gói ChatML (13 builtin: ước 2.086, thật 2.098 phần content nhưng tổng overhead 2.876) | `fixedPromptTokens()` = max(ước lượng, **số đo thật** `prompt_tokens − estimateTokens(messages)`), log `fixedSource: "measured"`; self-invalidating khi tool list đổi |
+| 3 | `outputReserve` = `maxTokens` 8.192 ăn half window 16k ⇒ `historyTokenBudget` rớt sàn 2.000 ⇒ trim gần như mỗi bước (đúng cái P0-1 tránh) | trần reserve = 25 % phần còn lại ⇒ budget 2.000 → 5.442 (37 tool) / 7.269 (24 tool) |
+| 4 | `mcpSchemaTokens: 6000` là con số tuyệt đối, không nhìn window: 6k schema + 4k system = 10k trên server 16k | `SCHEMA_SHARE_OF_WINDOW = 0.35`: cap hiệu dụng = min(rc, 35 % window − builtin schema). 16k ⇒ 6.000 → **3.558** ⇒ giữ 11/53 MCP tool, tổng 24 tool |
+| 5 | `promptChars` log đếm chuỗi hash chứ không đếm nội dung ⇒ không trả lời được "12k từ đâu ra" | tách `messageChars` / `schemaChars` + `fixedTokens` trong `llm_usage.perf` |
+
+**Số liệu sau fix** (cùng lệnh `chào`, cùng server, `--log-file`):
+
+| Mốc | input tokens | tools | cached | TTFT | total |
+|---|---|---|---|---|---|
+| Trước (session `20261113-000525-e1ed`, 53 tool, cold) | ~14.480 | 53 | 0 | — | **53–56 s** |
+| Sau P0–P2, cold (37 tool) | 14.480 | 37 | 0 | 36–38 s ở 11k token ⇒ ≈300 tok/s | 44 s |
+| Sau vòng 2, warm (37 tool, `n_ctx` đã probe đúng) | 14.480 | 37 | 14.476 | 0,12–0,15 s | **4,5–5,5 s** |
+| Sau vòng 2, cap theo window (24 tool) | **11.315** | 24 | — | 0,15 s warm | **4,5–6,9 s** |
+
+56 s → 44 s → 4,5–6,9 s: phần lớn 56 s là **prefill lạnh 14,5k token**, không phải
+history trim. Hai hệ quả thực tế cho máy này:
+
+- 90 % window bị chi phí cố định chiếm ⇒ muốn chat ngắn phản hồi nhanh phải giảm
+  tool: `"mcpTools": {"include": [...]}`, `"mcpServers": {"github-mcp": {"enabled": false}}`,
+  hoặc `"repoMap": false` (tiết kiệm 2.561 token).
+- `total_slots: 2` làm request rải slot nên prefix cache chỉ reuse khi trùng slot;
+  chạy server với `-np 1` nếu muốn warm ổn định. Không có API clear cache slot
+  (`POST /slots {"action":"clear"}` → 404), muốn đo cold phải restart server.
+
+**Regression guard vòng 2:** `npm test` = 953/953 (thêm 11 case: probe qua
+`node:http` mock `/props`+`/api/show` có API key, per-slot precedence, baseUrl
+có space, budget clamp, window-aware cap, calibration `measured`/`estimate`);
+typecheck sạch, lint 0 error (23 warning baseline), check:layers ✓ (372 imports),
+docs:check ✓.
 
 ---
 
@@ -369,10 +408,15 @@ Ghi chú: con số ~6 giờ là chiếu theo throughput prefill ~73 token/s củ
 | P0-2 | `src/tools/read-file.ts`, `src/tools/path-safety.ts`, `src/agent/tool-executor.ts` | cap theo dòng + footer offset; `setMaxToolOutputChars` cho test/rc |
 | P0-3 | `src/mcp/tool-filter.ts` (mới), `src/agent/mcp-bridge.ts`, `src/mcp/manager.ts` | `governedMcpSpecs()` là cửa duy nhất cho MCP tools (cả `run-loop` lẫn `run()`) |
 | P1-1 | `src/context/compaction.ts`, `src/llm/context-probe.ts` (mới), `src/config/config.ts` | `historyTokenBudget(window, fixed, reserve)`; probe chỉ chạy khi rc không đặt `contextWindow` |
+| P1-1 (vòng 2) | `src/llm/context-probe.ts` | gửi Authorization (llama.cpp chặn `/props` bằng 401), đọc `default_generation_settings.n_ctx` per-slot, `baseUrl.trim()`, vLLM thử `{base}/models` trước `{origin}/v1/models` |
+| P1-1 (vòng 2) | `src/agent.ts` → `fixedPromptTokens()` / `fixedPromptSource()` | chi phí cố định = max(ước lượng schema, `prompt_tokens − estimateTokens(messages)` lượt trước); self-invalidating khi tool list đổi (`setTools`) |
+| P1-1 (vòng 2) | `src/agent/mcp-bridge.ts` → `effectiveMcpSchemaCap()` | `SCHEMA_SHARE_OF_WINDOW = 0.35`, sàn `MIN_SCHEMA_CAP_TOKENS = 1200`; `governedMcpSpecs` là chỗ duy nhất áp trần |
+| P1-1 (vòng 2) | `src/context/context.ts` | reserve ≤ 25 % phần còn lại sau schema; `MIN_HISTORY_TOKENS` export |
+| P1-3 (vòng 2) | `src/llm/prompt-metrics.ts`, `src/agent.ts` | `messageChars` / `schemaChars` là char THẬT (trước đây `promptChars` đếm chuỗi hash); `llm_usage.perf.fixedTokens/fixedSource` |
 | P1-2 | `src/agent/verification.ts`, `src/workspace/fingerprint.ts` (mới), `src/workspace/build.ts` | cache in-memory per run; chỉ PASS |
 | P1-3 | `src/llm/prompt-metrics.ts` (mới), `src/llm/llm.ts`, `src/agent.ts` | `llm_usage.perf`; `Agent.lastPromptRef` giữ hash lượt trước |
 | P2 | `src/config/config.ts` | `isLocalBaseUrl`, `LOCAL_PROFILE_DEFAULTS`, `applyLocalProfile` |
-| Docs | `docs/performance.md`, `docs/configuration.md`, `docs/mcp.md`, `docs/guardrails.md`, `.scoderrc.example.json` | — |
+| Docs | `docs/performance.md`, `docs/configuration.md`, `docs/mcp.md`, `docs/guardrails.md`, `.scoderrc.example.json` | `docs/performance.md` có mục "Where the tokens go" + "Cold vs warm" |
 
 ### 11.2 Deviation so với §7 (và lý do)
 
@@ -388,6 +432,14 @@ Ghi chú: con số ~6 giờ là chiếu theo throughput prefill ~73 token/s củ
 4. `limits.mcpSchemaTokens` mặc định **0** thay vì một con số "an toàn": giữ đúng
    cam kết trong `docs/performance.md` là mỗi optimization phải đo được và roll-back
    được; local profile là nơi đủ cơ sở để bật 6k.
+5. **Vòng 2 tự siết trần MCP theo window (`SCHEMA_SHARE_OF_WINDOW`)** — đây là lần
+   duy nhất agent giữ ít tool hơn con số user ghi trong rc. Lý do: 6k là trần tuyệt
+   đối, còn trên window 16k thì 6k schema + 4k system prompt = 90 % context. Vẫn
+   opt-out được bằng `"mcpSchemaTokens": 0`, và agent in một dòng warn nêu rõ trần
+   bị hạ từ bao nhiêu xuống bao nhiêu.
+6. **Vòng 2 dùng `prompt_tokens` của engine làm sự thật** thay vì tin bộ đếm. Rủi ro
+   duy nhất là engine báo sai ⇒ budget chặt hơn mức cần (an toàn hơn là lỏng).
+   Số đo bị loại khi `prompt_tokens − estimateTokens(messages) <= 0`.
 
 ### 11.3 Roll-back từng món
 
@@ -397,6 +449,9 @@ Ghi chú: con số ~6 giờ là chiếu theo throughput prefill ~73 token/s củ
 | Local profile | `"localProfile": false` |
 | Verify cache | `"verifyCache": false` |
 | Ngân sách output tool | `"limits": {"toolOutputChars": 20000}` (về trần cũ) |
+| Tự siết trần MCP theo window | `"limits": {"mcpSchemaTokens": 0}` (tắt luôn trần) — hoặc đặt `"contextWindow"` lớn để 35 % không binding |
+| Calibration từ `prompt_tokens` | `fixedPromptTokens()` luôn là `max(ước lượng, số đo)`; muốn vô hiệu, đặt `contextWindow` tường minh và tắt MCP cap — hoặc sửa `Agent.fixedPromptTokens()` trả `estimateSchemaTokens(this.tools)` (một dòng) |
+| Probe window | đặt `"contextWindow"` tường minh trong rc |
 | Trim chiến lược mới | `historyTrimRule` là rule duy nhất — xoá nó khỏi `DEFAULT_RULES` để trở lại trim mỗi bước, nhưng **đừng**: đây là fix lớn nhất |
 
 `contextWindow` probe: đặt số tường minh là mọi probe bị bỏ qua.
@@ -415,12 +470,19 @@ không dùng `buildStopRule`. Sau P0–P2:
 ### 11.5 Cách tự kiểm chứng trên máy
 
 ```bash
-npm run build && npm test           # 942 unit + e2e + MCP smoke
+npm run build && npm test           # 953 unit + e2e + MCP smoke
 node scripts/measure-mcp-schema.mjs            # baseline schema
 node scripts/measure-mcp-schema.mjs --cap 6000 # projected sau trần
 node scripts/bench-context.mjs                 # wasted prefill: legacy vs hiện tại
-# Run thật với model local:
-#   grep '"type":"llm_usage"' .scoder/logs/<session>.jsonl | jq '.perf'
-#   prefixReused: false + cached_tokens: 0 = lượt đó re-prefill toàn bộ
+# Run thật với model local (cần --log-file hoặc SCODER_LOG_FILE=1):
+SCODER_NO_APIKEY_WARNING=1 node dist/index.js --log-file --no-save -y "chào"
+#   grep '"type":"context_window"' .scoder/logs/<session>.jsonl  → n_ctx thật của server
+#   grep '"type":"context_budget"' .scoder/logs/<session>.jsonl  → tools / trimBudget / fixedSource
+#   grep '"type":"llm_usage"' .scoder/logs/<session>.jsonl | jq '.usage, .perf'
+#     cached_tokens: 0 + ttftMs lớn   = lượt đó prefill lại toàn bộ (cold)
+#     cached_tokens ≈ input_tokens    = KV-cache reuse tốt (warm)
+#     fixedSource "measured"          = budget đang theo số đo thật của engine
+# Server thật, để tự kiểm tra estimator:
+#   curl -s -H "Authorization: Bearer $KEY" localhost:8080/props | jq '.default_generation_settings.n_ctx, .total_slots'
 ```
 

@@ -20,7 +20,12 @@ import type { ChatMessage, ToolSpec } from "./llm.js";
 export interface PromptMetrics {
   messages: number;
   tools: number;
+  /** Char thật của cả prompt (message + tool defs). */
   promptChars: number;
+  /** Char phần messages (system prompt + repo map + history + task). */
+  messageChars: number;
+  /** Char phần tool schema — nhân với ~3.5 char/token là ra chi phí cố định. */
+  schemaChars: number;
   /** Hash toàn bộ prompt (tools + history) — đổi là prompt khác. */
   promptHash: string;
   /** Hash riêng của phần history (không tính tools). */
@@ -90,10 +95,26 @@ export function promptMetrics(
   const historyText = hashes.join("");
   const toolsText = serializeTools(tools);
   const cmp = previous ? commonPrefixLength(previous.messageHashes, hashes) : null;
+  // Char thật của prompt (nội dung message + tool defs) — để trả lời "12k token
+  // này đến từ đâu". KHÔNG dùng historyText (chuỗi hash) ở đây.
+  let messageChars = 0;
+  for (const m of messages ?? []) {
+    messageChars += (m.content ?? "").length + (m.tool_call_id ?? "").length;
+    for (const tc of m.tool_calls ?? []) {
+      const call = tc as unknown as {
+        name?: string;
+        arguments?: string;
+        function?: { name?: string; arguments?: string };
+      };
+      messageChars += (call.name ?? call.function?.name ?? "").length + (call.arguments ?? call.function?.arguments ?? "").length;
+    }
+  }
   return {
     messages: hashes.length,
     tools: (tools ?? []).length,
-    promptChars: toolsText.length + historyText.length,
+    promptChars: messageChars + toolsText.length,
+    messageChars,
+    schemaChars: toolsText.length,
     promptHash: short(toolsText + "\u0004" + historyText),
     historyHash: short(historyText),
     messageHashes: hashes,

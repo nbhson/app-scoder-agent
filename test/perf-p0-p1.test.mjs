@@ -5,13 +5,16 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { estimateTokens, estimateSchemaTokens, shouldCompact, DEFAULT_COMPACTION } from "../dist/context/compaction.js";
+import { historyTokenBudget } from "../dist/context/context.js";
 import { matchToolPattern, toolAllowed, filterToolNames } from "../dist/mcp/tool-filter.js";
 import { capMcpSchemaTokens } from "../dist/agent/mcp-bridge.js";
 import { workspaceFingerprint } from "../dist/workspace/fingerprint.js";
 import { normalizeUsage } from "../dist/llm/llm.js";
+import { probeContextWindow, resetContextProbeCache } from "../dist/llm/context-probe.js";
 import { promptMetrics } from "../dist/llm/prompt-metrics.js";
 import { toolReadFile } from "../dist/tools/read-file.js";
 import { setMaxToolOutputChars, MAX_TOOL_OUTPUT_CHARS } from "../dist/tools/path-safety.js";
@@ -275,8 +278,89 @@ describe("P1-2: workspaceFingerprint + cache verify", () => {
   });
 });
 
-describe("P1-3: usage + prompt metrics", () => {
-  it("normalizeUsage nâng cached_tokens từ prompt_tokens_details", () => {
+describe("P1-1: probeContextWindow đọc đúng server thật", () => {
+  let srv;
+  let port;
+  const MODEL = "qwen3.6:35b";
+
+  const serve = (props) =>
+    new Promise((resolve) => {
+      srv = createServer((req, res) => {
+        const auth = req.headers.authorization || "";
+        if (req.method === "GET" && req.url === "/props") {
+          // llama.cpp bật --api-key: /props cũng phải có Bearer mới trả 200
+          if (auth !== "Bearer secret") {
+            res.writeHead(401, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { code: 401, message: "Invalid API Key" } }));
+            return;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(props));
+          return;
+        }
+        if (req.method === "POST" && req.url === "/api/show") {
+          // Ollama-only endpoint: llama.cpp trả 404, probe phải bỏ qua
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "not found" } }));
+          return;
+        }
+        res.writeHead(404);
+        res.end("{}");
+      });
+      srv.listen(0, "127.0.0.1", () => {
+        port = srv.address().port;
+        resolve();
+      });
+    });
+
+  afterEach(() => {
+    if (srv) srv.close();
+    srv = undefined;
+    resetContextProbeCache();
+  });
+
+  it("llama.cpp: n_ctx nằm trong default_generation_settings (không phải top level)", async () => {
+    await serve({ default_generation_settings: { n_ctx: 16128 }, total_slots: 2 });
+    const r = await probeContextWindow(`http://127.0.0.1:${port}/v1`, MODEL, 1500, { apiKey: "secret" });
+    assert.equal(r.source, "llama.cpp");
+    assert.equal(r.tokens, 16128, `phải đọc 16128, nhận ${JSON.stringify(r)}`);
+    assert.match(r.detail, /2 slot/, "nhiều slot = KV-cache rải nhau, phải nói rõ");
+  });
+
+  it("thiếu API key -> /props 401 -> trả null (giữ fallback, không đoán sai)", async () => {
+    await serve({ default_generation_settings: { n_ctx: 16128 }, total_slots: 1 });
+    assert.equal(await probeContextWindow(`http://127.0.0.1:${port}/v1`, MODEL, 1500), null);
+  });
+
+  it("total_n_ctx không được thắng per-slot (window của MỘT hội thoại)", async () => {
+    await serve({ default_generation_settings: { n_ctx: 16128 }, total_n_ctx: 32256, total_slots: 2 });
+    const r = await probeContextWindow(`http://127.0.0.1:${port}/v1`, MODEL, 1500, { apiKey: "secret" });
+    assert.equal(r.tokens, 16128);
+  });
+
+  it("baseUrl có khoảng trắng thừa (rc thật) vẫn probe được", async () => {
+    await serve({ default_generation_settings: { n_ctx: 8192 }, total_slots: 1 });
+    const r = await probeContextWindow(` http://127.0.0.1:${port}/v1`, MODEL, 1500, { apiKey: "secret" });
+    assert.equal(r.tokens, 8192);
+  });
+});
+
+describe("P1-1: historyTokenBudget không để reply ăn hết history", () => {
+  it("window 16k + schema 8k + reserve 8k -> history còn ~5.4k, không rớt sàn", () => {
+    const b = historyTokenBudget(16_128, 8_065, 8_192);
+    assert.ok(b > 4_000, `ngân sách history ${b} quá nhỏ (sàn 2000)`);
+    assert.ok(b < 16_128 * 0.95 - 8_065, "vẫn phải trừ chỗ cho reply");
+  });
+  it("reserve nhỏ thì trừ đúng theo reserve (không đổi hành vi cũ)", () => {
+    assert.equal(historyTokenBudget(32_000, 0, 2_000), Math.floor(32_000 * 0.95) - 2_000);
+    assert.equal(historyTokenBudget(131_072), 124_518, "1 tham số: scale theo window như trước");
+  });
+  it("window không đủ chứa schema -> sàn 2k, không âm", () => {
+    assert.equal(historyTokenBudget(4_000, 9_000, 8_192), 2_000);
+  });
+});
+
+describe("P1-3: usage + prompt metrics", () => {  it("normalizeUsage nâng cached_tokens từ prompt_tokens_details", () => {
     assert.equal(normalizeUsage(undefined), undefined);
     const u = normalizeUsage({ prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 80 } });
     assert.equal(u.cached_tokens, 80);
@@ -305,5 +389,100 @@ describe("P1-3: usage + prompt metrics", () => {
     assert.equal(m4.prefixReused, false, "xoá message cũ nhất cũng đổi prefix");
     assert.equal(m4.tools, 1);
     assert.ok(m4.promptChars > 0);
+  });
+});
+
+describe("P1-1+: trần MCP schema co theo context window THẬT", () => {
+  it("effectiveMcpSchemaCap: 0 = tắt, window lớn = giữ trần rc, window 16k = siết", async () => {
+    const { effectiveMcpSchemaCap, SCHEMA_SHARE_OF_WINDOW } = await import("../dist/agent/mcp-bridge.js");
+    assert.equal(effectiveMcpSchemaCap(0, 16128, 2086), 0, "trần 0 = người dùng tắt, không đoán");
+    assert.equal(effectiveMcpSchemaCap(6000, 0, 2086), 6000, "chưa biết window -> giữ nguyên rc");
+    assert.equal(effectiveMcpSchemaCap(6000, 131072, 2086), 6000, "window lớn: 35% còn rộng hơn trần rc");
+    const tight = effectiveMcpSchemaCap(6000, 16128, 2086);
+    assert.ok(tight > 1000 && tight < 6000, `16k window phải siết: ${tight}`);
+    assert.equal(tight, Math.floor(16128 * SCHEMA_SHARE_OF_WINDOW) - 2086);
+    assert.equal(effectiveMcpSchemaCap(6000, 4096, 3000), 1200, "không siết xuống dưới sàn 1200");
+  });
+
+  it("governedMcpSpecs: window nhỏ -> giữ ít tool hơn trần rc, warn đúng một lần", async () => {
+    const { governedMcpSpecs } = await import("../dist/agent/mcp-bridge.js");
+    const specs = Array.from({ length: 30 }, (_, i) => spec(`mcp__s__w${i}`, "w".repeat(900) + i));
+    const each = estimateSchemaTokens([specs[0]]);
+    const lines = [];
+    const runtime = (contextWindow) => ({
+      config: { limits: { mcpSchemaTokens: each * 20 }, contextWindow },
+      reporter: { warn: (l) => lines.push(l) },
+      getMcp: () => ({ toToolSpecs: () => specs, resourceToolSpecs: () => [] }),
+    });
+    const big = governedMcpSpecs(runtime(131072));
+    assert.ok(big.length <= 20 && big.length > 10, `window lớn: theo trần rc (${big.length})`);
+    const small = governedMcpSpecs(runtime(16128));
+    assert.ok(small.length < big.length, `window 16k phải giữ ít hơn: ${small.length} < ${big.length}`);
+    assert.ok(lines.some((l) => /35% window/.test(l)), "phải giải thích vì sao trần bị hạ");
+    const n = lines.length;
+    governedMcpSpecs(runtime(16128));
+    assert.equal(lines.length, n, "cùng signature -> không warn lặp");
+  });
+});
+
+describe("P1-1+: calibration chi phí cố định từ prompt_tokens của engine", () => {
+  const mkAgent = async (promptTokens) => {
+    const { Agent } = await import("../dist/agent.js");
+    const wd = mkdtempSync(join(tmpdir(), "scoder-calib-"));
+    class ScriptedClient {
+      get model() { return "scripted/mock"; }
+      async chat() {
+        return {
+          message: { role: "assistant", content: "xong", stop_reason: "stop", tool_calls: undefined },
+          usage: { prompt_tokens: promptTokens, completion_tokens: 5 },
+        };
+      }
+      async *streamChat() {
+        yield { contentDelta: "xong", done: false };
+        yield { final: await this.chat(), done: true };
+      }
+    }
+    const agent = new Agent({
+      baseUrl: "https://calib.invalid/v1",
+      apiKey: "k",
+      model: "scripted/mock",
+      provider: "openai",
+      workdir: wd,
+      buildCmd: null,
+      maxSteps: 3,
+      yes: true,
+      noSave: true,
+      snapshots: false,
+      stream: false,
+      permissionMode: "auto",
+      clientFactory: () => new ScriptedClient(),
+    });
+    return { agent, wd };
+  };
+
+  it("engine báo số lớn -> dùng số đo thật (có token đóng gói của chat template)", async () => {
+    const { allToolSpecs } = await import("../dist/tools/registry.js");
+    const { agent, wd } = await mkAgent(20000);
+    try {
+      assert.equal(agent.fixedPromptSource(), "estimate", "trước lượt gọi đầu chỉ có ước lượng");
+      await agent.run("chào");
+      assert.equal(agent.fixedPromptSource(), "measured");
+      assert.ok(
+        agent.fixedPromptTokens() > estimateSchemaTokens(allToolSpecs()),
+        `phải lớn hơn ước lượng schema: ${agent.fixedPromptTokens()}`,
+      );
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
+  });
+
+  it("mock báo prompt_tokens nhỏ -> không tin bừa, giữ ước lượng", async () => {
+    const { agent, wd } = await mkAgent(10);
+    try {
+      await agent.run("chào");
+      assert.equal(agent.fixedPromptSource(), "estimate");
+    } finally {
+      rmSync(wd, { recursive: true, force: true });
+    }
   });
 });

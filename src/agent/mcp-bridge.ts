@@ -30,6 +30,30 @@ export interface McpBridgeRuntime {
 
 let schemaCapWarned = new Set<string>();
 
+/** Trần schema không bao giờ siết xuống dưới mức này (còn ~3 tool nhỏ). */
+const MIN_SCHEMA_CAP_TOKENS = 1_200;
+/**
+ * P0-3+: tỷ lệ window dành cho TOÀN BỘ tool schema (builtin + MCP). Đo trên
+ * máy thật (llama.cpp -c 16384, 37 tools): chi phí schema THẬT 10.305 token
+ * = 64% window → history chỉ còn dăm nghìn token, trim liên tục và mỗi lần
+ * trim phá một KV-cache. 35% là mức để history + reply còn đất thở; window
+ * lớn (≥64k) thì con số này thường không binding nên trần cứng trong rc vẫn
+ * thắng.
+ */
+export const SCHEMA_SHARE_OF_WINDOW = 0.35;
+
+/**
+ * Trần MCP hiệu dụng = min(trần rc khai báo, 35% window − phần builtin).
+ * 0 = tắt trần (tôn trọng ý người dùng).
+ */
+export function effectiveMcpSchemaCap(declaredCap: number, contextWindow: number, builtinTokens: number): number {
+  if (declaredCap <= 0) return 0;
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return declaredCap;
+  const share = Math.floor(contextWindow * SCHEMA_SHARE_OF_WINDOW) - builtinTokens;
+  if (share >= declaredCap) return declaredCap;
+  return Math.max(MIN_SCHEMA_CAP_TOKENS, share);
+}
+
 /**
  * P0-3 (RC-2): trần token cho toàn bộ MCP schema gửi mỗi lượt.
  *
@@ -39,6 +63,7 @@ let schemaCapWarned = new Set<string>();
  * ngân sách, phần còn lại không được quảng cáo (model vẫn gọi được tool đã
  * giữ; tool bị bỏ sẽ nhận "not available" — kèm danh sách thay thế).
  * Mặc định 0 = tắt (không đổi hành vi cũ); local profile bật 6.000.
+ * Trần áp dụng trên thực tế có thể thấp hơn — xem `effectiveMcpSchemaCap`.
  */
 export function capMcpSchemaTokens(specs: ToolSpec[], capTokens: number, report: (line: string) => void): ToolSpec[] {
   if (capTokens <= 0 || specs.length === 0) return specs;
@@ -78,9 +103,26 @@ export function capMcpSchemaTokens(specs: ToolSpec[], capTokens: number, report:
 export function governedMcpSpecs(runtime: McpBridgeRuntime): ToolSpec[] {
   const manager = runtime.getMcp();
   const specs = manager ? [...manager.toToolSpecs(), ...manager.resourceToolSpecs()] : [];
+  const declared = runtime.config.limits?.mcpSchemaTokens ?? 0;
+  // Window THẬT (rc `contextWindow` hoặc probe P1-1) siết trần mạnh hơn trần
+  // cứng khi server nhỏ — xem comment SCHEMA_SHARE_OF_WINDOW.
+  const window = runtime.config.contextWindow ?? 0;
+  const builtinTokens = estimateSchemaTokens(allToolSpecs());
+  const cap = effectiveMcpSchemaCap(declared, window, builtinTokens);
+  if (declared > 0 && cap < declared) {
+    const signature = `share:${window}:${cap}`;
+    if (!schemaCapWarned.has(signature)) {
+      schemaCapWarned.add(signature);
+      runtime.reporter.warn(
+        `context window ${window} token: trần MCP schema hạ từ ${declared} → ${cap} token ` +
+          `(35% window trừ ${builtinTokens} token builtin — giới hạn "SCHEMA_SHARE_OF_WINDOW", ` +
+          `đặt "limits": {"mcpSchemaTokens": 0} để tắt trần).`,
+      );
+    }
+  }
   return capMcpSchemaTokens(
     filterToolNames(specs, (spec) => spec.function.name, runtime.config.mcpTools),
-    runtime.config.limits?.mcpSchemaTokens ?? 0,
+    cap,
     (line) => runtime.reporter.warn(line),
   );
 }

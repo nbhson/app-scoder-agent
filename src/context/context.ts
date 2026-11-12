@@ -17,16 +17,25 @@ export const MAX_HISTORY_TOKENS = 90_000;
  * 0.8) so semantic compaction gets a chance to run first.
  */
 export const HISTORY_TRIM_FRACTION = 0.95;
+/** Sàn dưới của ngân sách history — window quá nhỏ thì history cũng phải còn đủ sống. */
+export const MIN_HISTORY_TOKENS = 2_000;
 /**
- * Mechanical trim budget for a given context window (floor 2k).
+ * Mechanical trim budget for a given context window (floor MIN_HISTORY_TOKENS).
  *
  * `fixedTokens` (P1-1/RC-4): phần prompt cố định KHÔNG nằm trong messages —
  * quan trọng nhất là tool schema (~16k token với 46 tool MCP). `outputReserve`:
  * chỗ trống cho reply (config.maxTokens). Với 1 tham số, hành vi giữ nguyên
  * như trước (chỉ scale theo window) để tương thích test và rollback.
+ *
+ * Reply bị trần ở 25% phần còn lại: với window nhỏ (llama.cpp -c 16384) mà để
+ * maxTokens 8192 ăn hết thì ngân sách history rớt xuống sàn 2k → trim gần như
+ * mỗi bước, đúng cái mà P0-1 sinh ra để tránh.
  */
 export function historyTokenBudget(contextWindow: number, fixedTokens = 0, outputReserve = 0): number {
-  return Math.max(2_000, Math.floor(contextWindow * HISTORY_TRIM_FRACTION - fixedTokens - outputReserve));
+  const usable = Math.floor(contextWindow * HISTORY_TRIM_FRACTION) - fixedTokens;
+  if (usable <= 0) return MIN_HISTORY_TOKENS;
+  const reserve = Math.min(outputReserve, Math.floor(usable * 0.25));
+  return Math.max(MIN_HISTORY_TOKENS, Math.floor(usable - reserve));
 }
 /**
  * P0-1 (hysteresis): khi trim đã cần thiết, cắt xuống còn fraction này của

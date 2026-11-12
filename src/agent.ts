@@ -20,7 +20,7 @@ import { probeContextWindow, type ProbedWindow } from "./llm/context-probe.js";
 import { promptMetrics, type PromptMetrics } from "./llm/prompt-metrics.js";
 import { JsonlLogger } from "./session/logger.js";
 import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
-import { loadRcFile } from "./config/config.js";
+import { loadRcFile, isLocalBaseUrl } from "./config/config.js";
 import {McpManager} from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./context/skills.js";
@@ -650,7 +650,7 @@ export class Agent {
       const window = this.compactionSettings().contextWindow;
       // P1-1: token áp lực context phải tính cả tool schema (chi phí cố định
       // mỗi lượt) — UI/`/compact` mới hiện đúng mức "còn thở" thật.
-      const tokens = estimateTokens(this.messages, estimateSchemaTokens(this.tools));
+      const tokens = estimateTokens(this.messages, this.fixedPromptTokens());
       const pct = window > 0 ? Math.min(100, Math.round((tokens / window) * 100)) : 0;
       this.emit({ type: "context", tokens, window, pct, ...(compacted ? { compacted: true } : {}) });
     } catch {
@@ -658,7 +658,8 @@ export class Agent {
     }
   }
 
-  private recordLlmUsage(usage: ChatResult["usage"]): void {    if (!usage) return;
+  private recordLlmUsage(usage: ChatResult["usage"]): void {
+    if (!usage) return;
     const input = usage.prompt_tokens ?? 0;
     const output = usage.completion_tokens ?? 0;
     const cached = usage.cached_tokens ?? 0;
@@ -666,6 +667,14 @@ export class Agent {
     // của compaction đi đường khác nên không có perf).
     const perf = this.lastPerf;
     this.lastPerf = null;
+    // P1-1 calibration: engine vừa báo đúng số token nó thấy. Lấy số đó trừ
+    // đi phần messages mình ước lượng = chi phí cố định THẬT (tool schema +
+    // chat template + sai số bộ đếm). bộ đếm cl100k đo phần schema rất chuẩn
+    // (lệch ~1% trên Qwen3.6-35B) nhưng không biết token đóng gói của template.
+    if (perf && input > 0 && perf.messageTokens > 0) {
+      const fixed = input - perf.messageTokens;
+      if (fixed > 0) this.measuredFixedTokens = fixed;
+    }
     this.usageTotals.calls += 1;
     this.usageTotals.inputTokens += input;
     this.usageTotals.outputTokens += output;
@@ -689,11 +698,17 @@ export class Agent {
             perf: {
               ttftMs: perf.ttftMs,
               callMs: perf.callMs,
+              /** Chi phí cố định/lượt mà agent đang dùng để tính ngân sách. */
+              fixedTokens: this.fixedPromptTokens(),
+              fixedSource: this.fixedPromptSource(),
               /** token/s vùng prefill — TTFT ≈ prefill trên máy local. */
               prefillTokPerSec: perf.ttftMs > 0 && input > 0 ? Math.round((input / perf.ttftMs) * 1000) : undefined,
               ...(perf.prompt
                 ? {
                     promptChars: perf.prompt.promptChars,
+                    /** phần chat (system+repo map+history+task) vs phần tool defs */
+                    messageChars: perf.prompt.messageChars,
+                    schemaChars: perf.prompt.schemaChars,
                     promptMessages: perf.prompt.messages,
                     promptTools: perf.prompt.tools,
                     promptHash: perf.prompt.promptHash,
@@ -732,19 +747,48 @@ export class Agent {
    * giữa hai lượt = có gì đó sửa history ⇒ mất KV-cache (RC-1).
    * Consumed one-shot bởi recordLlmUsage (lượt summarizer không có perf).
    */
-  private pendingPerf: { t0: number; ttftMs: number; prompt: PromptMetrics | null } | null = null;
-  private lastPerf: { ttftMs: number; callMs: number; prompt: PromptMetrics | null } | null = null;
+  private pendingPerf: { t0: number; ttftMs: number; messageTokens: number; prompt: PromptMetrics | null } | null = null;
+  private lastPerf: { ttftMs: number; callMs: number; messageTokens: number; prompt: PromptMetrics | null } | null = null;
+  /**
+   * P1-1 (calibration): chi phí cố định của một lượt gọi ĐO TỪ CHÍNH ENGINE.
+   * = prompt_tokens thật − số token mình ước lượng cho messages. Phần chênh
+   * gồm tool schema + token đóng gói của chat template (ChatML) + sai số bộ
+   * đếm. Đo trên Qwen3.6-35B: schema ước lượng đúng ~1%, nhưng prompt thật
+   * lớn hơn ước lượng tổng ~19% vì chat template. null = chưa có phép đo.
+   */
+  private measuredFixedTokens: number | null = null;
+
+  /**
+   * Chi phí cố định mỗi lượt (không nằm trong history) để trừ khỏi window khi
+   * tính ngân sách trim/compaction. Lấy max giữa ước lượng tool schema và
+   * phép đo thật từ engine — phép đo chỉ có thể SIẾT ngân sách, không bao giờ
+   * mở rộng hơn mức ước lượng (an toàn với RC-4).
+   */
+  fixedPromptTokens(): number {
+    return Math.max(estimateSchemaTokens(this.tools), this.measuredFixedTokens ?? 0);
+  }
+
+  /** Nguồn của con số trên — ghi vào log để giải thích ngân sách. */
+  fixedPromptSource(): "measured" | "estimate" {
+    return this.measuredFixedTokens !== null && this.measuredFixedTokens >= estimateSchemaTokens(this.tools)
+      ? "measured"
+      : "estimate";
+  }
 
   /** One LLM turn (wrapper) — see chatWithStreamInner for the streaming logic. */
   private async chatWithStream(): Promise<ChatResult & { incomplete?: boolean }> {
     const t0 = Date.now();
     let prompt: PromptMetrics | null = null;
+    // Số token mình ước lượng cho phần messages — dùng để suy ra chi phí cố
+    // định thật của engine khi usage quay về (P1-1 calibration).
+    let messageTokens = 0;
     try {
+      messageTokens = estimateTokens(this.messages);
       prompt = promptMetrics(this.messages, this.tools);
     } catch {
       // metrics không được phép làm hỏng lượt gọi
     }
-    this.pendingPerf = { t0, ttftMs: 0, prompt };
+    this.pendingPerf = { t0, ttftMs: 0, messageTokens, prompt };
     // Keep the per-message hashes for the NEXT call: `prefixReused` in the log
     // is the direct answer to "KV-cache còn dùng được không?" (RC-1).
     this.lastPromptRef = prompt ? { messageHashes: prompt.messageHashes } : null;
@@ -753,7 +797,7 @@ export class Agent {
     } finally {
       const p = this.pendingPerf;
       this.pendingPerf = null;
-      if (p) this.lastPerf = { ttftMs: p.ttftMs, callMs: Date.now() - t0, prompt: p.prompt };
+      if (p) this.lastPerf = { ttftMs: p.ttftMs, callMs: Date.now() - t0, messageTokens: p.messageTokens, prompt: p.prompt };
     }
   }
 
@@ -856,7 +900,11 @@ export class Agent {
       pendingAllowedTools: this.promptContext.pendingTools(),
       getMcp: () => this.mcp,
       setMcp: (manager) => { this.mcp = manager; },
-      setTools: (tools) => { this.tools = tools; },
+      setTools: (tools) => {
+        this.tools = tools;
+        // Tool list đổi ⇒ chi phí cố định đo trước không còn đúng nữa.
+        this.measuredFixedTokens = null;
+      },
       emit: (event) => this.emit(event),
       confirmMcpTool: (name) => this.confirmMcpTool(name),
     };
@@ -877,11 +925,24 @@ export class Agent {
     if (this.config.contextWindow) return;
     let probe: ProbedWindow | null = null;
     try {
-      probe = await probeContextWindow(this.config.baseUrl, this.client.model);
+      // Server local vẫn có thể bật --api-key: /props trả 401 nếu không gửi
+      // Authorization, và probe im lặng => agent tưởng còn 128k (RC-4 cũ).
+      probe = await probeContextWindow(this.config.baseUrl, this.client.model, 1_500, {
+        apiKey: this.config.apiKey,
+      });
     } catch {
       // probe là best-effort — không được làm hỏng run
     }
-    if (!probe) return;
+    if (!probe) {
+      if (isLocalBaseUrl(this.config.baseUrl)) {
+        const catalog = contextWindowFor(this.config.provider, this.config.model);
+        this.reporter.warn(
+          `không probe được context window của server cục bộ — đang dùng fallback ${catalog} token. ` +
+            `Nếu nhỏ hơn (vd. llama.cpp -c 16384 / Ollama num_ctx), đặt "contextWindow" trong rc để trim/compaction tính đúng.`,
+        );
+      }
+      return;
+    }
     this.config.contextWindow = probe.tokens;
     this.logger.log({ type: "context_window", tokens: probe.tokens, source: probe.source, detail: probe.detail, model: this.client.model });
     const catalog = contextWindowFor(this.config.provider, this.config.model);
@@ -1156,6 +1217,8 @@ export class Agent {
       chatWithStream: () => this.chatWithStream(),
       recordLlmUsage: (usage) => this.recordLlmUsage(usage),
       tools: () => this.tools,
+      fixedPromptTokens: () => this.fixedPromptTokens(),
+      fixedPromptSource: () => this.fixedPromptSource(),
       emit: (event) => this.emit(event),
       emitContextEvent: (force) => this.emitContextEvent(force),
       toolExecutor: () => this.toolExecutor(),

@@ -3,7 +3,7 @@
 ## Run Tests
 
 ```bash
-npm test          # build + full unit suite + e2e + MCP smoke (942 tests)
+npm test          # build + full unit suite + e2e + MCP smoke (953 tests)
 npm run lint      # ESLint flat config
 npm run typecheck # tsc --noEmit
 npm run build     # tsc
@@ -34,7 +34,7 @@ Tests are auto-discovered via `test/*.test.mjs`:
 | `test/core.test.mjs` | Diff, retry, context trimming (`trimHistory` identity/hysteresis/orphan-safe cuts), @file mentions |
 | `test/config.test.mjs` | Env/rc/cli precedence, logFile mapping |
 | `test/limits.test.mjs` | rc `limits` parse/validate + new keys (`toolOutputChars`, `mcpSchemaTokens`, `mcpTools`, `verifyCache`, `contextWindow`) + local model profile — hermetic via `SCODER_CONFIG` |
-| `test/perf-p0-p1.test.mjs` | Performance fixes: schema-aware token estimate, MCP tool filter + schema cap, `read_file` line-aware truncation, workspace fingerprint + verification cache, usage/prompt metrics |
+| `test/perf-p0-p1.test.mjs` | Performance fixes: schema-aware token estimate, MCP tool filter + schema cap (incl. the window-aware share cap), `read_file` line-aware truncation, workspace fingerprint + verification cache, usage/prompt metrics, `probeContextWindow` against a real `node:http` mock (`/props`, `/api/show`, API key), `historyTokenBudget` clamping, fixed-cost calibration |
 | `test/session.test.mjs` | Session store, prune, resolve |
 | `test/cost.test.mjs` | Token usage & cost aggregation |
 | `test/guardrails.test.mjs` | Guardrail Engine: rule registry, thresholds |

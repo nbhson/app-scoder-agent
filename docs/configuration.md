@@ -84,7 +84,7 @@ Numeric thresholds, all optional. Defaults live in `LIMIT_DEFAULTS`
 | `toolConcurrency` | 4 | Parallel tool calls per step |
 | `renderCap` | 200 | Tail items rendered by the TUI |
 | `toolOutputChars` | 8000 | Budget for **one tool result in history**; `read_file` cuts at it line-aware and prints the `offset` to continue with |
-| `mcpSchemaTokens` | 0 (= off) | Ceiling for all MCP tool schemas advertised per call; tools past the ceiling are not advertised (warning names the count) |
+| `mcpSchemaTokens` | 0 (= off) | Ceiling for all MCP tool schemas advertised per call; tools past the ceiling are not advertised (warning names the count). On a small context window the effective ceiling is lowered automatically: total schema (builtins + MCP) is kept ≤ 35 % of the probed window |
 | `buildTimeoutSecs` | 600 | Timeout of one verify command (build/test/typecheck/lint) |
 
 ## Local Models
