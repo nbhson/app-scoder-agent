@@ -3,6 +3,37 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.9] — 2026-11-13
+
+### Fixed
+- **TUI sidebar froze after the second question** — every entry point into the
+  run loop (`run`, `runTurn`, `resume`) now emits a `run_start` boundary
+  (`Agent.emitRunBoundary()`), so tok/s, context usage and the transcript stay
+  realtime across turns.
+- **The real context window is read from the server** (`/props`, `/slots`,
+  auth-aware probe) instead of assuming 128k; fixed prompt cost is calibrated
+  from engine-reported `prompt_tokens`, per-slot `n_ctx` is honored.
+
+### Performance
+- KV-cache prefix kept stable across steps; tool output capped per slot
+  (`limits.toolOutputChars`); MCP schema budgeted against the *probed* window
+  (`SCHEMA_SHARE_OF_WINDOW` = 35 %); output reserve clamped; prompt metrics
+  split in logs.
+- New measurement tooling (see docs/performance.md):
+  `scripts/capture-prompt-proxy.mjs` records the exact request body + usage/TTFT
+  between any agent and llama.cpp; `scripts/measure-prompt-anatomy.mjs` replays
+  captures with `max_tokens: 1` (modes `anatomy|blocks|warmcold|scatter`).
+- Engine-measured comparison vs OpenCode, per-block prompt costs and ranked
+  follow-ups (P0-7/P0-8/P0-9) are recorded in `plan/performance-issue.md` §13.
+
+## [0.9.8] — 2026-11-11
+
+### Fixed
+- `read_file` no longer silently collapses to a 4k window (full file or an
+  explicit truncation notice).
+- Review/report tasks no longer finish early just because a build passed —
+  verification guardrails only stop the run when the task itself is complete.
+
 ## [0.9.7] — 2026-11-07
 
 ### Changed
