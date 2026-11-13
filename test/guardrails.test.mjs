@@ -25,6 +25,7 @@ const baseCtx = (over = {}) => ({
   buildCallPresent: false,
   filesModified: false,
   chatDone: false,
+  planOpen: false,
   ...over,
 });
 
@@ -94,18 +95,37 @@ describe("guardrails — Guardrail Engine", () => {
     assert.ok(!withFiles.find((x) => x.rule === "text-only-streak"));
   });
 
-  it("continue-nudge: text thường không claim → inject lời nhắc tiếp tục", async () => {
+  it("continue-nudge: plan còn mở + text thường không claim → inject lời nhắc tiếp tục", async () => {
     const eng = new GuardrailEngine();
-    const ds = await eng.evaluate(baseCtx({ text: "Đang phân tích code..." }));
+    const ds = await eng.evaluate(baseCtx({ text: "Đang phân tích code...", planOpen: true }));
     const d = ds.find((x) => x.rule === "continue-nudge");
     assert.ok(d);
     assert.equal(d.action.kind, "inject");
     assert.ok(d.action.reminder.includes("Continue working"));
   });
 
-  it("continue-nudge: chưa sửa file → không ép build, chỉ đường thoát <<CHAT_DONE>>", async () => {
+  it("P0-8: text-only, không tool call, không plan mở, không sửa file → finish ngay chatOnly (1 call/lượt chat)", async () => {
     const eng = new GuardrailEngine();
-    const ds = await eng.evaluate(baseCtx({ text: "Đây là câu trả lời cho câu hỏi.", filesModified: false }));
+    const ds = await eng.evaluate(baseCtx({ text: "Chào bạn! Tôi có thể giúp gì?" }));
+    const d = ds.find((x) => x.rule === "continue-nudge");
+    assert.ok(d, "phải có decision từ continue-nudge");
+    assert.equal(d.action.kind, "finish");
+    assert.equal(d.action.success, true);
+    assert.equal(d.action.chatOnly, true);
+    assert.equal(d.action.summary, "Chào bạn! Tôi có thể giúp gì?");
+    // Có plan mở thì KHÔNG được finish (model đang nghỉ giữa task, không phải chat).
+    const eng2 = new GuardrailEngine();
+    const ds2 = await eng2.evaluate(baseCtx({ text: "Chào bạn!", planOpen: true }));
+    assert.equal(ds2.find((x) => x.rule === "continue-nudge").action.kind, "inject");
+    // Sửa file rồi thì càng không — build verification phải còn bắt (aec95ef).
+    const eng3 = new GuardrailEngine();
+    const ds3 = await eng3.evaluate(baseCtx({ text: "Chào bạn!", filesModified: true }));
+    assert.equal(ds3.find((x) => x.rule === "continue-nudge").action.kind, "inject");
+  });
+
+  it("continue-nudge: plan mở + chưa sửa file → không ép build, chỉ đường thoát <<CHAT_DONE>>", async () => {
+    const eng = new GuardrailEngine();
+    const ds = await eng.evaluate(baseCtx({ text: "Đây là câu trả lời cho câu hỏi.", filesModified: false, planOpen: true }));
     const d = ds.find((x) => x.rule === "continue-nudge");
     assert.ok(d);
     assert.equal(d.action.kind, "inject");

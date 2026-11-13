@@ -67,6 +67,9 @@ export interface GuardrailContext {
   filesModified: boolean;
   /** Assistant vừa phát marker kết thúc lượt chat. */
   chatDone: boolean;
+  /** P0-8: run CÓ plan còn mở (todo pending/in_progress) — bước text-only khi
+   *  ấy là "nghỉ giữa task", không phải lượt chat ⇒ vẫn nudge như cũ. */
+  planOpen?: boolean;
   /** Output tokens của bước này (token-no-progress, H-12). */
   outputTokensThisStep?: number;
   /** G6: tổng token tích luỹ cả run (budget rule). */
@@ -284,6 +287,23 @@ const continueNudgeRule: GuardrailRule = {  name: "continue-nudge",
     if (ctx.hasToolCalls) return null;
     if (ctx.chatDone) return null;
     if (claimsCompletion(ctx.text)) return null; // completion-claim rule phụ trách
+    // P0-8: text-only + không sửa file + không có plan mở ⇒ đây là LƯỢT CHAT.
+    // Finish ngay với chính text làm summary — trước đây rule này inject nudge
+    // ⇒ thêm 1 LLM call ~14,5k token mỗi câu chào (đo: call 2 in=14.569, chỉ
+    // thêm đúng dòng nudge 81 token). Bài học aec95ef giữ nguyên: nhánh CÓ
+    // sửa file vẫn nudge/ép build bên dưới; plan còn mở (model nghỉ giữa
+    // task, quên gọi tool) cũng vẫn nudge.
+    if (!ctx.filesModified && ctx.planOpen !== true) {
+      return {
+        action: {
+          kind: "finish",
+          success: true,
+          summary: ctx.text || "(agent replied without acting)",
+          chatOnly: true,
+        },
+        reason: "chat turn: tool-less step, no files modified, no open plan — one LLM call per message",
+      };
+    }
     // No file changed yet → never demand a build for what may be a pure Q&A or
     // an explanation-only answer. Give the model the explicit conversational
     // exit instead; text-only-streak still ends the run if it keeps stalling.

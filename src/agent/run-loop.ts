@@ -304,6 +304,9 @@ export async function runAgentLoop(
         buildCallPresent: !!buildCall,
         filesModified: runtime.filesModified,
         chatDone,
+        // P0-8: plan chưa xong ⇒ bước text-only chỉ là nghỉ giữa task (nudge);
+        // plan trống/đủ ⇒ rule coi đó là lượt chat và finish (1 call).
+        planOpen: runtime.plan.some((t) => (t as { status?: string }).status !== "completed"),
         outputTokensThisStep: usage?.completion_tokens,
         totalTokensIn: runtime.usageTotals.inputTokens, // G6 budget rule
         totalTokensOut: runtime.usageTotals.outputTokens,

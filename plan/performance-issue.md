@@ -785,6 +785,20 @@ cửa sổ mới chỉ prefill phần map (~2,5k ≈ 8 s) thay vì 14,5k ≈ 47 
 file ổn định hơn; (c) hoàn thành P0-8 (1 call/chat).
 KPI mới: TTFT tin nhắn ĐẦU của cửa sổ thứ 2 ≤ 10 s khi repo vừa đổi.
 
+**ĐÃ TRIỂN KHAI (commit `d2812f4` + P0-8 bên dưới) — đo lại bằng đúng harness
+3 process mới (server IQ2_M đang chạy, không restart giữa chừng):**
+
+| Window | Bối cảnh | cached | TTFT | KPI |
+|---|---|---|---|---|
+| N1 | process mới, cold KV | 0 | 30,3 s | — (cold là cold) |
+| N2 | process mới, **repo không đổi** | **14.209/14.213 (100%)** | **0,21 s** | ✓ (trước: 30,2 s) |
+| N3 | process mới, **thêm 1 file** | **11.904 (84%)** | **8,9 s** | ✓ ≤10 s (trước: 30,2 s) |
+
+Sửa map thành phần TUỐI (đứng sau prefix system+tools). Map mới còn bỏ
+`N files` + `(48KB)` ⇒ sửa nội dung file không đổi symbol thì map giữ
+nguyên byte ⇒ N2-like hit 100% ngay cả khi đang code. Call 2 trong cùng
+process warm như cũ (530 ms).
+
 ## 14. TUI lag khi transcript dài — đo được, đã định vị, fix rõ
 
 Triệu chứng user báo: mở TUI đã thấy lag; càng nhiều text càng lag.
@@ -817,3 +831,25 @@ nhưng chat không dùng) vào `app.tsx`: chỉ mount các item phủ [scrollTop
 scrollTop+viewportRows+margin]; offset scroll = tổng rows ước lượng của item
 ẩn (không cần đo content.height thật nữa). KPI: CPU/frame ≤ 15 ms với
 transcript 400 item (đo lại bằng chính harness này), echo ≤ 30 ms.
+
+**ĐÃ TRIỂN KHAI (commit `019ff06`) — đo lại bằng frame4 (cùng harness, mount
+qua `transcriptWindow` thật):**
+
+| Items | CPU/frame trước | CPU/frame sau | mount |
+|---|---|---|---|
+| 52 | ~14–19 ms | **9,9 ms** | 14–17 |
+| 302 | 42–44 ms (loop bão hòa) | **9,4–9,7 ms** | 14–17 |
+| 400 (cap) | 53,5 ms | **9,0–9,5 ms** | 14–17 |
+
+KPI ≤15 ms: ✓. Lưu ý implement: follow-bottom dùng chiều cao THẬT của cửa
+sổ đã mount (đo rẻ vì cửa sổ nhỏ) — ước lượng có sai cũng không clip dòng
+mới; khi scroll lên dùng offset ước lượng. Estimate của `notice`/`user`/
+`build` phải tính theo dòng thật — bản đầu under-estimate làm clip dòng
+sau `/help`, bắt được bởi PTY E2E (`tui.test.mjs`), đã sửa + test đơn vị.
+
+**ĐÃ TRIỂN KHAI P0-8** (cùng commit docs này): bước text-only, không tool
+call, `filesModified=false`, plan không mở ⇒ finish ngay `chatOnly` thay vì
+inject nudge. Đo engine thật: "chào" = **1 call duy nhất** (in=14.213
+out=26, "Done in 1 step(s)") — trước: 2 call (in=14.488 + in=14.569).
+Nhánh an toàn giữ nguyên: plan đang mở → nudge như cũ; có sửa file → nudge
+ép build (bảo vệ `aec95ef`); marker `<<CHAT_DONE>>` vẫn finish như cũ.

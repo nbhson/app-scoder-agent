@@ -3,6 +3,29 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Performance
+- **TUI transcript virtualization (P1-8)** — the viewport now mounts only the
+  window of items around the scroll position (`transcriptWindow` + row
+  estimates cached per item identity) instead of the full transcript at full
+  height. Measured with a fake-TTY bench over the real `ChatItemView`
+  pipeline: commit cost 42–53 ms/frame → **9.0–9.4 ms** at 302–400 items;
+  typing echo stays O(window) regardless of transcript length. Follow-bottom
+  uses the measured height of the mounted window, so estimate error can never
+  clip the newest line.
+- **Stable KV-cache prefix across windows (P0-10)** — REPO MAP left the system
+  prompt for a tail context message, and its volatile bytes (per-file sizes,
+  file-count header) are gone. Three fresh processes, one greeting each,
+  against llama.cpp: unchanged repo **0.21 s** (was 30.2 s), repo + one new
+  file **8.9 s at 84 % cache** (was 30.2 s). Editing existing files no longer
+  invalidates other windows' prompts.
+- **One LLM call per chat turn (P0-8)** — a tool-less step with no open plan
+  and no file changes finishes immediately instead of injecting a nudge and
+  paying a second full call (measured before: 14.488 + 14.569 tokens per
+  greeting). Tasks with an open plan or file edits keep the nudge/build path
+  (`aec95ef` behavior guarded by tests).
+
 ## [0.9.9] — 2026-11-13
 
 ### Fixed

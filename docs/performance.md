@@ -39,6 +39,8 @@ Baseline: `plan/baseline/bench-dec14e1.json`.
 | Fixed per-call cost calibrated from the engine's own `prompt_tokens` (`fixedSource: "measured"`) | cl100k counted the schema within 1 %, but missed ChatML framing: 10.305 real vs 8.065 estimated (−22 %) | merged (follow-up) |
 | `maxTokens` reserve clamped to 25 % of what is left after the schema | window 16k: budget 2.000 (floor → trim almost every step) → 7.269 | merged (follow-up) |
 | `promptChars` split into `messageChars` / `schemaChars` in `llm_usage.perf` | one log line now answers "where do 12k tokens come from" | merged (follow-up) |
+| REPO MAP moved out of the system prompt into a tail context message; volatile bytes (per-file sizes, file-count header) dropped (P0-10) | fresh window, repo untouched: cached 100 %, TTFT **0.21 s** (was 30.2 s); repo + one file: cached 84 %, TTFT **8.9 s** (was 30.2 s) — measured on IQ2_M through the capture proxy | merged (P0-10) |
+| One LLM call per chat turn: tool-less step with no open plan and no file changes finishes immediately instead of injecting a nudge (P0-8) | greeting went 14.488 + 14.569 → single call (−81-token nudge message, −1 decode round-trip ≈ −2–3 s per chat); build verification for modified files untouched (`aec95ef` guarded by the plan-open/files-modified branches) | merged (P0-8) |
 
 ## Local engines (KV-cache)
 
