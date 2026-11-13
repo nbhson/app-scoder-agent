@@ -32,7 +32,12 @@ export function buildRunMessages(input: BuildRunMessagesInput): ChatMessage[] {
   const { config, primaryDef, skills, buildCmd, task, pendingContext } = input;
   const skillsBlock = buildSkillsBlock(skills);
   const agentsGuideBlock = buildAgentGuideBlock(config.workdir, task);
-  const repoMapBlock = config.repoMap === false ? "" : `\n\n${buildRepoMap(config.workdir)}`;
+  // P0-10: REPO MAP rời khỏi system prompt. Map mô tả TRẠNG THÁI repo — mỗi
+  // byte đổi (file mới, tên symbol đổi) làm lệch prefix system+tools ở token
+  // ~954 ⇒ mọi cửa sổ mới mất 96% KV-cache (đo: cached 14.484 → 0, TTFT
+  // 0,2 s → 30–47 s). Đặt làm message sát task: prefix system+tools+junk byte
+  // stable giữa các cửa sổ, map (cold) chỉ còn là đuôi ~2k token.
+  const repoMapBlock = config.repoMap === false ? "" : buildRepoMap(config.workdir);
   const baseOverride = primaryDef?.prompt?.trim() ? primaryDef.prompt : undefined;
   return [
     {
@@ -44,12 +49,21 @@ export function buildRunMessages(input: BuildRunMessagesInput): ChatMessage[] {
         skillsBlock,
         mcpBlock: buildMcpBlock(config),
         agentsGuideBlock,
-        repoMapBlock,
+        repoMapBlock: "",
         base: baseOverride,
         promptVersion: config.promptVersion,
       }) + buildAgentsBlock(discoverAgents(config.workdir), config.allowSubagents !== false),
     },
     ...pendingContext.map((content) => ({ role: "user" as const, content })),
+    ...(repoMapBlock
+      ? [{
+          role: "user" as const,
+          content:
+            "[Context — repository map as of session start; paths + exported symbols only. " +
+            "If a file looks missing or stale, confirm with list_files/glob/repo_map rather than assume.]\n\n" +
+            repoMapBlock,
+        }]
+      : []),
     { role: "user", content: task },
   ];
 }

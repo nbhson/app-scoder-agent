@@ -110,20 +110,21 @@ export function extractSymbols(path: string, content: string): string[] {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
-function kb(size: number): string {
-  return size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(size / 1024))}KB`;
-}
-
-/** Render the map without touching the cache (used for sub-tree maps). */
+/** Render the map without touching the cache (used for sub-tree maps).
+ * P0-10: deliberately NO per-file sizes and NO file-count header — those bytes
+ * change on every edit/add and used to invalidate the KV-cache prefix of every
+ * fresh window (measured: 1 char in REPO MAP ⇒ cached=0, TTFT 30–47 s). Symbol
+ * names still change only when a file's exported API changes, so the map is
+ * byte-stable across normal coding. */
 export function renderRepoMap(workdir: string, budgetChars = DEFAULT_BUDGET_CHARS, sub = "."): string {
   const files = walkRepo(workdir, sub);
   const lines: string[] = [
-    `REPO MAP — ${files.length} files (auto-generated; orient from this, don't read everything)`,
+    "REPO MAP — auto-generated; orient from this, don't read everything",
   ];
   let budget = budgetChars;
   let truncated = 0;
   for (const f of files) {
-    let line = `  ${f.rel} (${kb(f.size)})`;
+    let line = `  ${f.rel}`;
     if (SYMBOL_FILE.test(f.rel) && f.size <= MAX_FILE_BYTES) {
       try {
         const syms = extractSymbols(f.rel, readFileSync(f.abs, "utf8"));
