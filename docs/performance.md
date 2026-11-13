@@ -26,7 +26,7 @@ Baseline: `plan/baseline/bench-dec14e1.json`.
 | `buildEnvInfo` memoized per (workdir, day, platform, node) | 10.5 ms → ~0 | merged |
 | `buildRepoMap` single walk | cold −11…−16 % | **reverted** — below the 20 % acceptance threshold; render dominates (32 ms), walk is 7 ms |
 | `discoverSkills`/`findSkill` caching | ~1.8 ms total | skipped — freshness semantics of `/skill` would change |
-| TUI `visibleWindow` render bound | — | deferred — changes terminal output outside viewport; needs explicit approval + scroll tests |
+| TUI transcript virtualization (`transcriptWindow` window around viewport) | commit cost 42–53 ms → 9.0–9.4 ms/frame at 302–400 items (fake-TTY bench, same `ChatItemView` pipeline); SLO gate 6/6 | merged (P1-8) — approval + scroll tests included (`test/tui-virtual.test.mjs`) |
 | History trim is **conditional** (`history-trim` guardrail + cooldown 3 steps, hysteresis to 70 % of budget) instead of every step | 40-step simulation, 128k window: wasted re-prefill 1.13M → 174k tokens (−85 %), KV-cache reuse 0.51 → 0.93, trim events 20 → 1 | merged (P0-1) |
 | `read_file` truncates line-aware at `limits.toolOutputChars` (8k default, 6k local profile) with an explicit "read the next chunk at offset N" hint | on top of P0-1: total prompt tokens −46 % (2.61M → 1.42M), re-prefill −70 % | merged (P0-2) |
 | MCP schema budget `limits.mcpSchemaTokens` + global allowlist `mcpTools` | schema 16,222 → 8,570 wire tokens with cap 6k (53 → 24 advertised tools) | merged (P0-3), default off |

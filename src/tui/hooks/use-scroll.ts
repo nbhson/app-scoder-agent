@@ -1,4 +1,7 @@
-/** Scroll viewport metrics + mouse wheel (SGR 1006) wiring for the TUI. */
+/** Scroll viewport metrics + mouse wheel (SGR 1006) wiring for the TUI.
+ * P1-8: contentRef giờ đo CỬA SỔ item đã mount (không phải cả transcript) —
+ * chi phí đo O(window) nên vẫn rẻ; số đo thật dùng cho follow-bottom chính
+ * xác, ước lượng (transcriptWindow) chỉ dùng khi scroll lên trên. */
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { useBoxMetrics, useStdin, type DOMElement } from "ink";
 import { parseWheel, MOUSE_ENABLE, MOUSE_DISABLE } from "../mouse.js";
@@ -33,5 +36,5 @@ export function useScrollMetrics(setScrollOffset: Dispatch<SetStateAction<number
       process.stdout.write(MOUSE_DISABLE);
     };
   }, [stdin, setRawMode, isRawModeSupported, wheelScroll]);
-  return { viewportRef, contentRef, viewport, content, viewportRowsRef };
+  return { viewportRef, viewport, contentRef, content, viewportRowsRef };
 }

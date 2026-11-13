@@ -722,3 +722,98 @@ Số liệu thô: `/private/var/folders/bl/8cp9kd_s0yx6q541cqdz3tpm0000gn/T/open
 — `prompt-capture/` (MCP tắt, 2 agent), `bc7/` (MCP bật, 2 agent), `bc15/`
 (chứng minh thêm 1 file đổi promptHash), `bc20/` (ma trận 5 task × block),
 `anatomy-all.json`, `final-table.json`.
+
+### 13.8 "Chat tiếp cửa sổ cũ lâu, mở cửa sổ mới nhanh" — tái hiện + kết luận
+
+Hiện tượng user báo trên scoder TUI. Tái hiện đúng hình dạng của nó
+(`twoturns.mjs`, chạy sau khi server đã restart `--parallel 1 --ctx-size 84000`,
+MCP bật, reasoning on, qua capture proxy):
+
+| Bối cảnh | prompt | cached | TTFT | tổng |
+|---|---|---|---|---|
+| A — "chào", request đầu sau restart (cache trống) | 14.488 | 0 (0%) | **30,1 s** | 44,9 s |
+| A — **chat tiếp** "cảm ơn…" (cùng tiến trình, history +36 tok) | 14.524 | 14.484 (**99,7%**) | **0,54 s** | 3,8 s |
+| B — **cửa sổ mới**, "chào" (tiến trình mới, cùng prefix) | 14.488 | 14.484 (**99,7%**) | **0,13 s** | 2,2 s |
+
+Hai kết luận đo được, không suy đoán:
+
+1. *Cửa sổ mới nhanh* **đúng là do cache**: request đầu của một phiên chỉ
+   khác request trước ở đúng phần history (vài chục token), còn prefix cố
+   định 14,5k (system prompt + 37 tool schema) được reuse gần như toàn bộ.
+2. *Chat tiếp cửa sổ cũ* **không vốn chậm** — trên server hiện tại nó chỉ
+   mất 0,54 s TTFT. Hiện tượng user thấy thuộc cấu hình cũ
+   (`n_ctx 16.128`/slot × 2 slot): prompt lượt tiếp = 14,5k fixed + history
+   + output (reasoning on → dài) **tràn slot 16k** ⇒ llama.cpp vứt KV của
+   slot ⇒ prefill lại ~15–20k token ≈ 30–45 s; đồng thời không gửi
+   `slot_id` ⇒ lượt tiếp có thể rơi sang slot lạnh (đo ở §13.5: 2/6 cold).
+   Cửa sổ mới thì request vừa khít 14,5k nằm trong slot và ăn nhờ prefix
+   mà cửa sổ cũ vừa warm — nên paradox "càng dùng lâu càng chậm, mở mới
+   lại nhanh" biến mất ngay khi restart single-slot.
+
+Việc còn lại: nếu user vẫn thấy chậm trên TUI thật với server mới, bước
+tiếp theo là cắm capture proxy vào đúng tiến trình TUI để xem request nào
+mất cache;P0-9 (pin `slot_id`) chỉ cần khi chạy `--parallel ≥ 2`.
+
+### 13.9 "CỬA SỔ MỚI chat cũng chậm" — thủ phạm thật: REPO MAP phá prefix
+
+Đo trên server IQ2_M (`--parallel 1`, ctx 84k) và IQ3_S (96k), replay đúng
+request chào đã capture:
+
+| Kịch bản | prompt | cached | TTFT |
+|---|---|---|---|
+| Lặp lại y hệt prefix đang warm | 14.488 | 14.484 (100%) | **0,09–0,10 s** |
+| **Đổi đúng 1 ký tự** trong REPO MAP ("48KB"→"50KB") | 14.489 | **0** | **47,4 s** |
+| Restart server (KV xóa sạch) rồi chat cửa sổ mới | 14.5k | 0 | 33–48 s |
+| Cùng cửa sổ, lượt 2+ (prefix đóng băng trong RAM client) | 14.5k+hist | ~99,7% | 0,5 s |
+
+Cơ chế: `buildRunMessages()` nhúng REPO MAP (có **dung lượng file**) vào
+system prompt ⇒ **mỗi lần repo đổi file là prefix đổi byte ⇒ mọi cửa sổ mới
+bị mất cache toàn bộ, trả 33–48s cold prefill cho tin nhắn đầu**. Đây đúng
+là "chat chào ở cửa sổ mới cũng chậm". Kèm hai thủ phạm nhỏ:
+
+- Restart server = xóa KV cache ⇒ cửa sổ kế tiếp chắc chắn cold.
+- Mỗi lượt chat vẫn tốn **2 call** (call 2 text-only = guardrail, §13.2) —
+  call 2 thường warm nhưng vẫn +2–3 s decode.
+- IQ3_S **chậm hơn** IQ2_M khi cold: 47,5 s vs 33 s (decode ~22–25 tok/s như
+  nhau). Đổi quant "cho nhanh" là ngược.
+
+**Fix P0-10 — prefix nội dung ổn định (cross-session):**
+(a) REPO MAP bỏ khỏi system prompt, đưa vào message cuối trước task (hoặc
+block sau history) ⇒ prefix system+tools byte-stable giữa mọi cửa sổ ⇒
+cửa sổ mới chỉ prefill phần map (~2,5k ≈ 8 s) thay vì 14,5k ≈ 47 s;
+(b) bỏ dung lượng ` (48KB)` khỏi dòng map, đổi thành đường ống danh sách
+file ổn định hơn; (c) hoàn thành P0-8 (1 call/chat).
+KPI mới: TTFT tin nhắn ĐẦU của cửa sổ thứ 2 ≤ 10 s khi repo vừa đổi.
+
+## 14. TUI lag khi transcript dài — đo được, đã định vị, fix rõ
+
+Triệu chứng user báo: mở TUI đã thấy lag; càng nhiều text càng lag.
+
+Đo bằng fake-TTY mount đúng `ChatItemView` + viewport của `app.tsx`, bơm
+delta 20 fps (như queue thật), so **CPU mỗi commit** theo số item mount:
+
+| Items mounted | CPU/frame | Event loop | Ink writes/20 frame |
+|---|---|---|---|
+| 30 | 6,5 ms | khỏe | 4 |
+| 60 | 10,3 ms | khỏe | 4 |
+| 150 | 13,9 ms | ổn | 4 |
+| 302 | **42–44 ms** | **0 ms idle — bão hòa** | 0–4 |
+| 400 (cap reducer) | 53,5 ms | bão hòa, keystroke xếp hàng | 4 |
+
+- Chi phí nằm ở **số item CÓ MẶT trong tree**, không phụ thuộc item đổi:
+  `state.items.map(...)` mount toàn bộ transcript full-height để tính scroll
+  ⇒ mỗi commit là một lần React diff + Yoga layout + wrap string-width qua
+  CẢ transcript. memo() chỉ chặn render component, không chặn layout.
+- 50 ms FLUSH × 44 ms CPU = 88% loop chỉ để vẽ ⇒ gõ phím chờ sau commit ⇒
+  "càng nhiều text càng lag". Lúc idle chat ngắn: echo đo thật 22–31 ms
+  (8–1KB ANSI/key) — TUI không lag từ số không; cảm giác lag chủ yếu khi
+  transcript dài + khi đang stream.
+- Engine prefill 47 s chạy song song **không** làm TUI lag thêm (echo vẫn
+  24–40 ms) — tách rõ hai vấn đề.
+
+**Fix P1-8 — virtualize transcript (helpers đã có sẵn, chưa nối):**
+nối `visibleWindow()`/`estimateItemRows()` (src/tui/selectors.ts — tồn tại
+nhưng chat không dùng) vào `app.tsx`: chỉ mount các item phủ [scrollTop,
+scrollTop+viewportRows+margin]; offset scroll = tổng rows ước lượng của item
+ẩn (không cần đo content.height thật nữa). KPI: CPU/frame ≤ 15 ms với
+transcript 400 item (đo lại bằng chính harness này), echo ≤ 30 ms.

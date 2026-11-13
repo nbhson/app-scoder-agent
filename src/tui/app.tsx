@@ -19,6 +19,7 @@ import { setQuiet } from "../io/terminal.js";
 import { discoverSkills } from "../context/skills.js";
 import { discoverAgents } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";
+import { transcriptWindow, estimateTotalRows } from "./selectors.js";
 import { SLASH_COMMANDS, formatSlashHelp } from "../commands/definitions.js";
 import { ChatItemView } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "./chrome.js"; // T2
@@ -108,13 +109,26 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     agentRef.current = null;
   }, []);
 
-  // ── Scrollable chat viewport (Ink 8 alt-screen) ──
-  // The viewport clips overflow; the inner content wrapper keeps its natural
-  // height so it can be measured and offset upward for scrolling.
-  const { viewportRef, contentRef, viewport, content, viewportRowsRef } = useScrollMetrics(setScrollOffset);
-  const maxScroll = Math.max(0, content.height - viewport.clientHeight);
-  // scrollOffset counts rows UP from the bottom; 0 = follow the newest item.
-  const scrollTop = Math.max(0, maxScroll - scrollOffset);
+  // ── Scrollable chat viewport (Ink 8 alt-screen) — P1-8 virtualized ──
+  // Chi phí layout/wrap mỗi frame tỷ lệ với số item MOUNT, không phải số
+  // item transcript ⇒ chỉ mount cửa sổ quanh viewport (transcriptWindow).
+  // Scroll offset khi đọc lại dùng rows ước lượng; khi BÁM ĐÁY dùng chiều
+  // cao THẬT của cửa sổ đã mount (đo rẻ vì cửa sổ ~viewport+overscan) —
+  // estimate sai lệch bao nhiêu thì dòng cuối vẫn luôn thấy.
+  const { viewportRef, viewport, contentRef, content, viewportRowsRef } = useScrollMetrics(setScrollOffset);
+  const viewportRows = viewport.clientHeight || 24;
+  const win = useMemo(() => {
+    const total = estimateTotalRows(state.items);
+    const max = Math.max(0, total - viewportRows);
+    const top = Math.max(0, max - scrollOffset);
+    return { ...transcriptWindow(state.items, top, viewportRows), maxScroll: max };
+  }, [state.items, scrollOffset, viewportRows]);
+  const maxScroll = win.maxScroll;
+  // Follow-bottom (scrollOffset = 0): offset chính xác theo số đo thật.
+  const contentOffset =
+    scrollOffset === 0 && content.hasMeasured
+      ? Math.max(0, content.height - viewport.clientHeight)
+      : win.offset;
 
   const skills = useMemo(() => discoverSkills(cfg.workdir), [cfg.workdir]);
   const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
@@ -192,9 +206,10 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     prevStatusRef.current = state.status;
   }, [state.status]);
 
-  // The viewport renders items at full height so scroll math (content.height) is
-  // always correct. Ink clips with overflow="hidden"; contentOffsetY shifts the
-  // content column upward to reveal items above the current bottom.
+  // P1-8: viewport mount CỬA SỔ item quanh scrollTop (transcriptWindow), không
+  // mount cả transcript — chi phí layout/wrap mỗi frame hết tỷ lệ với tổng text.
+  // Ink clip bằng overflow="hidden"; contentOffsetY = số dòng phải ẩn ở đầu
+  // cửa sổ (scrollTop - startRow[item_start]).
   const { rows, columns } = useWindowSize();
   const showSidebar = (columns ?? 100) >= SIDEBAR_MIN_COLS;
 
@@ -214,7 +229,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           flexShrink={1}
           minHeight={0}
           overflow="hidden"
-          contentOffsetY={scrollTop}
+          contentOffsetY={contentOffset}
         >
         <Box ref={contentRef} flexDirection="column" paddingX={1} flexShrink={0}>
           {state.items.length === 0 ? (
@@ -252,7 +267,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               </Text>
             </Box>
           ) : (
-            state.items.map((item, i) => <ChatItemView key={i} item={item} width={(columns ?? 100) - (showSidebar ? SIDEBAR_WIDTH + 2 : 4)} />)
+            state.items.slice(win.start, win.end).map((item, i) => (
+              <ChatItemView key={win.start + i} item={item} width={(columns ?? 100) - (showSidebar ? SIDEBAR_WIDTH + 2 : 4)} />
+            ))
           )}
           {lastSummary && (
             <Box marginTop={1}>

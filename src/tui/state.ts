@@ -188,7 +188,7 @@ function applyGuardrail(state: TuiState, ev: { rule: string; action: string; rea
 
 // Pure selectors live in ./selectors.js (Phase 5.4) — re-exported so existing
 // import sites (app.tsx, hooks, tests) keep working unchanged.
-export { estimateItemRows, visibleWindow, latestPlan, toolPhase } from "./selectors.js";
+export { estimateItemRows, visibleWindow, transcriptWindow, estimateTotalRows, latestPlan, toolPhase } from "./selectors.js";
 
 /**
  * Fold one AgentEvent into the state (mutates `state`, returns it for

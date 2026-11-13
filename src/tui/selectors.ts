@@ -78,11 +78,13 @@ export function estimateMarkdownRows(text: string, width = EST_WIDTH): number {
 export function estimateItemRows(item: ChatItem): number {
   switch (item.kind) {
     case "user":
-      return 2 + Math.ceil(item.text.length / 80);
+      // Render: marginTop 1 + border-left box paddingX 1, wrap theo chat width
+      // (~60–96 cột). 60 là giả định hẹp an toàn (over-estimate nhẹ).
+      return 2 + wrapEstimate(item.text ?? "", 60);
     case "assistant":
       // +1 marginTop; streaming raw text dùng wrap đơn giản (chưa qua markdown).
       return item.streaming
-        ? wrapEstimate(item.text ?? "", EST_WIDTH)
+        ? (item.text ? 1 : 0) + wrapEstimate(item.text ?? "", 76)
         : 1 + estimateMarkdownRows(item.text ?? "", EST_WIDTH);
     case "thinking":
       // Render: collapse to last 4 lines.
@@ -90,7 +92,7 @@ export function estimateItemRows(item: ChatItem): number {
     case "tool":
       return 1 + 2; // title + preview 2 lines
     case "compaction":
-      return 1;
+      return 2; // marginTop + divider
     case "diff":
       return 3 + Math.min(24, (item.text?.split("\n").length ?? 0)); // header + ≤24 lines + border
     case "todo":
@@ -98,16 +100,20 @@ export function estimateItemRows(item: ChatItem): number {
       // chiếm 0 dòng thực tế trong transcript.
       return 0;
     case "build":
-      return 1;
+      return 3; // marginTop + label + command
     case "notice":
-      return 1 + Math.ceil(item.text.length / 2000);
+      // Render raw text (cap 2000 chars) với wrap thật theo width — /help là
+      // notice 40 dòng; estimate cũ (1 + len/2000) under-estimate khiến
+      // follow-bottom clip dòng kế tiếp ( regression caught by tui.test E2E).
+      return 1 + wrapEstimate(item.text.length > 2000 ? item.text.slice(0, 2000) + "…" : item.text, 76);
   }
 }
 
 /**
  * T4: chọn window item để render: lấy từ cuối lên tới khi tổng rows ước
  * lượng ≥ viewportRows + margin (render dư phía trên để scroll mượt), nhưng
- * giữ toàn bộ khi tổng nhỏ. Trả về slice của items (không mutate).
+ * giữ toàn bộ khi tổng nhỏ. Trả về slice của items (không rẻ — dùng
+ * transcriptWindow cho scroll đúng offset, hàm này chỉ còn cho callers cũ).
  */
 export function visibleWindow(
   items: ChatItem[],
@@ -122,6 +128,69 @@ export function visibleWindow(
     acc += estimateItemRows(items[start]);
   }
   return start === 0 ? items : items.slice(start);
+}
+
+// P1-8: cache số dòng ước lượng theo IDENTITY của item. state.ts patch item
+// kiểu immutable (object mới khi nội dung đổi) ⇒ item finalized không bao giờ
+// tính lại; chỉ item đang stream (mỗi flush đổi reference) mới estimate lại.
+const itemRowsCache = new WeakMap<ChatItem, number>();
+function itemRowsCached(item: ChatItem): number {
+  const hit = itemRowsCache.get(item);
+  if (hit !== undefined) return hit;
+  const v = estimateItemRows(item);
+  itemRowsCache.set(item, v);
+  return v;
+}
+
+/** Tổng chiều cao ước lượng của cả transcript — O(n) phép cộng số nhỏ. */
+export function estimateTotalRows(items: ChatItem[]): number {
+  let acc = 0;
+  for (const it of items) acc += itemRowsCached(it);
+  return acc;
+}
+
+export interface TranscriptWindow {
+  /** Index tuyệt đối item đầu được mount. */
+  start: number;
+  /** Index tuyệt đối sau-cuối được mount (exclusive). */
+  end: number;
+  /** Rows phải ẩn ở ĐẦU content đã mount = scrollTop - startRow[start]. */
+  offset: number;
+  /** Tổng chiều cao ước lượng của CẢ transcript (thay cho content.height đo thật). */
+  totalRows: number;
+}
+
+/**
+ * P1-8 — virtualization cho transcript viewport. Mount duy các item phủ
+ * [scrollTop - overscan, scrollTop + viewportRows + overscan] thay vì cả
+ * transcript: chi phí React diff + Yoga layout + wrap mỗi frame hết tỷ lệ
+ * với tổng số text (đo: 42–53 ms/frame ở 300–400 item → ~7 ms khi window).
+ * Scroll dùng ước lượng rows (estimateItemRows, cache theo identity item),
+ * nên khi estimate lệch thực tế thì offset chỉ sai vài dòng — cùng trade-off
+ * mọi TUI virtualized dùng.
+ */
+export function transcriptWindow(
+  items: ChatItem[],
+  scrollTop: number,
+  viewportRows: number,
+  overscan = 24,
+): TranscriptWindow {
+  const n = items.length;
+  // Cumulative start rows một lượt O(n) nhưng chỉ là phép cộng số nhỏ.
+  const startRow = new Array<number>(n + 1);
+  startRow[0] = 0;
+  for (let i = 0; i < n; i++) startRow[i + 1] = startRow[i] + itemRowsCached(items[i]);
+  const totalRows = startRow[n];
+
+  const top = Math.max(0, Math.min(scrollTop, totalRows));
+  const target = Math.max(0, top - overscan);
+  let start = 0;
+  while (start + 1 < n && startRow[start + 1] <= target) start++;
+  const bottomTarget = top + viewportRows + overscan;
+  let end = start;
+  while (end < n && startRow[end] < bottomTarget) end++;
+  if (end === start && start < n) end = start + 1; // item khổng lồ vẫn phải hiện
+  return { start, end, offset: top - startRow[start], totalRows };
 }
 
 /**
