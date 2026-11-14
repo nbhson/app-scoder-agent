@@ -137,9 +137,10 @@ function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
 
 /**
  * Status bar — bottom row. Left: spinner · status · elapsed · model.
- * Right: scroll position OR keyboard hints.
+ * Right: scroll position OR keyboard hints. In select mode (Ctrl+O) the hints
+ * swap to the copy reminder — the mouse belongs to the terminal there.
  */
-export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string | null }): React.JSX.Element {
+export function StatusBar({ state, scroll, selectMode = false }: { state: TuiState; scroll?: string | null; selectMode?: boolean }): React.JSX.Element {
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
 
@@ -163,10 +164,12 @@ export function StatusBar({ state, scroll }: { state: TuiState; scroll?: string 
 
   const model = state.model || "—";
 
-  // Right side: scroll position OR helpful keybinds
-  const rightText = scroll
-    ? `scroll ${scroll} · esc→tail`
-    : `⏎ send · ctrl+s sessions · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
+  // Right side: select-mode reminder OR scroll position OR keybind hints
+  const rightText = selectMode
+    ? "⊝ select · drag to highlight · ⌘C/ctrl+c copy · ctrl+o back"
+    : scroll
+      ? `scroll ${scroll} · esc→tail`
+      : `⏎ send · ctrl+s sessions · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
 
   const leftBudget = Math.max(24, width - rightText.length - 3);
   let left = statusLabel;

@@ -395,7 +395,7 @@ Features:
 - **Slash commands** — `/help`, `/clear`, `/compact`, `/cost`, `/model`, `/skill`, `/mcp`, `/permission` (identical to the REPL; `/theme` is TUI-only)
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
 - **Scrollback** — `PgUp`/`PgDn` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
-- **Keybinds** — `Enter` send · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+C` quit
+- **Keybinds** — `Enter` send · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+O` toggle select mode (releases mouse tracking so you can drag-highlight chat text and copy it with `⌘C`/`Ctrl+C`) · `Ctrl+C` quit
 - Non-TTY environments (CI, pipes) automatically fall back to the classic REPL
 - `permission: "ask"` is not supported in the TUI (no readline prompts on the alt screen) — it falls back to `auto`
 

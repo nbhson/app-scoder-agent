@@ -81,6 +81,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const [input, setInput] = useState(initialTask ?? "");
   /** Rows scrolled up from the bottom; 0 = follow the newest content. */
   const [scrollOffset, setScrollOffset] = useState(0);
+  /** Ctrl+O: native terminal text selection (mouse tracking released). */
+  const [selectMode, setSelectMode] = useState(false);
   const [permMode, setPermMode] = useState(cfg.permissionMode);
   // T-03: active permission prompt (modal) — the run blocks until answered.
   const [permPrompt, setPermPrompt] = useState<Extract<AgentEvent, { type: "permission_request" }> | null>(null);
@@ -115,7 +117,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // Scroll offset khi đọc lại dùng rows ước lượng; khi BÁM ĐÁY dùng chiều
   // cao THẬT của cửa sổ đã mount (đo rẻ vì cửa sổ ~viewport+overscan) —
   // estimate sai lệch bao nhiêu thì dòng cuối vẫn luôn thấy.
-  const { viewportRef, viewport, contentRef, content, viewportRowsRef } = useScrollMetrics(setScrollOffset);
+  const { viewportRef, viewport, contentRef, content, viewportRowsRef } = useScrollMetrics(setScrollOffset, !selectMode);
   const viewportRows = viewport.clientHeight || 24;
   const win = useMemo(() => {
     const total = estimateTotalRows(state.items);
@@ -181,7 +183,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   useTuiKeybinds({
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
     setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef,
-    setScrollOffset, exit,
+    setScrollOffset, selectMode, setSelectMode, exit,
   });
 
   // Submit an initial task passed on the command line once, after mount.
@@ -265,6 +267,10 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
                 <Text bold color={theme.accent}>/help</Text>
                 <Text dimColor> commands</Text>
               </Text>
+              <Text>
+                <Text bold color={theme.accent}>ctrl+o</Text>
+                <Text dimColor> select/copy (tắt mouse tracking để tô đen kéo chuột)</Text>
+              </Text>
             </Box>
           ) : (
             state.items.slice(win.start, win.end).map((item, i) => (
@@ -333,7 +339,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           modalRef={permPromptRef}
         />
       </Box>
-      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} />
+      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} />
     </Box>
   );
 }

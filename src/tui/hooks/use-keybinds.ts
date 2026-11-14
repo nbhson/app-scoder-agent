@@ -18,15 +18,23 @@ export function useTuiKeybinds(deps: {
   update: (fn: (s: TuiState) => TuiState) => void;
   viewportRowsRef: { current: number | null };
   setScrollOffset: Dispatch<SetStateAction<number>>;
+  /** Ctrl+O — release mouse tracking so the terminal's native drag-select/copy works. */
+  selectMode: boolean;
+  setSelectMode: Dispatch<SetStateAction<boolean>>;
   exit: () => void;
 }) {
-  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, exit } = deps;
+  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, exit } = deps;
   // Esc aborts the running task (like SIGINT in the CLI); when scrolled up,
   // the first Esc returns to the bottom instead.
   const scrollOffsetRef = useRef(0);
   useEffect(() => {
     scrollOffsetRef.current = scrollOffset;
   }, [scrollOffset]);
+  // useInput closures go stale between renders (same reason as scrollOffsetRef).
+  const selectModeRef = useRef(false);
+  useEffect(() => {
+    selectModeRef.current = selectMode;
+  }, [selectMode]);
   // T-03: permission modal keybinds — intercepts y/a/n/q while open.
   useInput((input, key) => {
     const p = permPromptRef.current;
@@ -62,6 +70,24 @@ export function useTuiKeybinds(deps: {
     // T-10: ctrl+t toggles the thinking stream visibility.
     if (key.ctrl && _input === "t") {
       update((s) => ({ ...s, thinkingVisible: !s.thinkingVisible }));
+      return;
+    }
+    // Ctrl+O: toggle select mode — mouse tracking off (native drag-select +
+    // Cmd/Ctrl+C copy) / on (wheel scroll). Scroll with PgUp/PgDn while off.
+    if (key.ctrl && _input === "o") {
+      const next = !selectModeRef.current;
+      selectModeRef.current = next;
+      setSelectMode(next);
+      update((s) => ({
+        ...s,
+        items: [...s.items, {
+          kind: "notice",
+          text: next
+            ? "select mode ON — drag to highlight, copy with ⌘C/Ctrl+C · scroll via PgUp/PgDn · Ctrl+O back to mouse wheel"
+            : "select mode OFF — mouse wheel scrolling restored",
+          level: "info",
+        }],
+      }));
       return;
     }
     if (key.pageUp || key.pageDown || key.home || key.end) {
