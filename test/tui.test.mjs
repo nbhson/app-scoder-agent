@@ -58,9 +58,9 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
   /**
    * Chạy TUI trong PTY thật qua pty-run.py; trả { clean, raw, exitCode,
    * ptyErr }. stderr của pty-run được BẮT (trước đây vứt vào /dev/null) vì
-   * nó chứa mã lỗi thật ("pty-run: TIMEOUT" = con còn sống nhưng không kịp
-   * render — runner 4-core cold `npm ci` từng trắng màn hình 30s).
-   * --timeout 60 (gấp đôi) + it() 90s chống contention; local vẫn xong ~5s.
+   * nó chứa mã lỗi thật ("pty-run: TIMEOUT" = con sống mà không in frame nào)
+   * — chính tín hiệu đó đã vạch trần Ink CI-gate (xem env bên dưới).
+   * --timeout 60 + it() 90s chống contention runner chia sẻ.
    */
   async function runPty(tag, sendAfter) {
     const outFile = join(tmpdir(), `scoder-tui-${tag}-${Date.now()}.txt`);
@@ -79,12 +79,22 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
       ],
       {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          SCODER_API_KEY: "test",
-          SCODER_BASE_URL: `http://127.0.0.1:${mockPort}`,
-          SCODER_NO_SAVE: "1",
-        },
+        env: (() => {
+          const e = {
+            ...process.env,
+            SCODER_API_KEY: "test",
+            SCODER_BASE_URL: `http://127.0.0.1:${mockPort}`,
+            SCODER_NO_SAVE: "1",
+          };
+          // ROOT CAUSE (mà CI 2 PTY test chưa từng xanh): Ink 8 gate
+          // interactivity bằng is-in-ci — env CI/CONTINUOUS_INTEGRATION tồn tại
+          // ⇒ interactive=false KỂ CẢ khi stdout là TTY thật ⇒ renderFrame
+          // không bao giờ in frame (raw=16B, pty TIMEOUT 124). Con ở đây mô
+          // phỏng đầu cuối người dùng thật — không được kế thừa CI.
+          delete e.CI;
+          delete e.CONTINUOUS_INTEGRATION;
+          return e;
+        })(),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );

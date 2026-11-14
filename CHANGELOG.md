@@ -3,6 +3,20 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Testing & CI
+- **PTY TUI specs now pass on GitHub Actions — root-caused after failing
+  since the day they were added.** Ink 8 gates interactivity with `is-in-ci`:
+  any `CI`/`CONTINUOUS_INTEGRATION` env makes `render()` non-interactive
+  *even on a real TTY*, so frames were never written — the PTY capture stayed
+  blank (`raw=16B`), the TUI waited forever for its own render, and
+  `pty-run.py` hit its 60 s timeout (exit 124). The new failure context
+  added in 0.9.12 produced the proof, and `CI=true node --test
+  test/tui.test.mjs` now reproduces/verifies the fix locally. The harness
+  strips CI from the PTY child's env: the spec simulates a real user
+  terminal, where CI semantics don't apply. Product behavior unchanged.
+
 ## [0.9.12] — 2026-11-14
 
 ### Fixed
