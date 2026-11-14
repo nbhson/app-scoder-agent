@@ -40,15 +40,20 @@ export class InteractionBroker {
   ): Promise<{ ok: boolean; output: string }> {
     try {
       const timeoutMs = (request.timeoutSecs ?? 120) * 1000;
-      const answer = await Promise.race([
-        handler({ ...request, id }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-      ]);
-      if (answer == null || (typeof answer === "string" && !answer.trim())) {
-        return { ok: false, output: "ERROR: ask_user timed out or was cancelled." };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      });
+      try {
+        const answer = await Promise.race([handler({ ...request, id }), timeoutPromise]);
+        if (answer == null || (typeof answer === "string" && !answer.trim())) {
+          return { ok: false, output: "ERROR: ask_user timed out or was cancelled." };
+        }
+        runtime.logger.log({ type: "ask_user", question: request.question, answer: String(answer).slice(0, 500) });
+        return { ok: true, output: `User answered: ${answer}` };
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      runtime.logger.log({ type: "ask_user", question: request.question, answer: String(answer).slice(0, 500) });
-      return { ok: true, output: `User answered: ${answer}` };
     } catch (err) {
       return { ok: false, output: `ERROR: ask_user failed: ${(err as Error).message.slice(0, 200)}` };
     }

@@ -3,6 +3,18 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.14] — 2026-11-14
+
+### Fixed
+- **Permission `ask` timeout timer leak** in `PermissionChecker.ask` and `InteractionRuntime.awaitQuestion` — `setTimeout` was not cleared when the handler resolved first, keeping the event loop (and tests/process) alive up to `timeoutSecs`. Timers are now cleared in `finally`.
+- **Shell permission bypass via command substitution**: `echo $(rm -rf /)` could pass an allow-prefix rule. Scanner-detected `$()`/backticks now require `ask` unless an explicit rule allows the whole line.
+- **`runTurn` did not reset per-run state** (`runDiffs`, `selfReviewDone`, `verifyStrikes`, `lastVerifySignature`) → self-review/verify strikes could stay stale across chat turns. Also reset `measuredFixedTokens` on run tool rebuild.
+- **File index cache was a single global slot** regardless of workdir → wrong file lists in multi-workdir/server setups. Now keyed by workdir.
+- **Unhandled promise rejections** in a few fire-and-forget `void ...` calls (MCP hot-reload, warmup, refresh) — added `.catch`.
+
+### Performance / robustness
+- Small robustness fixes from deep audit; no breaking API changes.
+
 ## [0.9.13] — 2026-11-14
 
 ### Testing & CI

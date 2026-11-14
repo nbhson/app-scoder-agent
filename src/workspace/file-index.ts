@@ -10,7 +10,7 @@ import fuzzysort from "fuzzysort";
 
 const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
 
-let cache: { files: string[]; built: number } | null = null;
+const cache = new Map<string, { files: string[]; built: number }>();
 
 /**
  * File index for `workdir` (cached, TTL 5s; invalidateFileIndex on tool writes).
@@ -19,7 +19,8 @@ let cache: { files: string[]; built: number } | null = null;
  * sẽ được tái sử dụng sai.
  */
 export function fileIndex(workdir: string, force = false): string[] {
-  if (!force && cache && Date.now() - cache.built < 5_000) return cache.files;
+  const hit = cache.get(workdir);
+  if (!force && hit && Date.now() - hit.built < 5_000) return hit.files;
   const files: string[] = [];
   // Fast path: ripgrep --files (gitignore-aware). Bare-name globs match at any
   // depth; `!**/x/**` does NOT match absolute paths (I-07 lesson).
@@ -39,13 +40,13 @@ export function fileIndex(workdir: string, force = false): string[] {
   }
   if (files.length === 0) walkFiles(workdir, "", files, 0);
   files.sort();
-  cache = { files, built: Date.now() };
+  cache.set(workdir, { files, built: Date.now() });
   return files;
 }
 
 /** Cache invalidate — call after write/edit tool_result (scope: whole index). */
 export function invalidateFileIndex(): void {
-  cache = null;
+  cache.clear();
 }
 
 function walkFiles(root: string, prefix: string, out: string[], depth: number): void {

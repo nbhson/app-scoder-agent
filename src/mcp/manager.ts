@@ -97,8 +97,8 @@ export class McpManager {
           .listTools()
           .then((defs) => this.reregisterTools(name, conn, defs))
           .catch(() => {});
-        void this.refreshResources(name, conn);
-        void this.refreshPrompts(name, conn);
+        void this.refreshResources(name, conn).catch(() => {});
+        void this.refreshPrompts(name, conn).catch(() => {});
         for (const uri of this.subscriptions.get(name) ?? []) {
           void conn.subscribeResource(uri).catch(() => {});
         }

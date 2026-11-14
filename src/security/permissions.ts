@@ -383,22 +383,25 @@ export class PermissionChecker {
       // T3: timeout enforced HERE (checker-level) — a hung frontend handler
       // (TUI modal never answered, server client disconnected) must not leak
       // the pending permission promise forever.
-      const answer = await Promise.race([
-        this.promptHandler(req),
-        new Promise<never>((_, rej) =>
-          setTimeout(() => {
-            const e = new Error("permission handler timed out");
-            e.name = "AbortError";
-            rej(e);
-          }, req.timeoutSecs * 1000),
-        ),
-      ]);
-      if (answer === "quit") this.abortRequested = true;
-      if (answer === "always" && req.kind === "edit") this.allowAllEdits = true;
-      if (answer === "always" && req.kind === "shell" && req.alwaysAllowPrefix) {
-        this.sessionAllow.addPrefix(req.alwaysAllowPrefix);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => {
+          const e = new Error("permission handler timed out");
+          e.name = "AbortError";
+          rej(e);
+        }, req.timeoutSecs * 1000);
+      });
+      try {
+        const answer = await Promise.race([this.promptHandler(req), timeoutPromise]);
+        if (answer === "quit") this.abortRequested = true;
+        if (answer === "always" && req.kind === "edit") this.allowAllEdits = true;
+        if (answer === "always" && req.kind === "shell" && req.alwaysAllowPrefix) {
+          this.sessionAllow.addPrefix(req.alwaysAllowPrefix);
+        }
+        return answer === "yes" || answer === "always";
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      return answer === "yes" || answer === "always";
     } catch {
       return false; // handler error/timeout — deny
     }
@@ -562,6 +565,20 @@ export class PermissionChecker {
         return {
           decision: "ask",
           reason: "dynamic evaluation (eval/source) — approval required",
+          alwaysAllowPrefix: extractFirstWord(command) + " ",
+        };
+      }
+    }
+
+    // Command substitution $(...) / backticks can hide arbitrary commands inside
+    // an otherwise-allowed prefix (e.g. `echo $(rm -rf /)`). Treat as ask
+    // unless an explicit rule allows the whole command line.
+    if (scan?.ok && scan.hasCommandSubstitution) {
+      const e = matchRule(this.activeRules(), "shell", command);
+      if (e !== "allow") {
+        return {
+          decision: "ask",
+          reason: "command substitution ($() / backticks) — approval required",
           alwaysAllowPrefix: extractFirstWord(command) + " ",
         };
       }

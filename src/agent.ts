@@ -491,7 +491,7 @@ export class Agent {
           const servers = rc.mcpServers ?? {};
           this.config.mcpServers = servers;
           if (this.mcp) {
-            void this.mcp.applyConfig(servers);
+            void this.mcp.applyConfig(servers).catch(() => {});
           }
         }
       });
@@ -1145,7 +1145,7 @@ export class Agent {
     this.clearWarmupTimer();
     this.warmupIdleTimer = setTimeout(() => {
       this.warmupIdleTimer = null;
-      void this.warmup({ rewarm: true });
+      void this.warmup({ rewarm: true }).catch(() => {});
     }, this.warmupIdleRefreshMs);
     this.warmupIdleTimer.unref();
   }
@@ -1257,6 +1257,8 @@ export class Agent {
     } else {
       this.tools = [...baseTools, ...mcpSpecs];
     }
+    // Tool list (re)built for this run — previous calibration no longer valid.
+    this.measuredFixedTokens = null;
     this.messages = buildRunMessages({
       config: this.config,
       primaryDef: this.primaryDef,
@@ -1322,6 +1324,10 @@ export class Agent {
     this.resetUsageTotals();
     this.filesModified = false;
     this.plan = [];
+    this.runDiffs = [];
+    this.selfReviewDone = false;
+    this.verifyStrikes = 0;
+    this.lastVerifySignature = "";
     for (const content of this.promptContext.takePendingContext()) this.messages.push({ role: "user", content });
     this.messages.push({ role: "user", content: task });
     // Cùng một dấu mốc run_start mà run() phát — UI reset anchor per-run ở đó.
