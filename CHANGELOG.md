@@ -25,6 +25,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   the JS scanner, which was already correct.
 
 ### Testing & CI
+- `test/eval/text-only-streak.mjs` asserted the pre-P0-8 loop (text-only
+  steps get nudged until the streak fires). P0-8 makes a tool-less step with
+  no file changes and no open plan a *chat turn* that finishes after one LLM
+  call, so the streak could never reach its limit — the eval gate (10/11)
+  failed on every CI attempt since it was added. Rewritten to stall WITH an
+  open plan (the guardrail's real domain) and a new `test/eval/chat-turn.mjs`
+  pins the one-call chat semantics (12/12).
 - `test/theme.test.mjs` pins the terminal-capability env (`TERM`,
   `NO_COLOR`, …) in `beforeEach`/`afterEach` — the runner leaves `TERM`
   unset, which makes the caps default theme `mono` and turned every
