@@ -3,6 +3,44 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.11] — 2026-11-14
+
+### Features
+- **TUI select mode (`Ctrl+O`)** — toggles off SGR mouse tracking so the
+  terminal's native drag-highlight + copy (`⌘C`/`Ctrl+C`) works on transcript
+  text; wheel scroll pauses (PgUp/PgDn still scroll) and the status bar shows
+  the copy reminder while the mode is on.
+
+### Performance
+- **File reads cost 1–2 LLM turns instead of ~6 (FILE-READ-PERF P1+P2)** —
+  measurement from `.scoder/logs`: the `read_file` tool itself is 1 ms, but a
+  28 KB README took 6 sequential turns × 8–11 s because the local profile
+  pinned `limits.toolOutputChars` at 6000. The budget is now derived from the
+  *probed* context window (`clamp(0.17 × window, 6000, 16000)` chars — 16k at
+  96k slots, unchanged 6000 at small windows; explicit rc values always win),
+  the truncation footer and the V6 prompt tell the model to issue ALL
+  remaining `read_file(offset=…)` slices in ONE step (read-only calls already
+  run concurrently up to `toolConcurrency`). Logged as `{"type":"read_budget"}`.
+- **Idle heartbeat re-warm on local engines (FILE-READ-PERF P3)** — cache/
+  `keep_alive` TTLs (~5 min) made the first message after a pause pay 35–56 s
+  cold prefill (measured TTFT 54.3 s at 14.5k tokens). An armed interactive
+  REPL/TUI session with a loopback `baseUrl` now re-sends the warm-up request
+  every 4 min while idle — replaying the real history once turns exist — so
+  the model stays loaded and the KV-cache fresh. Never for cloud APIs (no
+  paid cache-holding), `serve`/run-once, or during a run; timer is `unref()`
+  and cancelled by `dispose()`. Opt out with `"warmup": false`. Details:
+  `plan/FILE-READ-PERF-PLAN.md`; tests: `test/warmup.test.mjs`, `test/limits.test.mjs`.
+- **First-message cold prefill moved to session start (WARMUP)** — REPL and
+  TUI now send one background `max_tokens: 1` request as soon as the agent is
+  created, carrying the exact system+tools prefix the first real call will
+  use. Model cold-load, MCP server spawn and context-window probe leave the
+  path to the first token; local engines get their KV-cache filled and
+  Anthropic gets the I-04 cache write while the user is still typing. A real
+  run supersedes an in-flight warm request (abort + settle, no double MCP
+  spawn). Opt out per project with `"warmup": false` (`.scoderrc.json`);
+  `scoder <task>` and `scoder serve` never warm up. Details:
+  `plan/WARMUP-PLAN.md`; tests: `test/warmup.test.mjs`.
+
 ## [0.9.10] — 2026-11-13
 
 ### Performance
