@@ -10,12 +10,30 @@ import { join } from "node:path";
 
 let workdir;
 
+/**
+ * CI determinism: defaultThemeName() đọc process.env — GitHub Actions runner
+ * KHÔNG set TERM → "mono" (brand 'white') và mọi assertion mission/magenta
+ * fail, trong khi máy dev có TERM thì xanh. Pin env cho toàn file (restore
+ * sau mỗi test) — test vẫn asserted đúng logic caps, chỉ bỏ phụ thuộc môi trường.
+ */
+const CAPS_ENV = ["TERM", "COLORTERM", "NO_COLOR", "SCODER_THEME", "SCODER_PLAIN", "COLOR_COUNT"];
+let savedCapsEnv = {};
+
 beforeEach(() => {
   workdir = mkdtempSync(join(tmpdir(), "t09-"));
   setActiveTheme(THEMES.mission);
+  for (const k of CAPS_ENV) savedCapsEnv[k] = process.env[k];
+  for (const k of CAPS_ENV) delete process.env[k];
+  process.env.TERM = "xterm-256color";
 });
 
-afterEach(() => rmSync(workdir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(workdir, { recursive: true, force: true });
+  for (const k of CAPS_ENV) {
+    if (savedCapsEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedCapsEnv[k];
+  }
+});
 
 describe("getTheme (T-09)", () => {
   it("no theme.json → mission default", () => {

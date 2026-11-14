@@ -9,6 +9,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Mặc định fail-fast hủy 2 job còn lại khi 1 job đỏ — che mất bằng chứng
+      # (run 43568456376: node 20/24 "cancelled" dù chính nó cũng fail).
+      fail-fast: false
       matrix:
         # eslint 10 requires Node ^20.19 || ^22.13 || >=24 (util.styleText)
         node: [20, 22, 24]

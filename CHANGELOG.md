@@ -3,6 +3,40 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **`run_command` abort/timeout now reaps the whole process tree — fixes the
+  `scoder serve` abort test failing on Linux CI since 0.9.9** — `spawn` ran
+  the shell in the parent's process group, so SIGTERM reached only the
+  `sh -c` wrapper; on Linux the grandchild (`sleep`, `make`, `npm …`)
+  survived, kept the stdio pipes open and the tool result waited for a
+  `close` that only came after the grandchild's own timeout — the run never
+  emitted `finish`. Children now get their own group (`detached`) and are
+  killed via `kill(-pid, SIGTERM→SIGKILL)`; when killed, the promise
+  resolves on `exit` without waiting for pipe EOF. macOS never hit it because
+  bash execs single commands; reproduced deterministically in an
+  ubuntu-equivalent container.
+- **`grep` fallback honors `include` and skips noise dirs — fixes the two
+  `toolGrep` CI cases** — GitHub runners ship no `rg`, so `toolGrep` took the
+  portable `grep -rn` path, which ignored the `include` filter and searched
+  `node_modules`. GNU `--exclude-dir=…` / `--include …` added (mirrors the
+  rg fast path); a grep that rejects the flags exits ≥2 and falls through to
+  the JS scanner, which was already correct.
+
+### Testing & CI
+- `test/theme.test.mjs` pins the terminal-capability env (`TERM`,
+  `NO_COLOR`, …) in `beforeEach`/`afterEach` — the runner leaves `TERM`
+  unset, which makes the caps default theme `mono` and turned every
+  mission/`'magenta'` assertion into `'white' !== 'magenta'`.
+- `test/tui.test.mjs` PTY specs: `pty-run.py`'s stderr is captured into the
+  failure context (raw bytes + exit code were previously thrown away),
+  the PTY budget doubled to 60 s and the two specs serialized
+  (`concurrency: 1`) against cold-`npm ci` runner starvation.
+- `ci.yml`: `fail-fast: false` — one node version's failure no longer
+  cancels the other jobs' evidence (run 43568456376 showed node 20/24 as
+  "cancelled" while they were failing the same tests).
+
 ## [0.9.11] — 2026-11-14
 
 ### Features
