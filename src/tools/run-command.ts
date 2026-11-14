@@ -128,18 +128,33 @@ export async function toolRunCommand(
       cwd: workdir,
       stdio: ["ignore", "pipe", "pipe"],
       env: buildChildEnv(workdir), // G3: allowlist — không kế thừa full process.env
+      // Own process group so killTree(-pid) can reap grandchildren (see killTree).
+      detached: process.platform !== "win32",
     });
 
+    let exited = false;
     let stdout = "";
     let stderr = "";
     let killedReason: "timeout" | "aborted" | null = null;
 
+    // Linux/macOS: sh fork command con (sleep, make, npm…) rồi chết trước —
+    // kill mỗi `child` để chúng mồ côi, còn giữ PIPE => 'close' không bao giờ
+    // tới, tool treo, run không finish (fail CI serve-abort reproducibly).
+    // detached:true cho child một process group riêng -> kill cả nhóm qua -pid.
+    const killTree = (sig: NodeJS.Signals) => {
+      try {
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, sig);
+        else child.kill(sig);
+      } catch { /* already dead / group gone */ }
+    };
+
     const killChild = (reason: "timeout" | "aborted") => {
       killedReason = reason;
-      try { child.kill("SIGTERM"); } catch { /* already dead */ }
-      // SIGKILL fallback if the process ignores SIGTERM
+      killTree("SIGTERM");
+      // SIGKILL escalation — sh chết nhưng GRANDCHILD ignore TERM thì group
+      // vẫn sống; exitCode của bản thân sh không phản ánh điều đó, dùng `exited`.
       setTimeout(() => {
-        try { if (child.exitCode === null) child.kill("SIGKILL"); } catch { /* already dead */ }
+        if (!exited) killTree("SIGKILL");
       }, 5_000).unref();
     };
 
@@ -164,33 +179,42 @@ export async function toolRunCommand(
       finish({ ok: false, output: clamp(`${echoLine}\n(spawn error) ${err.message}`) });
     });
 
-    child.on("close", (code) => {
+    const buildResult = (code: number | null): ToolResult => {
       if (killedReason === "timeout") {
-        finish({
+        return {
           ok: false,
           output: clamp(`${echoLine}\n(command timed out after ${Math.round(timeoutMs / 1000)}s and was killed)\n--- stdout ---\n${redactSecrets(stdout)}\n--- stderr ---\n${redactSecrets(stderr)}`),
-        });
-        return;
+        };
       }
       if (killedReason === "aborted") {
-        finish({
+        return {
           ok: false,
           output: clamp(`${echoLine}\n(interrupted by user)\n--- stdout ---\n${redactSecrets(stdout)}\n--- stderr ---\n${redactSecrets(stderr)}`),
-        });
-        return;
+        };
       }
       const status = code ?? -1;
       // G3: redact trước khi output vào conversation/log/TUI.
       const redacted = redactSecrets(stdout);
       const redactedErr = redactSecrets(stderr);
       if (status === 0) {
-        finish({ ok: true, output: clamp(`${echoLine}\n(exit 0)\n${redacted}`) });
-      } else {
-        finish({
-          ok: false,
-          output: clamp(`${echoLine}\n(exit ${status})\n--- stdout ---\n${redacted}\n--- stderr ---\n${redactedErr}`),
-        });
+        return { ok: true, output: clamp(`${echoLine}\n(exit 0)\n${redacted}`) };
       }
+      return {
+        ok: false,
+        output: clamp(`${echoLine}\n(exit ${status})\n--- stdout ---\n${redacted}\n--- stderr ---\n${redactedErr}`),
+      };
+    };
+
+    // 'close' chờ EOF của pipe; grandchild lì (khác process group — hiếm, hoặc
+    // spawn của chính command) có thể giữ nó mở vĩnh viễn. Đã kill mà child
+    // exit rồi thì resolve ngay trên 'exit', đừng đợi close.
+    child.on("exit", (code) => {
+      exited = true;
+      if (killedReason) finish(buildResult(code));
+    });
+
+    child.on("close", (code) => {
+      finish(buildResult(code));
     });
   });
 }

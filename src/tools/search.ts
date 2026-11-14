@@ -92,7 +92,12 @@ export function toolGrep(
     }
 
     // Fallback: grep -rn (portable) — output already path:line:text.
+    // CI runners (ubuntu-latest) không có rg → đường này là mainstream, phải
+    // hỗ trợ include + skip noise dirs như rg; grep BSD không hiểu các cờ này
+    // sẽ exit ≥2 → rơi tiếp xuống jsGrepFallback (xử lý đúng, không mất sạch).
     const gArgs = ["-rn", "--binary-files=without-match", "-I", "-m", "5", "-e", pattern];
+    for (const d of SEARCH_SKIP) gArgs.push(`--exclude-dir=${d}`);
+    if (args.include) gArgs.push("--include", args.include);
     if (ctxBefore > 0) gArgs.push("-B", String(ctxBefore));
     if (ctxAfter > 0) gArgs.push("-A", String(ctxAfter));
     gArgs.push(root);
