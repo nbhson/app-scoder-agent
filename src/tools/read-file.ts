@@ -73,8 +73,10 @@ export function toolReadFile(workdir: string, args: { path: string; offset?: num
   const footer =
     dropped > 0
       ? `\n... [${dropped} more line(s): ${end + 1}-${offset + slice.length - 1} of ${total}. ` +
-        `Read the next chunk with read_file({"path":"${args.path}","offset":${end + 1}}) — ` +
-        `do NOT re-read from the start.]`
+        `Read the REST in ONE step — parallel read_file calls at ` +
+        `{"path":"${args.path}","offset":${end + 1}}, ` +
+        `{"path":"${args.path}","offset":${end + 1 + kept.length}}, ... ` +
+        `until the file is done; do NOT re-read from the start.]`
       : "";
   // clamp cho dòng kếch xù (một dòng 40k ký tự vẫn phải nằm trong ngân sách).
   const numbered = clamp(kept.join("\n"), budget);

@@ -186,6 +186,17 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     setScrollOffset, selectMode, setSelectMode, exit,
   });
 
+  // WARMUP (plan/WARMUP-PLAN.md): tạo agent + prefill prefix system+tools nền
+  // NGAY khi mở TUI — TTFT của câu chat đầu không còn phải trả cold-load model
+  // và 20–60k token prefill. Bỏ qua khi có initialTask (submit trả prefill ngay
+  // sau mount, warm-up chỉ nhân đôi việc — settleWarmup sẽ abort nó).
+  const warmupRef = useRef(false);
+  useEffect(() => {
+    if (initialTask || warmupRef.current) return;
+    warmupRef.current = true;
+    void createAgent().warmup();
+  }, [initialTask]);
+
   // Submit an initial task passed on the command line once, after mount.
   const bootRef = useRef(false);
   useEffect(() => {

@@ -28,7 +28,7 @@ Baseline: `plan/baseline/bench-dec14e1.json`.
 | `discoverSkills`/`findSkill` caching | ~1.8 ms total | skipped — freshness semantics of `/skill` would change |
 | TUI transcript virtualization (`transcriptWindow` window around viewport) | commit cost 42–53 ms → 9.0–9.4 ms/frame at 302–400 items (fake-TTY bench, same `ChatItemView` pipeline); SLO gate 6/6 | merged (P1-8) — approval + scroll tests included (`test/tui-virtual.test.mjs`) |
 | History trim is **conditional** (`history-trim` guardrail + cooldown 3 steps, hysteresis to 70 % of budget) instead of every step | 40-step simulation, 128k window: wasted re-prefill 1.13M → 174k tokens (−85 %), KV-cache reuse 0.51 → 0.93, trim events 20 → 1 | merged (P0-1) |
-| `read_file` truncates line-aware at `limits.toolOutputChars` (8k default, 6k local profile) with an explicit "read the next chunk at offset N" hint | on top of P0-1: total prompt tokens −46 % (2.61M → 1.42M), re-prefill −70 % | merged (P0-2) |
+| `read_file` truncates line-aware at `limits.toolOutputChars` (6k floor, adaptive 6–16k by probed window on local engines — `plan/FILE-READ-PERF-PLAN.md` P1) with an explicit "read the next chunk at offset N" hint | on top of P0-1: total prompt tokens −46 % (2.61M → 1.42M), re-prefill −70 % | merged (P0-2) |
 | MCP schema budget `limits.mcpSchemaTokens` + global allowlist `mcpTools` | schema 16,222 → 8,570 wire tokens with cap 6k (53 → 24 advertised tools) | merged (P0-3), default off |
 | Tool schema counted in context pressure (`estimateSchemaTokens`) | compaction/trim now trigger ~16k tokens earlier — matching the real prompt | merged (P1-1) |
 | Context window probed from the server (`/api/show`, `/props`, `max_model_len`) | replaces the 128k guess for Ollama/llama.cpp/vLLM | merged (P1-1) |
@@ -55,11 +55,35 @@ biggest latency factor for `localhost` models. Rules the code follows:
   of the budget (`TRIM_RECOVERY_FRACTION`), not to the threshold;
 - one tool result enters history at `limits.toolOutputChars` size, with a hint
   telling the model how to read the next chunk instead of re-reading;
+- **adaptive read budget (P1, `plan/FILE-READ-PERF-PLAN.md`)** — on a local
+  engine with no explicit `limits.toolOutputChars`, the budget is derived from
+  the *probed* context window: `clamp(0.17 × window, 6000, 16000)` chars
+  (`adaptiveToolOutputChars`, ≈4 % of the history per tool result). At 96k
+  tokens that is 16 000 chars — a 28 KB README takes 2 read steps instead of
+  6; at 16k slots it stays 6000, unchanged. Logged as `{"type":"read_budget"}`.
+  The V6 prompt additionally tells the model to fire the remaining
+  `read_file` slices in ONE step — the executor runs read-only calls
+  concurrently (`toolConcurrency`).
 - `baseUrl` on a loopback host switches on the local profile
   (`localProfile`): `maxSteps` 24, `limits.requestTimeoutMs` 600s,
-  `limits.toolOutputChars` 6000, `limits.mcpSchemaTokens` 6000, `selfReview`
+  `limits.mcpSchemaTokens` 6000, `selfReview`
   off. `repoMap` and `snapshots` stay ON — the repo map is part of the stable
-  system prompt and snapshots cost no tokens.
+  system prompt and snapshots cost no tokens. `toolOutputChars` is deliberately
+  NOT pinned here anymore — it belongs to the adaptive rule above.
+- an interactive session pays the prefix cost BEFORE the first message
+  (`warmup`, `plan/WARMUP-PLAN.md`): one background `max_tokens: 1` request
+  with the exact system+tools prefix at REPL/TUI start — model loaded into
+  VRAM, MCP connected, KV/prompt-cache filled while the user is still typing.
+- **idle heartbeat re-warm (P3)** — engines expire caches (Ollama
+  `keep_alive` ≈5 min, Anthropic ephemeral TTL 5 min); an idle-then-message
+  session used to pay 35–56 s cold prefill measured in `.scoder/logs`. On
+  loopback base URLs only, an armed interactive session re-sends the warm
+  request every 4 min (`WARMUP_IDLE_REFRESH_MS`) when nothing is running:
+  the first cycles re-prefill the placeholder prefix, later cycles replay the
+  real history (the actual prefix of the next turn). `serve`/`scoder <task>`
+  never warm up, cloud URLs never heartbeat (no paid cache-holding),
+  `settleWarmup`/`dispose` cancel the timer, and it is `unref()`-ed so it
+  cannot keep a process alive.
 - on a small window the MCP cap tightens itself: the total schema (builtin +
   MCP) may not exceed `SCHEMA_SHARE_OF_WINDOW` (35 %) of the *probed* context
   window. `limits.mcpSchemaTokens: 0` still means "no cap at all".

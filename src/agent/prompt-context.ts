@@ -109,6 +109,12 @@ export class PromptContext {
     this.pendingAllowedTools = null;
   }
 
+  /** Non-destructive read — warm-up dựng đúng messages như run() nhưng KHÔNG
+   *  tiêu thụ pending context (nó thuộc về run thật, take là mất). */
+  peekPendingContext(): string[] {
+    return [...this.pendingContext];
+  }
+
   takePendingContext(): string[] {
     const pending = this.pendingContext;
     this.pendingContext = [];

@@ -38,6 +38,8 @@
   "verifyCache": true,
   "localProfile": true,
 
+  "warmup": true,
+
   "mcpTools": {
     "include": [],
     "exclude": ["mcp__github-mcp__*notifications*", "mcp__github-mcp__*codespaces*"]

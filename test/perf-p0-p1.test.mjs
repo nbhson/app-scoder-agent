@@ -153,9 +153,13 @@ describe("P0-2: read_file cắt theo dòng + hint đọc tiếp", () => {
     assert.ok(r.output.length <= 2_600, `output ${r.output.length} ký tự`);
     assert.match(r.output, /\[lines 1-\d+ of 400 — big.txt\]/);
     assert.match(r.output, /do NOT re-read from the start/);
-    const m = /read_file\(\{"path":"big\.txt","offset":(\d+)\}\)/.exec(r.output);
+    const m = /\{"path":"big\.txt","offset":(\d+)\}/.exec(r.output);
     assert.ok(m, "footer phải có offset kế tiếp");
     assert.equal(Number(m[1]), Number(/\[lines 1-(\d+)/.exec(r.output)[1]) + 1);
+    // FILE-READ-PERF P2: footer gợi ý CẢ offset thứ hai (batch song song 1 bước)
+    const m2 = /\{"path":"big\.txt","offset":\d+\},\s*\{"path":"big\.txt","offset":(\d+)\}/.exec(r.output);
+    assert.ok(m2, "footer phải có offset thứ hai để đọc song song");
+    assert.ok(Number(m2[1]) > Number(m[1]), "offset sau phải lớn hơn");
     // đọc tiếp từ offset được chỉ ra -> lấy đúng phần còn lại
     const next = toolReadFile(dir, { path: "big.txt", offset: Number(m[1]), limit: 5 });
     assert.match(next.output, new RegExp(`^\\[lines ${m[1]}-`));

@@ -15,6 +15,9 @@ export async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scode
   // every input is a follow-up turn, context carries over, saved continuously.
   // /clear swaps in a fresh Agent (the /clear branch reassigns this).
   let agent = new Agent(cfg);
+  // WARMUP (plan/WARMUP-PLAN.md): dựng MCP+probe+prefill system+tools nền
+  // trong lúc user còn đọc prompt — lệnh đầu không trả 30–120s cold prefill.
+  void agent.warmup();
 
   process.on("SIGINT", () => {
     ui.warn("\nSIGINT — aborting current task...");
@@ -42,6 +45,9 @@ export async function repl(cfg: AgentConfig): Promise<never> {  ui.header(`scode
         agent.dispose();
         agent = next ?? new Agent(cfg);
         first = true;
+        // Agent mới = prefix mới (session id, repo state) — warm-up lại từ đầu.
+        // Với `next` đã có messages (resume) warmup() tự no-op.
+        void agent.warmup();
       },
     };
     const { handled, outcome } = await dispatchCommand(input, host, (text, level) => {

@@ -16,6 +16,7 @@ import {
   resolveLimits,
   isLocalBaseUrl,
   applyLocalProfile,
+  adaptiveToolOutputChars,
 } from "../dist/config/config.js";
 
 let dir;
@@ -112,15 +113,17 @@ describe("isLocalBaseUrl (P2)", () => {
 });
 
 describe("applyLocalProfile (P2)", () => {
-  it("local: hạ maxSteps, bật timeout/ngân sách nhỏ, tắt selfReview", () => {
+  it("local: hạ maxSteps, bật timeout lớn, trần MCP schema, tắt selfReview", () => {
     const cfg = { ...base, baseUrl: "http://localhost:11434/v1", maxSteps: 40 };
     const applied = applyLocalProfile(cfg, { maxSteps: false });
     assert.equal(cfg.maxSteps, LOCAL_PROFILE_DEFAULTS.maxSteps);
     assert.equal(cfg.limits.requestTimeoutMs, LOCAL_PROFILE_DEFAULTS.requestTimeoutMs);
-    assert.equal(cfg.limits.toolOutputChars, LOCAL_PROFILE_DEFAULTS.toolOutputChars);
+    // FILE-READ-PERF P1: profile KHÔNG pin toolOutputChars nữa — agent suy từ
+    // context window đã probe (adaptiveToolOutputChars, applyContextProbe).
+    assert.equal(cfg.limits.toolOutputChars, undefined);
     assert.equal(cfg.limits.mcpSchemaTokens, LOCAL_PROFILE_DEFAULTS.mcpSchemaTokens);
     assert.equal(cfg.selfReview, false);
-    assert.ok(applied.length >= 4, applied.join(","));
+    assert.ok(applied.length >= 3, applied.join(","));
   });
 
   it("cloud: không đổi gì", () => {

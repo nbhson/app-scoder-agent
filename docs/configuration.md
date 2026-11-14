@@ -83,7 +83,7 @@ Numeric thresholds, all optional. Defaults live in `LIMIT_DEFAULTS`
 | `maxOutputChars` | 20000 | Hard cap on one tool's raw output |
 | `toolConcurrency` | 4 | Parallel tool calls per step |
 | `renderCap` | 200 | Tail items rendered by the TUI |
-| `toolOutputChars` | 8000 | Budget for **one tool result in history**; `read_file` cuts at it line-aware and prints the `offset` to continue with |
+| `toolOutputChars` | 6000 (local: 6000–16000 by window) | Budget for **one tool result in history**; `read_file` cuts at it line-aware and prints the `offset` to continue with. On a local engine with no explicit value the budget adapts to the probed context window (`plan/FILE-READ-PERF-PLAN.md` P1) |
 | `mcpSchemaTokens` | 0 (= off) | Ceiling for all MCP tool schemas advertised per call; tools past the ceiling are not advertised (warning names the count). On a small context window the effective ceiling is lowered automatically: total schema (builtins + MCP) is kept ≤ 35 % of the probed window |
 | `buildTimeoutSecs` | 600 | Timeout of one verify command (build/test/typecheck/lint) |
 
@@ -97,9 +97,15 @@ each change is skipped if you set the key yourself:
 |---|---|---|
 | `maxSteps` | 24 | 40 steps on a local model is hours |
 | `limits.requestTimeoutMs` | 600000 | A 30k-token prefill can exceed 120s |
-| `limits.toolOutputChars` | 6000 | Smaller per-tool-result history budget |
 | `limits.mcpSchemaTokens` | 6000 | 46 GitHub-MCP tools cost ~12k tokens **per call** |
 | `selfReview` | false | One extra LLM turn with a nearly full prompt |
+
+`limits.toolOutputChars` is deliberately **not** pinned by the profile: on a
+local engine it adapts to the *probed* context window —
+`clamp(0.17 × window, 6000, 16000)` chars, so small windows keep the old 6000
+budget while a 96k-slot server reads a 28 KB file in 2 steps instead of 6
+(`plan/FILE-READ-PERF-PLAN.md`). Set the key explicitly to win over the
+adaptive rule.
 
 Disable with `"localProfile": false`, or override individual keys (they win).
 `repoMap` and `snapshots` are deliberately **not** disabled: the repo map lives
@@ -116,6 +122,16 @@ Related top-level keys:
   `max_model_len`) before falling back to the catalog/128k guess.
 - `"mcpTools": { "include": [...], "exclude": [...] }` — global allow/deny for
   MCP tool names (see [mcp.md](mcp.md)).
+- `"warmup": false` — skip the background prefix-prefill request an interactive
+  session (REPL/TUI) sends at startup: same system prompt + tool schemas as the
+  first real call, `max_tokens: 1`, response discarded. It moves model
+  cold-load, MCP connect and the 20–60k-token prefill off the first message's
+  path (cache write on Anthropic, KV prefill on llama.cpp/Ollama). One extra
+  API request per session start; `scoder run`/`serve` never send it. On loopback
+  URLs an idle session additionally re-warms every 4 minutes (keeps the engine
+  loaded through Ollama's `keep_alive` — see
+  [plan/FILE-READ-PERF-PLAN.md](../plan/FILE-READ-PERF-PLAN.md)). See
+  [plan/WARMUP-PLAN.md](../plan/WARMUP-PLAN.md).
 
 ## Permission Modes
 

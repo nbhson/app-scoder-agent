@@ -32,6 +32,12 @@ export interface AgentConfig {
   routing?: { plan?: string; build?: string; review?: string };
   /** v2: false disables the repo-map injection into the system prompt (default on). */
   repoMap?: boolean;
+  /**
+   * WARMUP (plan/WARMUP-PLAN.md): false disables the background prefix-prefill
+   * request sent when an interactive session starts (default on). Only REPL/TUI
+   * call it — run-once/serve skip the warm-up entirely.
+   */
+  warmup?: boolean;
   /** v2: prompt version — 4/5 = rollback to V4/V5 prompt; 6/undefined = V6 (default). */
   promptVersion?: number;
   /** v2: verify commands for the completion gate (rc "verifyCmds"). Empty string disables one. */
@@ -141,6 +147,8 @@ interface RcFile {
   routing?: { plan?: string; build?: string; review?: string };
   /** v2: false disables repo-map injection into the system prompt (default on). */
   repoMap?: boolean;
+  /** WARMUP (plan/WARMUP-PLAN.md): false = không gửi request prefill nền khi mở REPL/TUI. */
+  warmup?: boolean;
   /** v2: prompt version override — 4/5 = rollback to V4/V5, 6/undefined = V6 (default). */
   promptVersion?: number;
   /** v2: verify commands for the completion gate (empty string disables one). */
@@ -251,11 +259,33 @@ export const LOCAL_PROFILE_DEFAULTS = {
   maxSteps: 24,
   /** P2-3: prefill 20–60k token trên máy cá nhân có thể vượt 120s → timeout + retry. */
   requestTimeoutMs: 600_000,
-  /** P0-2: history của MỘT tool result nhỏ hơn mặc định cloud (8k). */
-  toolOutputChars: 6_000,
+  /**
+   * FILE-READ-PERF P1: profile KHÔNG pin toolOutputChars nữa (trước là 6000) —
+   * ngân sách đọc giờ suy từ context window THẬT qua adaptiveToolOutputChars,
+   * apply ở cuối applyContextProbe (agent.ts). Window nhỏ vẫn ra 6000 như cũ.
+   */
   /** P0-3: trần token cho MCP schema; 46 tool GitHub MCP ≈ 12k token mỗi lượt. */
   mcpSchemaTokens: 6_000,
 } as const;
+
+/**
+ * FILE-READ-PERF (plan/FILE-READ-PERF-PLAN.md) N1: một lần đọc file bị cắt
+ * thành 5–6 MẢNH vì budget 6000 ký tự, mà mỗi mảnh = một lượt LLM tròn
+ * (đo: 8–11s/mảnh với README 28KB). Nới budget theo window đã probe:
+ * 0.17 ký tự mỗi token window ≈ 4% history cho một tool result
+ * (4 chars ≈ 1 token) — window 16k giữ nguyên 6000, 96k lên trần 16000.
+ */
+export const TOOL_OUTPUT_WINDOW_SHARE = 0.17;
+export const TOOL_OUTPUT_CHARS_FLOOR = 6_000;
+export const TOOL_OUTPUT_CHARS_CEIL = 16_000;
+
+export function adaptiveToolOutputChars(windowTokens: number): number {
+  if (!Number.isFinite(windowTokens) || windowTokens <= 0) return TOOL_OUTPUT_CHARS_FLOOR;
+  return Math.min(
+    TOOL_OUTPUT_CHARS_CEIL,
+    Math.max(TOOL_OUTPUT_CHARS_FLOOR, Math.round(windowTokens * TOOL_OUTPUT_WINDOW_SHARE)),
+  );
+}
 
 /**
  * Áp mặc định phù hợp cho local engine. Trả về danh sách thay đổi đã áp (để
@@ -283,10 +313,8 @@ export function applyLocalProfile(
     limits.requestTimeoutMs = LOCAL_PROFILE_DEFAULTS.requestTimeoutMs;
     applied.push(`requestTimeoutMs=${LOCAL_PROFILE_DEFAULTS.requestTimeoutMs}`);
   }
-  if (limits.toolOutputChars === undefined) {
-    limits.toolOutputChars = LOCAL_PROFILE_DEFAULTS.toolOutputChars;
-    applied.push(`toolOutputChars=${LOCAL_PROFILE_DEFAULTS.toolOutputChars}`);
-  }
+  // FILE-READ-PERF P1: toolOutputChars KHÔNG pin ở đây nữa — để undefined để
+  // applyAdaptiveReadBudget nhận diện "user không đặt" và suy từ window.
   if (limits.mcpSchemaTokens === undefined) {
     limits.mcpSchemaTokens = LOCAL_PROFILE_DEFAULTS.mcpSchemaTokens;
     applied.push(`mcpSchemaTokens=${LOCAL_PROFILE_DEFAULTS.mcpSchemaTokens}`);
@@ -506,6 +534,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     agent: overrides.agent ?? process.env.SCODER_AGENT ?? rc.agent,
     routing: rc.routing,
     repoMap: rc.repoMap,
+    warmup: rc.warmup,
     promptVersion: rc.promptVersion,
     verifyCmds: rc.verifyCmds,
     selfReview: rc.selfReview,

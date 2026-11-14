@@ -63,7 +63,11 @@ export interface ProviderRuntimeContract {
   setModel(model: string): void;
   /** H-09: tool calls dồn từ stream bị đứt (continuation). */
   lastPartialToolCalls: ToolCall[];
-  chat(messages: ChatMessage[], tools: ToolSpec[], opts?: { signal?: AbortSignal }): Promise<import("./llm.js").ChatResult>;
+  chat(
+    messages: ChatMessage[],
+    tools: ToolSpec[],
+    opts?: { signal?: AbortSignal; maxTokens?: number },
+  ): Promise<import("./llm.js").ChatResult>;
   streamChat(
     messages: ChatMessage[],
     tools: ToolSpec[],

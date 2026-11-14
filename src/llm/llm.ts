@@ -261,7 +261,7 @@ export class LlmClient {
   async chat(
     messages: ChatMessage[],
     tools: ToolSpec[],
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; maxTokens?: number } = {},
   ): Promise<ChatResult> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
     const { signal, cleanup } = combinedSignal(opts.signal, this.timeoutMs);
@@ -270,7 +270,9 @@ export class LlmClient {
       messages: toWireMessages(messages),
       tools: tools.length > 0 ? tools : undefined,
       temperature: this.opts.temperature,
-      max_tokens: this.opts.maxTokens,
+      // WARMUP: override max_tokens cho request prefill (1 token là đủ để
+      // engine tính xong KV-cache của prefix) — lượt thật không truyền key này.
+      max_tokens: opts.maxTokens ?? this.opts.maxTokens,
       stream: false,
     });
 

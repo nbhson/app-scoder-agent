@@ -49,6 +49,9 @@ export async function withRetry<T>(
       lastErr = err;
 
       const status = (err as { status?: number }).status;
+      // WARMUP: abort của CHÍNH caller (warm-up bị lượt thật supersede, SIGINT)
+      // không bao giờ được retry — message có thể là bất kỳ chuỗi nào.
+      if ((err as { name?: string })?.name === "AbortError") throw err;
       const retryable =
         (typeof status === "number" && isRetryableStatus(status)) ||
         (!(err instanceof NonRetryableError) && isRetryableNetworkError(err));

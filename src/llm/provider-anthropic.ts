@@ -215,12 +215,18 @@ export class AnthropicClient {
   }
 
   /** I-05: request body builder — shared by chat/streamChat. */
-  private buildBody(system: unknown, messages: AnthropicMessage[], tools: unknown, stream: boolean): string {
+  private buildBody(
+    system: unknown,
+    messages: AnthropicMessage[],
+    tools: unknown,
+    stream: boolean,
+    maxTokensOverride?: number,
+  ): string {
     // Extended thinking: temperature must be 1 và thinking block format.
     const thinkingOn = (this.opts.thinkingBudgetTokens ?? 0) > 0;
     return JSON.stringify({
       model: this.opts.model,
-      max_tokens: this.opts.maxTokens,
+      max_tokens: maxTokensOverride ?? this.opts.maxTokens,
       temperature: thinkingOn ? 1 : this.opts.temperature,
       ...(thinkingOn ? { thinking: { type: "enabled", budget_tokens: this.opts.thinkingBudgetTokens } } : {}),
       system,
@@ -233,13 +239,15 @@ export class AnthropicClient {
   async chat(
     messages: ChatMessage[],
     tools: ToolSpec[],
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; maxTokens?: number } = {},
   ): Promise<ChatResult> {
     const url = `${this.opts.baseUrl.replace(/\/$/, "")}/messages`;
     const { system, messages: translated } = toAnthropicMessages(messages);
     const { signal, cleanup } = combinedSignal(opts.signal, this.timeoutMs);
     const cached = this.applyCacheControl(system, translated, tools);
-    const body = this.buildBody(cached.system, cached.messages, cached.tools, false);
+    // WARMUP: override max_tokens cho request prefill — các breakpoint
+    // cache_control (tools + system) đã áp dụng y hệt lượt thật.
+    const body = this.buildBody(cached.system, cached.messages, cached.tools, false, opts.maxTokens);
 
     let res: Response;
     try {

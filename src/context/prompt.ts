@@ -279,6 +279,10 @@ export const PROMPT_SECTIONS: Record<string, string> = {
   tools: `## Tool policy
 - Orient with list_files / grep / glob / repo_map — prefer them over shell
   greps. read_file before every edit_file.
+- read_file: when a result ends with "N more line(s)", read the REST in ONE
+  step — issue several read_file calls with successive offset/limit covering
+  every remaining chunk at once (they run in parallel). Never re-read lines
+  you already have.
 - edit_file: old_string MUST appear exactly once — otherwise re-read the file
   and add more context.
 - run_command IS the build command: run it only when you changed files; a

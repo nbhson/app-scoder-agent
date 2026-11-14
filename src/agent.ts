@@ -1,5 +1,5 @@
 import type { AgentConfig } from "./config/config.js";
-import { loadPermissionLists, loadPolicyRules, loadSavedApprovals } from "./config/config.js";
+import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, adaptiveToolOutputChars } from "./config/config.js";
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
 import type {ToolResult} from "./tools/types.js";
 import { AnthropicClient } from "./llm/provider-anthropic.js";
@@ -79,6 +79,13 @@ import {
 export { EVENT_SCHEMA_VERSION, resolvePrimaryConfig } from "./agent/types.js";
 export type { AgentEvent, AgentRunResult, ResolvedPrimary, UsageTotals, VerificationInfo } from "./agent/types.js";
 
+/**
+ * FILE-READ-PERF P3: nhịp heartbeat re-warm khi idle — 4' < TTL cache ~5'
+ * (Anthropic ephemeral / Ollama keep_alive mặc định), để prefix không bao giờ
+ * nguội trong lúc session còn mở.
+ */
+export const WARMUP_IDLE_REFRESH_MS = 240_000;
+
 export class Agent {
   /** v2 event schema: stable id for the run — links agent_start/agent_end. */
   readonly id = randomUUID();
@@ -135,6 +142,25 @@ export class Agent {
   /** v2: build no-progress tracking — same failure signature twice → escalate. */
   private lastVerifySignature = "";
   private verifyStrikes = 0;
+  /**
+   * WARMUP (plan/WARMUP-PLAN.md): request prefill nền — dựng đúng prefix
+   * system+tools mà lượt thật sẽ gửi, max_tokens=1, vứt response. Null khi
+   * chưa trigger; `settled` sau khi LLM request kết thúc (thành công/abort/lỗi).
+   */
+  private warmupRun: { promise: Promise<void>; abort: AbortController; settled: boolean } | null = null;
+  /** True after dispose() — warm-up không được để MCP server con mọc lại. */
+  private disposed = false;
+  /**
+   * FILE-READ-PERF P3 (plan/FILE-READ-PERF-PLAN.md): heartbeat re-warm khi idle —
+   * engine local có keep_alive ~5', model unload thì lượt kế trả 35–56s cold
+   * prefill (đo thật). Timer chạy CHỈ lúc nhàn rỗi (settleWarmup tắt, finish()
+   * bật lại), unref để không giữ process. CHỈ cho baseUrl loopback.
+   */
+  private warmupIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True nếu frontend này THỰC sự dùng warm-up (REPL/TUI) — serve/run-once không heartbeat. */
+  private warmupUsed = false;
+  /** Test knob: thu ngắn nhịp heartbeat (default WARMUP_IDLE_REFRESH_MS). */
+  warmupIdleRefreshMs = WARMUP_IDLE_REFRESH_MS;
   /** v2: ask_user plumbing (frontends register handlers; serve → not-interactive). */
   /** Guardrail Engine — khởi tạo trong constructor (cần this.config). */
   private guardrails: ReturnType<typeof createGuardrailEngine>;
@@ -479,6 +505,8 @@ export class Agent {
   abort(): void {
     this.aborted = true;
     this.runSignal.abort(new DOMException("interrupted by user", "AbortError"));
+    // WARMUP: SIGINT giết luôn request prefill nếu còn chạy nền.
+    this.warmupRun?.abort.abort(new DOMException("interrupted by user", "AbortError"));
   }
 
   /**
@@ -922,7 +950,10 @@ export class Agent {
    * server tự cắt history, và mỗi lần nó cắt là một lần mất KV-cache.
    */
   private async applyContextProbe(): Promise<void> {
-    if (this.config.contextWindow) return;
+    if (this.config.contextWindow) {
+      this.applyAdaptiveReadBudget();
+      return;
+    }
     let probe: ProbedWindow | null = null;
     try {
       // Server local vẫn có thể bật --api-key: /props trả 401 nếu không gửi
@@ -951,11 +982,172 @@ export class Agent {
         `context window: ${probe.tokens} token (${probe.detail}) — thay fallback ${catalog} token, compaction/trim tính theo số này`,
       );
     }
+    this.applyAdaptiveReadBudget();
+  }
+
+  /**
+   * FILE-READ-PERF (plan/FILE-READ-PERF-PLAN.md) P1: nới ngân sách một lần đọc
+   * theo window THẬT khi local + user không đặt tường minh. Chạy một lần; giá
+   * trị ghi cả vào config.limits (safety-net ở tool-executor) lẫn module budget
+   * mà read-file.ts cắt theo. Probe thất bại (không có window) → giữ floor cũ.
+   */
+  private readBudgetAdapted = false;
+  private applyAdaptiveReadBudget(): void {
+    if (this.readBudgetAdapted) return;
+    const window = this.config.contextWindow;
+    if (!window || !isLocalBaseUrl(this.config.baseUrl) || this.config.localProfile === false) return;
+    if (this.config.limits?.toolOutputChars !== undefined) return; // user thắng, không đụng
+    const budget = adaptiveToolOutputChars(window);
+    this.config.limits = { ...this.config.limits, toolOutputChars: budget };
+    setMaxToolOutputChars(budget);
+    this.readBudgetAdapted = true;
+    this.logger.log({ type: "read_budget", chars: budget, window });
   }
 
   /** Rebuild built-in and connected MCP tool specs for the current skill scope. */
   private rebuildToolList(): void {
     rebuildMcpToolList(this.mcpBridgeRuntime());
+  }
+
+  /**
+   * WARMUP (plan/WARMUP-PLAN.md): prefill prefix system+tools NỀN ngay khi mở
+   * session, để lượt chat đầu không phải trả cold-load + 20–60k token prefill
+   * trên đường tới token đầu (đo: 30–120s trên máy cá nhân, xem P2-3). One-shot,
+   * idempotent, fire-and-forget — lỗi im lặng (best-effort).
+   * `rewarm` (FILE-READ-PERF P3): bản heartbeat — bỏ guard "chưa có messages",
+   * tiền đề là entry trước đã settle.
+   */
+  warmup(opts: { rewarm?: boolean } = {}): Promise<void> {
+    const w = this.warmupRun;
+    if (w && (!w.settled || !opts.rewarm)) return w.promise;
+    if (this.config.warmup === false) return Promise.resolve();
+    // aborted chỉ chặn warm KHỞI ĐẦU; heartbeat sống lại sau lượt kế (resetRunSignal).
+    if (this.disposed || (this.aborted && !opts.rewarm)) return Promise.resolve();
+    if (!opts.rewarm && this.messages.length > 0) return Promise.resolve();
+    if (!this.config.apiKey) return Promise.resolve();
+    // I-12: harness eval thay client bằng scripted transcript — warm-up sẽ ăn
+    // mất một lượt kịch bản, làm hỏng mọi assertion đếm request.
+    if (this.config.clientFactory) return Promise.resolve();
+    const abort = new AbortController();
+    const entry = { abort, settled: false, promise: Promise.resolve() };
+    this.warmupUsed = true;
+    entry.promise = this.runWarmup(abort.signal, () => {
+      entry.settled = true;
+    }, opts.rewarm === true);
+    this.warmupRun = entry;
+    return entry.promise;
+  }
+
+  private async runWarmup(signal: AbortSignal, settle: () => void, rewarm = false): Promise<void> {
+    const t0 = Date.now();
+    try {
+      // Dời hai việc network ra khỏi đường tới token đầu. run() vẫn gọi lại
+      // nguyên như cũ — cả hai đều return sớm khi đã hoàn tất ở đây.
+      await Promise.allSettled([this.applyContextProbe(), this.connectMcp()]);
+      if (signal.aborted || this.disposed) return;
+      // FILE-READ-PERF P3: heartbeat sau khi đã chạy ≥1 lượt thật gửi lại
+      // HISTORY THẬT — đó mới là prefix của lượt kế tiếp (placeholder sẽ phân
+      // nhánh ngay sau system). Trước lượt đầu: dựng đúng messages như run().
+      const hasHistory = this.messages.length > 0;
+      // Tool list + messages dựng ĐÚNG như run() — cache-key (Anthropic
+      // breakpoint, prefix KV của llama.cpp) là từng byte JSON của schema.
+      const pendingAllowedTools = this.promptContext.pendingTools();
+      const allow = pendingAllowedTools?.length
+        ? new Set(pendingAllowedTools.map((t) => t.toLowerCase()))
+        : null;
+      let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef, this.reporter);
+      if (allow) baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
+      const mcpSpecs = governedMcpSpecs(this.mcpBridgeRuntime());
+      const tools = allow
+        ? [...baseTools, ...mcpSpecs.filter((s) => allow.has(s.function.name.toLowerCase()))]
+        : [...baseTools, ...mcpSpecs];
+      const messages: ChatMessage[] = hasHistory
+        ? this.messages
+        : buildRunMessages({
+            config: this.config,
+            primaryDef: this.primaryDef,
+            skills: this.promptContext.getSkills(),
+            buildCmd: this.buildCmd,
+            // Placeholder KHÔNG mention file nào: system prompt trùng byte với
+            // request thật ở mọi task không có focus-file guide (xem plan §7).
+            task: "[warmup]",
+            pendingContext: this.promptContext.peekPendingContext(),
+          });
+      const res = await this.client.chat(messages, tools, { signal, maxTokens: 1 });
+      this.logger.log({
+        type: "warmup",
+        ok: true,
+        rewarm,
+        ms: Date.now() - t0,
+        model: this.client.model,
+        promptTokens: res.usage?.prompt_tokens,
+        cachedTokens: res.usage?.cached_tokens,
+      });
+    } catch (err) {
+      // Warm-up không bao giờ được làm hỏng run thật — kể cả SIGINT abort.
+      this.logger.log({
+        type: "warmup",
+        ok: false,
+        ms: Date.now() - t0,
+        error: ((err as Error)?.message ?? String(err)).slice(0, 200),
+      });
+    } finally {
+      settle();
+      // dispose() chạy giữa chừng: kill lại MCP servers mà connectMcp của
+      // warm-up vừa spawn (killAll của dispose đã chạy TRƯỚC khi chúng mọc).
+      if (this.disposed) this.shutdownMcp();
+      // FILE-READ-PERF P3: cycle warm kết thúc TỰ NHIÊN (không bị supersede/
+      // abort) → arm nhịp heartbeat tiếp theo. Bị abort nghĩa là run thật đang
+      // chạy — finish() sẽ arm lại khi xong.
+      else if (!signal.aborted) this.scheduleWarmupRefresh();
+    }
+  }
+
+  /**
+   * Đầu mọi run thật (run/runTurn/resume): lượt thật thắng warm-up — abort
+   * request prefill nếu còn treo, rồi await cho settle để connectMcp/probe
+   * không double-spawn server con song song với chính nó.
+   */
+  private async settleWarmup(): Promise<void> {
+    // Run thật bắt đầu → heartbeat phải im lặng (timer re-arm ở finish()).
+    this.clearWarmupTimer();
+    const w = this.warmupRun;
+    if (!w) return;
+    if (!w.settled) w.abort.abort(new DOMException("real run supersedes warmup", "AbortError"));
+    await w.promise.catch(() => {});
+  }
+
+  /** Tắt heartbeat idle (run thật vào / dispose). */
+  private clearWarmupTimer(): void {
+    if (this.warmupIdleTimer) {
+      clearTimeout(this.warmupIdleTimer);
+      this.warmupIdleTimer = null;
+    }
+  }
+
+  /**
+   * FILE-READ-PERF P3: arm lại nhịp re-warm — chỉ khi engine local và bộ máy
+   * warmup còn bật (đúng các guard của warmup()). unref(): timer không được
+   * giữ process sống (run-once/test thoát sạch).
+   */
+  private scheduleWarmupRefresh(): void {
+    if (this.disposed || !this.warmupUsed) return;
+    if (this.config.warmup === false || !this.config.apiKey || this.config.clientFactory) {
+      this.clearWarmupTimer();
+      return;
+    }
+    // KHÔNG phải local (kể cả /model đổi từ local → cloud giữa session): tắt
+    // heartbeat đang arm — không đốt tiền API để giữ cache.
+    if (!isLocalBaseUrl(this.config.baseUrl)) {
+      this.clearWarmupTimer();
+      return;
+    }
+    this.clearWarmupTimer();
+    this.warmupIdleTimer = setTimeout(() => {
+      this.warmupIdleTimer = null;
+      void this.warmup({ rewarm: true });
+    }, this.warmupIdleRefreshMs);
+    this.warmupIdleTimer.unref();
   }
 
   /**
@@ -970,8 +1162,13 @@ export class Agent {
 
   /** M4: đóng hot-reload watcher (khi agent bị hủy vĩnh viễn). */
   dispose(): void {
+    this.disposed = true;
+    this.clearWarmupTimer();
     this.watcher?.close();
     this.watcher = null;
+    // WARMUP: hủy request prefill đang chạy (chặn MCP servers connect thêm
+    // sau khi kill — runWarmup tự shutdownMcp lần cuối trong finally).
+    this.warmupRun?.abort.abort(new DOMException("agent disposed", "AbortError"));
     this.shutdownMcp();
   }
 
@@ -1017,6 +1214,8 @@ export class Agent {
         "No API key configured. Set SCODER_API_KEY or OPENAI_API_KEY (or put apiKey in .scoderrc.json).",
       );
     }
+    // WARMUP: lượt thật thắng request prefill đang chạy nền (xem warmup()).
+    await this.settleWarmup();
 
     const buildCmd = this.buildCmd;
     const rawTask = task;
@@ -1112,6 +1311,9 @@ export class Agent {
     if (this.messages.length === 0) {
       return this.run(task);
     }
+    // WARMUP: thường đã settle ở run() đầu; await lại cho chắc (race /clear+
+    // warm-up + runTurn ngay lập tức).
+    await this.settleWarmup();
     const buildCmd = this.buildCmd;
     const rawTask = task;
     task = expandMentions(task, this.config.workdir);
@@ -1136,6 +1338,9 @@ export class Agent {
    * An optional follow-up task is appended as a new user message.
    */
   async resume(session: SessionFile, followUp?: string): Promise<AgentRunResult> {
+    // WARMUP: session restore mang system prompt RIÊNG (từ session cũ) — hủy
+    // request prefill của prompt mới để không nhân đôi prefill nền.
+    await this.settleWarmup();
     const buildCmd = this.buildCmd;
     this.sessionCreatedAt = session.createdAt;
     this.currentTask = session.task;
@@ -1436,6 +1641,8 @@ export class Agent {
         : { ok: null, detail: "no verification command ran" };
     this.emit({ type: "finish", success, steps, summary: summary.slice(0, 2000), usage: this.getUsage(), verification });
     this.logger.log({ type: "finish", success, steps });
+    // FILE-READ-PERF P3: run kết thúc → session quay về nhàn rỗi, arm heartbeat.
+    this.scheduleWarmupRefresh();
     return { success, steps, buildCmd, summary: summary.slice(0, 2000) };
   }
 }
