@@ -1041,10 +1041,13 @@ export class Agent {
   private async runWarmup(signal: AbortSignal, settle: () => void, rewarm = false): Promise<void> {
     const t0 = Date.now();
     try {
+      // Báo UI biết warm-up đang chạy (giữ màn hình welcome + progress bar).
+      this.emit({ type: "warmup", active: true, stage: "init", percent: 5, message: "đang chuẩn bị warm-up…" });
       // Dời hai việc network ra khỏi đường tới token đầu. run() vẫn gọi lại
       // nguyên như cũ — cả hai đều return sớm khi đã hoàn tất ở đây.
       await Promise.allSettled([this.applyContextProbe(), this.connectMcp()]);
       if (signal.aborted || this.disposed) return;
+      this.emit({ type: "warmup", active: true, stage: "context+mcp", percent: 60, message: "context window + MCP sẵn sàng" });
       // FILE-READ-PERF P3: heartbeat sau khi đã chạy ≥1 lượt thật gửi lại
       // HISTORY THẬT — đó mới là prefix của lượt kế tiếp (placeholder sẽ phân
       // nhánh ngay sau system). Trước lượt đầu: dựng đúng messages như run().
@@ -1073,7 +1076,9 @@ export class Agent {
             task: "[warmup]",
             pendingContext: this.promptContext.peekPendingContext(),
           });
+      this.emit({ type: "warmup", active: true, stage: "prompt", percent: 80, message: "đang prefill system prompt…" });
       const res = await this.client.chat(messages, tools, { signal, maxTokens: 1 });
+      this.emit({ type: "warmup", active: true, stage: "done", percent: 100, message: "warm-up xong" });
       this.logger.log({
         type: "warmup",
         ok: true,
@@ -1092,6 +1097,7 @@ export class Agent {
         error: ((err as Error)?.message ?? String(err)).slice(0, 200),
       });
     } finally {
+      this.emit({ type: "warmup", active: false, stage: "done", percent: 100, message: "warm-up kết thúc" });
       settle();
       // dispose() chạy giữa chừng: kill lại MCP servers mà connectMcp của
       // warm-up vừa spawn (killAll của dispose đã chạy TRƯỚC khi chúng mọc).

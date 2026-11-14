@@ -117,8 +117,19 @@ export type AgentEvent =
   /** v2: context window pressure after an LLM turn. */
   | { type: "context"; tokens: number; window: number; pct: number; compacted?: boolean }
   | { type: "finish"; success: boolean; steps: number; summary: string; usage?: UsageTotals; verification?: VerificationInfo }
-  | { type: "error"; message: string };
-
+  | { type: "error"; message: string }
+  /** Background warm-up progress (prefix prefill) — emitted by Agent.warmup(). */
+  | {
+      type: "warmup";
+      /** true while warm-up is running; false when it finished/aborted. */
+      active: boolean;
+      /** Coarse stage name for UI/debugging. */
+      stage: string;
+      /** 0..100 progress estimate. */
+      percent: number;
+      /** Human-readable status line. */
+      message?: string;
+    };
 export interface ResolvedPrimary {
   config: AgentConfig;
   def: AgentDef | null;

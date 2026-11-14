@@ -282,7 +282,19 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
                 <Text bold color={theme.accent}>ctrl+o</Text>
                 <Text dimColor> select/copy (tắt mouse tracking để tô đen kéo chuột)</Text>
               </Text>
-            </Box>
+                           {state.warmup?.active && (
+                 <Box flexDirection="column" alignItems="center" marginTop={1}>
+                   <Text dimColor>{state.warmup.message ?? "đang warm-up…"}</Text>
+                   <Box>
+                     <Text color={theme.accent}>
+                       {"█".repeat(Math.round((state.warmup.percent / 100) * 32))}
+                       {"░".repeat(32 - Math.round((state.warmup.percent / 100) * 32))}
+                     </Text>
+                     <Text dimColor> {state.warmup.percent}%</Text>
+                   </Box>
+                 </Box>
+               )}
+</Box>
           ) : (
             state.items.slice(win.start, win.end).map((item, i) => (
               <ChatItemView key={win.start + i} item={item} width={(columns ?? 100) - (showSidebar ? SIDEBAR_WIDTH + 2 : 4)} />

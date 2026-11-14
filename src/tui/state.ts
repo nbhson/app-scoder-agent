@@ -95,7 +95,8 @@ export interface TuiState {
   verification: { ok: boolean | null; detail: string } | null;
   /** v2: subagents spawned in this run (tree state for the sidebar). */
   subagents: Array<{ id: string; name: string; description: string; status: "running" | "ok" | "failed"; steps?: number; summary?: string }>;
-  /**
+  /** Background warm-up (prefix prefill) progress — null when inactive. */
+  warmup: { active: boolean; stage: string; percent: number; message: string | null } | null;  /**
    * Plan hiện tại cho sidebar PLAN (nguồn: write_todos). Field riêng thay vì
    * derive từ items: todo chat-items bị MAX_ITEMS eviction xoá khỏi items trên
    * run dài, khiến plan "biến mất" khỏi sidebar. Reset khi user gửi message mới
@@ -135,6 +136,7 @@ export function initialState(): TuiState {
     verification: null,
     subagents: [],
     plan: null,
+    warmup: null,
   };
 }
 
@@ -236,6 +238,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       }
       // Plan của task trước không được lọt sang task mới.
       state.plan = null;
+      state.warmup = null;
       break;
     }
     case "llm_reasoning": {
@@ -391,6 +394,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         state.mcpServers = { ...state.mcpServers, [ev.server]: ev.state };
         break;
       }
+      if (state.warmup?.active) break;
       appendItem(state, { kind: "notice", text: ev.line, level: ev.line.includes("unavailable") ? "warn" : "info" });
       break;
     }
@@ -461,6 +465,14 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       );
       break;
     }
+    case "warmup": {
+           if (ev.active) {
+             state.warmup = { active: true, stage: ev.stage, percent: Math.max(0, Math.min(100, ev.percent)), message: ev.message ?? null };
+           } else {
+             state.warmup = null;
+           }
+           break;
+         }
     case "error": {
       appendItem(state, { kind: "notice", text: ev.message, level: "error" });
       break;
