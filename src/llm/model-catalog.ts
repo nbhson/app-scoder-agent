@@ -62,7 +62,9 @@ function key(provider: string, id: string): string {
   return `${provider}/${id}`;
 }
 
+let fallbackCatalog: Catalog | null = null;
 function fromFallback(): Catalog {
+  if (fallbackCatalog) return fallbackCatalog;
   const models: Record<string, ModelInfo> = {};
   for (const m of FALLBACK) {
     models[key(m.provider, m.id)] = {
@@ -74,22 +76,38 @@ function fromFallback(): Catalog {
       supportReasoning: m.reasoning === true,
     };
   }
-  return { fetchedAt: 0, models };
+  fallbackCatalog = { fetchedAt: 0, models };
+  return fallbackCatalog;
 }
+
+/**
+ * P-perf: parsed-catalog memo keyed by (mtimeMs, size). `lookupModel` used to
+ * `readFileSync` + `JSON.parse` the whole 1.9 MB cache on EVERY call — which
+ * sits on the TUI render path (sidebar metrics, ~20×/s while streaming) and on
+ * every agent step (`compactionSettings`). The file only changes when
+ * `writeCache` runs, so an mtime-gated memo is always safe; `writeCache` also
+ * drops the memo explicitly.
+ */
+let catalogMemo: { mtimeMs: number; size: number; catalog: Catalog | null } | null = null;
 
 /** Read the cache file; null when missing/malformed. */
 function readCache(): Catalog | null {
-  if (!existsSync(CACHE_PATH)) return null;
   try {
+    const st = statSync(CACHE_PATH);
+    if (catalogMemo && catalogMemo.mtimeMs === st.mtimeMs && catalogMemo.size === st.size) {
+      return catalogMemo.catalog;
+    }
     const c = JSON.parse(readFileSync(CACHE_PATH, "utf8")) as Catalog;
-    if (typeof c.fetchedAt !== "number" || typeof c.models !== "object") return null;
-    return c;
+    const catalog = typeof c.fetchedAt === "number" && typeof c.models === "object" ? c : null;
+    catalogMemo = { mtimeMs: st.mtimeMs, size: st.size, catalog };
+    return catalog;
   } catch {
-    return null;
+    return null; // missing/unreadable — retry cheaply via statSync next call
   }
 }
 
 function writeCache(c: Catalog): void {
+  catalogMemo = null;
   try {
     mkdirSync(join(CACHE_PATH, ".."), { recursive: true });
     const tmp = `${CACHE_PATH}.tmp`;

@@ -14,10 +14,16 @@ const pkgPath = resolve(
 
 export const CLIENT_NAME = "app-scoder-agent";
 
+// P-perf: memoized — chrome.tsx renders the version on every sidebar/build-rail
+// re-render; the file never changes inside a process.
+let cachedVersion: string | null = null;
+
 export function getVersion(): string {
+  if (cachedVersion !== null) return cachedVersion;
   try {
-    return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version ?? "0.0.0";
+    cachedVersion = (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version ?? "0.0.0";
   } catch {
-    return "0.0.0";
+    cachedVersion = "0.0.0";
   }
+  return cachedVersion;
 }

@@ -67,8 +67,32 @@ export function serializeTools(tools: ToolSpec[]): string {
     .join("\u0003");
 }
 
+/**
+ * P-perf: per-message hash memo. `promptMetrics` runs on EVERY LLM call and
+ * used to SHA1 the whole history each time; history is append-only after P0-1,
+ * so a WeakMap on the message object hits ~100%. The stored field *references*
+ * (strings are immutable; arrays are never mutated in place after push) are
+ * re-checked, so a replaced field invalidates correctly.
+ */
+const hashMemo = new WeakMap<
+  object,
+  { role: string; content?: string | null; calls?: ChatMessage["tool_calls"]; nCalls: number; tcid?: string | null; hash: string }
+>();
+
 export function messageHashes(messages: ChatMessage[]): string[] {
-  return (messages ?? []).map((m) => short(messageKey(m)));
+  return (messages ?? []).map((m) => {
+    const hit = hashMemo.get(m);
+    if (hit && hit.role === m.role && hit.content === m.content && hit.calls === m.tool_calls && hit.nCalls === (m.tool_calls?.length ?? 0) && hit.tcid === m.tool_call_id) {
+      return hit.hash;
+    }
+    const hash = short(messageKey(m));
+    try {
+      hashMemo.set(m, { role: m.role, content: m.content, calls: m.tool_calls, nCalls: m.tool_calls?.length ?? 0, tcid: m.tool_call_id, hash });
+    } catch {
+      /* non-extensible message — skip the cache */
+    }
+    return hash;
+  });
 }
 
 /**

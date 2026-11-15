@@ -8,6 +8,7 @@
 
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
+import type { ShellScan } from "./shell-scanner.js";
 
 // ---------------------------------------------------------------------------
 // Catastrophic command patterns — always denied, no exceptions
@@ -70,6 +71,48 @@ function isCatastrophic(command: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Shell scanner access — module-level memo (P-perf)
+//
+// Before: `createRequire` + module resolution ran on EVERY classifyShell call,
+// and the tree-sitter parse ran twice per run_command (run-loop pre-scan for
+// needsAsk + permission check). The scan result is a pure function of the
+// command string, so both the module and the results are cached; rules/mode/
+// session-allowlist evaluation still runs fresh every time.
+// ---------------------------------------------------------------------------
+
+type ShellScanner = (command: string) => ShellScan;
+let scannerFn: ShellScanner | null | undefined;
+
+function getShellScanner(): ShellScanner | null {
+  if (scannerFn === undefined) {
+    try {
+      // Lazy require so a broken native build degrades instead of crashing.
+      // (ESM dist — plain `require` is undefined; use createRequire.)
+      const req = createRequire(import.meta.url);
+      scannerFn = (req("./shell-scanner.js") as typeof import("./shell-scanner.js")).scanCommand;
+    } catch {
+      scannerFn = null;
+    }
+  }
+  return scannerFn;
+}
+
+const SCAN_MEMO_MAX = 256;
+const scanMemo = new Map<string, ShellScan>();
+
+function scanCommandMemo(command: string, scan: ShellScanner): ShellScan {
+  const hit = scanMemo.get(command);
+  if (hit !== undefined) return hit;
+  const result = scan(command);
+  scanMemo.set(command, result);
+  if (scanMemo.size > SCAN_MEMO_MAX) {
+    const oldest = scanMemo.keys().next().value;
+    if (oldest !== undefined) scanMemo.delete(oldest);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Rule-based Permission Engine v2
 //
 // Source: anomalyco/opencode (packages/core/src/permission.ts) — adapted from
@@ -88,14 +131,18 @@ export interface PermissionRule {
   effect: PermissionEffect;
 }
 
-/** Wildcard match: supports * (any run) and ? (single char). */
-export function wildcardMatch(pattern: string, value: string): boolean {
-  if (pattern === "*") return true;
-  if (!pattern.includes("*") && !pattern.includes("?")) {
-    // Literal match — also accept prefix semantics for shell resources
-    // ("npm " allows "npm run build") to stay compatible with legacy lists.
-    return value === pattern || (pattern.endsWith(" ") ? value.startsWith(pattern) : value.startsWith(`${pattern} `));
-  }
+/**
+ * P-perf: compiled wildcard cache. `wildcardMatch` used to `new RegExp(...)`
+ * per rule per call, and `matchRule` runs it for every rule on every decision
+ * (twice+ per run_command because classifyShell is invoked by the run-loop
+ * pre-scan AND the permission check). Patterns are static strings — compiling
+ * once per pattern is exact.
+ */
+const wildcardRxCache = new Map<string, RegExp>();
+
+function wildcardToRegex(pattern: string): RegExp {
+  const hit = wildcardRxCache.get(pattern);
+  if (hit) return hit;
   const rx = new RegExp(
     "^" +
       pattern
@@ -106,7 +153,19 @@ export function wildcardMatch(pattern: string, value: string): boolean {
         .join("") +
       "$",
   );
-  return rx.test(value);
+  wildcardRxCache.set(pattern, rx);
+  return rx;
+}
+
+/** Wildcard match: supports * (any run) and ? (single char). */
+export function wildcardMatch(pattern: string, value: string): boolean {
+  if (pattern === "*") return true;
+  if (!pattern.includes("*") && !pattern.includes("?")) {
+    // Literal match — also accept prefix semantics for shell resources
+    // ("npm " allows "npm run build") to stay compatible with legacy lists.
+    return value === pattern || (pattern.endsWith(" ") ? value.startsWith(pattern) : value.startsWith(`${pattern} `));
+  }
+  return wildcardToRegex(pattern).test(value);
 }
 
 export function matchRule(rules: PermissionRule[], action: string, resource: string): PermissionEffect | null {
@@ -364,6 +423,8 @@ function builtinRulesFromLists(allow: string[], deny: string[]): PermissionRule[
 export class PermissionChecker {
   private sessionAllow = new SessionAllowlist();
   private allowAllEdits = false;
+  /** P-perf: activeRules() memo — invalidated by source-array reference change. */
+  private activeRulesMemo: { src: unknown[]; rules: PermissionRule[] } | null = null;
 
   /**
    * T-03: programmatic prompt hook (TUI). When set, confirm/confirmEdit/
@@ -412,11 +473,19 @@ export class PermissionChecker {
     // G2: legacy allow/deny lists trở thành builtin rules (priority thấp
     // nhất — user/saved rules override). Deny list sau allow list trong
     // builtin để deny thắng khi cả hai khớp (last-match-wins).
-    return [
+    // P-perf: memo theo reference của 4 mảng nguồn — chúng chỉ được REPLACE
+    // (constructor / setModel / policy update), không mutate in-place, nên
+    // so reference là đủ chính xác; rebuild khi bất kỳ mảng nào đổi.
+    const src = [this.config.allowCommands, this.config.denyCommands, this.config.savedRules, this.config.rules];
+    const memo = this.activeRulesMemo;
+    if (memo && memo.src.every((s, i) => s === src[i])) return memo.rules;
+    const rules = [
       ...builtinRulesFromLists(this.config.allowCommands, this.config.denyCommands),
       ...(this.config.savedRules ?? []),
       ...(this.config.rules ?? []),
     ];
+    this.activeRulesMemo = { src, rules };
+    return rules;
   }
 
   /**
@@ -522,11 +591,8 @@ export class PermissionChecker {
     }
     let scan: import("./shell-scanner.js").ShellScan | null;
     try {
-      // Lazy require so a broken native build degrades instead of crashing.
-      // (ESM dist — plain `require` is undefined; use createRequire.)
-      const req = createRequire(import.meta.url);
-      const { scanCommand } = req("./shell-scanner.js") as typeof import("./shell-scanner.js");
-      scan = scanCommand(command);
+      const scanCommand = getShellScanner();
+      scan = scanCommand ? scanCommandMemo(command, scanCommand) : null;
     } catch {
       scan = null; // scanner unavailable — fall back to whole-line behavior
     }

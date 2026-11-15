@@ -37,9 +37,12 @@ function tokenize(text: string): Array<{ ansi: boolean; value: string }> {
 }
 
 /** Iterate grapheme clusters (keeps emoji ZWJ sequences + combining marks whole). */
+// P-perf: one Segmenter instance — constructing it per call showed up on the
+// wrap/measure hot path (every pad/clip/traverse of user-visible text).
+const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
+
 function* graphemes(text: string): Generator<string> {
-  const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
-  for (const seg of segmenter.segment(text)) yield seg.segment;
+  for (const seg of GRAPHEME_SEGMENTER.segment(text)) yield seg.segment;
 }
 
 /** Iterate display units: ANSI tokens (width 0) and grapheme clusters. */

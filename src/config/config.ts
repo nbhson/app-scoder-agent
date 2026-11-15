@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import type { PermissionMode, PermissionRule, PermissionEffect } from "../security/permissions.js";
@@ -327,10 +327,38 @@ export function applyLocalProfile(
   return applied;
 }
 
-function readRcFile(path: string, label: string): RcFile {
-  if (!existsSync(path)) return {};
+/**
+ * P-perf: rc-file TEXT memo keyed by (mtimeMs, size). `loadRcFile` runs on
+ * every `run_command` (buildChildEnv), setModel, provider resolution… and each
+ * pass re-read both files synchronously. We cache the raw text only (parse
+ * per call keeps the returned object unshared, so no caller can mutate a
+ * cached RcFile). Same content ⇒ same config decisions.
+ */
+const rcTextMemo = new Map<string, { mtimeMs: number; size: number; text: string }>();
+
+function readRcFileCachedText(path: string): string | null {
+  let st;
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as RcFile;
+    st = statSync(path);
+  } catch {
+    return null; // missing — treated as {} by caller
+  }
+  const hit = rcTextMemo.get(path);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.text;
+  try {
+    const text = readFileSync(path, "utf8");
+    rcTextMemo.set(path, { mtimeMs: st.mtimeMs, size: st.size, text });
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+function readRcFile(path: string, label: string): RcFile {
+  const text = readRcFileCachedText(path);
+  if (text === null) return {};
+  try {
+    return JSON.parse(text) as RcFile;
   } catch (err) {
     // malformed rc file -> ignore it, but tell the user why their config is not applied
     console.error(`⚠  ignoring malformed config file ${label}: ${(err as Error).message}`);
