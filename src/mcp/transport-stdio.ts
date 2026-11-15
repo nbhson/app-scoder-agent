@@ -72,12 +72,19 @@ export class StdioTransport implements McpTransport {
 
   private onChunk(chunk: Buffer): void {
     this.buf += chunk.toString("utf8");
+    // P-perf: parse by moving an offset — the old per-line
+    // `this.buf = this.buf.slice(i + 1)` re-copied the WHOLE remainder for
+    // every line in a burst (N lines × M bytes = quadratic). One trailing
+    // slice per chunk now. msgCb runs after `start` advances, so a reentrant
+    // append to this.buf cannot corrupt the scan.
+    let start = 0;
     let i: number;
-    while ((i = this.buf.indexOf("\n")) !== -1) {
-      const line = this.buf.slice(0, i).trim();
-      this.buf = this.buf.slice(i + 1);
+    while ((i = this.buf.indexOf("\n", start)) !== -1) {
+      const line = this.buf.slice(start, i).trim();
+      start = i + 1;
       if (!line) continue;
       try { this.msgCb?.(JSON.parse(line) as Record<string, unknown>); } catch { /* skip malformed */ }
     }
+    if (start > 0) this.buf = this.buf.slice(start);
   }
 }

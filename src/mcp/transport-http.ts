@@ -116,13 +116,16 @@ export class HttpTransport implements McpTransport {
         const { done, value } = await reader.read();
         if (done) break;
         buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        // P-perf: offset-based scan, one re-slice per chunk (xem transport-stdio).
+        let start = 0;
         let sep: number;
-        while ((sep = buf.indexOf("\n\n")) !== -1) {
-          const block = buf.slice(0, sep);
-          buf = buf.slice(sep + 2);
+        while ((sep = buf.indexOf("\n\n", start)) !== -1) {
+          const block = buf.slice(start, sep);
+          start = sep + 2;
           const msg = parseSseEvent(block);
           if (msg) this.msgCb?.(msg);
         }
+        if (start > 0) buf = buf.slice(start);
       }
     } finally {
       reader.releaseLock();

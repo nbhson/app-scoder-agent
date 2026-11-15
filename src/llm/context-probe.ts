@@ -186,10 +186,16 @@ export async function probeContextWindow(
   if (!origin) return null;
   const key = `${origin}|${model}`;
   if (cache.has(key)) return cache.get(key) ?? null;
-  const found =
-    (await probeOllama(origin, model, timeoutMs, auth)) ??
-    (await probeLlamaCpp(origin, timeoutMs, auth)) ??
-    (await probeVllm(baseUrl, origin, model, timeoutMs, auth));
+  // P-perf: ba engine chạy ĐỒNG THỜI (trước: tuần tự với `??` — server không
+  // phải Ollama/llama.cpp ví dụ hangs trên /props ⇒ tốn 2×timeout trước khi
+  // tới lượt vllm). Ưu tiên kết quả giữ nguyên: ollama > llama.cpp > vllm.
+  // jsonFetch chưa bao giờ throw ⇒ Promise.all không thể reject giữa chừng.
+  const [ollama, llamaCpp, vllm] = await Promise.all([
+    probeOllama(origin, model, timeoutMs, auth),
+    probeLlamaCpp(origin, timeoutMs, auth),
+    probeVllm(baseUrl, origin, model, timeoutMs, auth),
+  ]);
+  const found = ollama ?? llamaCpp ?? vllm;
   cache.set(key, found);
   return found;
 }
