@@ -62,12 +62,19 @@ export interface HalfblockRow {
 /**
  * Render buffer ảnh thành mảng dòng "▀" (2 pixel ảnh / 1 dòng terminal).
  * Trả về null khi terminal không truecolor (caller fallback link).
+ *
+ * P-perf: trần pixel — decode là JS unfilter từng byte (w·h·3 buffer). Ảnh
+ * 4K (~8MP) đã tốn ~30MB + vài trăm ms; screenshot thật ≤5K luôn dưới trần
+ * 16MP, chỉ ảnh bệnh hoản/decode-bomb mới vượt → fallback link (null).
  */
+const MAX_DECODE_PIXELS = 16_000_000;
+
 export function halfblockRows(buf: Buffer, maxCols = 40): HalfblockRow[] | null {
   const png = detectImageBytes(buf) === "png";
   if (!png) return null; // ponytail: chỉ decode PNG thuần (zlib builtin); JPG → null
   const size = imageSize(buf);
   if (!size || size.width === 0 || size.height === 0) return null;
+  if (size.width * size.height > MAX_DECODE_PIXELS) return null;
   // Decode IDAT: zlib inflate + unfilter scanlines.
   let rows: Uint8Array;
   try {
@@ -88,6 +95,39 @@ export function halfblockRows(buf: Buffer, maxCols = 40): HalfblockRow[] | null 
       line += `\x1b[38;2;${top[0]};${top[1]};${top[2]};48;2;${bot[0]};${bot[1]};${bot[2]}m▀`;
     }
     out.push({ text: line + "\x1b[0m" });
+  }
+  return out;
+}
+
+/**
+ * P-perf: module-level LRU cho kết quả decode theo data URL. ToolItemView chỉ
+ * useMemo theo item.image khi còn mounted — virtualization unmount/remount khi
+ * scroll làm mất memo ⇒ PNG 5MP decode lại ~300ms/lần remount. Cache sống
+ * ngoài component nên mỗi ảnh chỉ decode một lần mỗi phiên.
+ */
+const HALFBLOCK_CACHE_MAX = 6;
+const halfblockCache = new Map<string, HalfblockRow[] | null>();
+
+export function halfblockRowsFromDataUrl(dataUrl: string): HalfblockRow[] | null {
+  const hit = halfblockCache.get(dataUrl);
+  if (hit !== undefined) {
+    halfblockCache.delete(dataUrl);
+    halfblockCache.set(dataUrl, hit);
+    return hit;
+  }
+  const m = /^data:image\/(\w+);base64,(.+)$/.exec(dataUrl);
+  let out: HalfblockRow[] | null = null;
+  if (m) {
+    try {
+      out = halfblockRows(Buffer.from(m[2], "base64"));
+    } catch {
+      out = null;
+    }
+  }
+  halfblockCache.set(dataUrl, out);
+  if (halfblockCache.size > HALFBLOCK_CACHE_MAX) {
+    const oldest = halfblockCache.keys().next().value;
+    if (oldest !== undefined) halfblockCache.delete(oldest);
   }
   return out;
 }
