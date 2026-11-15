@@ -16,13 +16,19 @@ order/keys/ANSI output; measuring/clipping display strings with
 `markdown.tsx` (orchestrator, stable public surface) → `markdown/parse.ts`
 (pure text → Block AST, `ast.ts`) → `markdown/render.tsx` (AST → Ink) with
 dedicated renderers: `markdown/table.tsx` (GFM tables: full borders, alignment
-row, cell wrap, key-value fallback for narrow panes, 50-row cap) and
-`markdown/diagram.tsx` (mermaid structured summary, ```chart / ```timeline
-fences). Inline tokens: `markdown/inline.ts` (parse) + `inline-render.tsx`
-(Ink). Parse results are LRU-cached per text; `ChatItemView` is memoized with
-field-level equality — `state.ts` therefore updates chat items IMMUTABLY
-(`patchItem` replaces the object); in-place mutation would make prev/next
-props the same object and freeze streaming/tool updates.
+row, cell wrap, key-value fallback for narrow panes, 50-row cap),
+`markdown/graph.ts` + `markdown/diagram.tsx` (mermaid **flowcharts are drawn
+for real**: parse → longest-path ranking → barycenter ordering → box/edge
+rasterization into a cell grid; `layered` mode for branching graphs, `strip`
+mode (wrapped rows of boxes) for long chains; anything that cannot fit
+degrades to a structured summary box; sequence/other diagram types stay
+summary/source; every preview saves its `.mmd` under `.scoder/diagrams/` so
+the export hint is runnable), plus ```chart / ```timeline fences. Inline
+tokens: `markdown/inline.ts` (parse) + `inline-render.tsx` (Ink). Parse
+results are LRU-cached per text; `ChatItemView` is memoized with field-level
+equality — `state.ts` therefore updates chat items IMMUTABLY (`patchItem`
+replaces the object); in-place mutation would make prev/next props the same
+object and freeze streaming/tool updates.
 
 ## Layout & charset invariants
 
@@ -35,8 +41,10 @@ props the same object and freeze streaming/tool updates.
 - `text-width.ts` (`measure/clipCells/padEndCells/padStartCells/wrapCells`) is
   the ONLY way to measure/clip/pad/wrap visible text — cell-accurate for
   emoji, CJK, combining marks (Vietnamese), ANSI passthrough.
-- `charset.ts` holds every drawing glyph (box chars, blocks, spinner, markers)
-  with an ASCII fallback (`SCODER_ASCII=1` or `TERM=dumb`).
+- `charset.ts` holds every drawing glyph (box chars, blocks, spinner, markers,
+  and the flowchart set: connection-mask line table, heavy/dotted strokes,
+  arrowheads, node corners) with an ASCII fallback (`SCODER_ASCII=1` or
+  `TERM=dumb`).
 - Colors: Ink/chalk already respect `NO_COLOR`/`FORCE_COLOR` — never hardcode
   ANSI codes.
 - Render fixtures: `test/fixtures/markdown/*.md`; eyeball via

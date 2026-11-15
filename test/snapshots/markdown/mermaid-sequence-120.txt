@@ -9,5 +9,6 @@
 │ Tool → Agent: kết quả                                                │
 │ Agent → User: trả lời                                                │
 │                                                                      │
-│ export: npx @mermaid-js/mermaid-cli -i <file> -o out.svg             │
+│ export: npx @mermaid-js/mermaid-cli                                  │
+│   -i .scoder/diagrams/diagram-8f14a8.mmd -o diagram.svg              │
 └──────────────────────────────────────────────────────────────────────┘

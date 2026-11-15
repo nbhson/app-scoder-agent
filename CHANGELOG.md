@@ -3,6 +3,49 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.15] — 2026-11-15
+
+### Added
+- **Mermaid flowcharts now render as real graphs in the TUI** (P9,
+  `src/tui/markdown/graph.ts`) — a pure, Ink-free layout engine: parse
+  (shapes, `-->`/`-.->`/`==>`, inline & split-arrow labels, chains,
+  subgraphs, comments) → longest-path ranking with DFS cycle-breaking →
+  barycenter ordering → box placement → cell-grid rasterization, colored per
+  cell kind (borders, labels, edges, arrowheads). Two placement modes:
+  `layered` bands for branching graphs and `strip` rows (wrapped chain with
+  `──▶` connectors) for long timelines; label caps shrink until the graph
+  fits, and anything that still cannot fit degrades to the previous
+  structured summary box — never a clipped drawing. `BT`/`RL` reverse edges
+  and move arrowheads upstream; cycle-closing edges and dropped labels are
+  reported as notes.
+- `charset.ts`: graph glyph set — a 16-entry connection-mask line table
+  (every elbow/tee/cross falls out of the mask), heavy/dotted strokes,
+  directional arrows, per-shape corner styles, loop marker — all with ASCII
+  fallbacks (`SCODER_ASCII=1` / `TERM=dumb`).
+- Diagram sources are saved deterministically to
+  `.scoder/diagrams/<slug>-<sha6>.mmd` (gitignored), so the export hint is a
+  command that actually runs instead of a `-i <file>` placeholder.
+- `estimateMarkdownRows` uses the real raster height for drawn graphs
+  (virtualization window matches what is rendered).
+
+### Fixed
+- `<br/>` (and other HTML/entities like `&amp;`) inside mermaid node labels
+  showed literally; `cleanMermaidLabel` now converts breaks to spaces,
+  decodes entities and strips tags for both the drawn graph and the summary
+  box.
+- The charset corner table had indices 3↔9 and 7↔13 swapped, mirroring
+  elbows (`╯`/`╰`, `├`/`┤`) in drawn connectors; fixed.
+
+### Testing & docs
+- New `test/graph-layout.test.mjs`: parsing/label cleanup, fit across widths
+  24–120, the no-row-overflows-the-pane invariant, a deterministic
+  garbage-graph fuzz pass, cache determinism, and an ASCII-mode child-process
+  spec. New snapshot fixtures `mermaid-br` / `mermaid-chain` /
+  `mermaid-branch`; mermaid snapshots regenerated at 40/80/120.
+- Docs: `src/tui/README.md` pipeline notes, `plan/TUI-UPGRADE-PLAN.md` P9
+  section, and the system prompt now tell the agent that flowcharts render
+  natively (≤ ~12 nodes recommended). 1000/1000 tests green.
+
 ## [0.9.14] — 2026-11-14
 
 ### Fixed

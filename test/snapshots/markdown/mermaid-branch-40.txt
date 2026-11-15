@@ -1,0 +1,15 @@
+◉ flowchart chain · 5 nodes · 3 edges ·
+chain layout
+┌────────┐  ┌──────────┐   ╱─────╲
+│ Parser │─▶│ Analyzer │╌╌▶│ OK? │
+└────────┘  └──────────┘   ╲─────╱
+    ┌═════════════════════════╯
+    ▼
+┌──────┐   ┌────────┐
+│ Emit │   │ Report │
+└──────┘   └────────┘
+• subgraph flattened: Pipeline
+• ↩ cycle edge: Report → Analyzer
+• 1 side edge(s) not drawn (chain order…
+export: npx @mermaid-js/mermaid-cli
+  -i .scoder/diagrams/diagram-efa135.mm…

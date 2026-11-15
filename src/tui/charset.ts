@@ -21,7 +21,31 @@ export interface Charset {
   cont: string;
   // Spinner frames
   spinner: string[];
+  // ── Graph drawing (flowchart renderer, P9) ────────────────────────────────
+  /** 16 line glyphs indexed by connection mask: bit 1=up 2=right 4=down 8=left. */
+  line: string[];
+  /** Thick / dotted edge glyphs: [horizontal, vertical]. */
+  hHeavy: string; vHeavy: string; hDotted: string; vDotted: string;
+  /** Edge-head arrows, one per absolute direction. */
+  arrowUp: string; arrowRight: string; arrowDown: string; arrowLeft: string;
+  /** Node border corner sets, ordered [topLeft, topRight, bottomRight, bottomLeft]. */
+  cornerRect: string[]; cornerRound: string[]; cornerDiamond: string[];
+  /** Back-edge / wrap marker. */
+  loop: string;
 }
+
+// Connection-mask glyph table: index = up(1) | right(2) | down(4) | left(8).
+// A cell shows the arms it has: up+right=╰ · up+left=╯ · down+right=┌ ·
+// down+left=┐ · no-left=├ · no-right=┤ · no-down=┴ · no-up=┬ — so elbow
+// routing needs no corner special-casing.
+const LINE_UNICODE = [
+  " ", "│", "─", "╰", "│", "│", "┌", "├",
+  "─", "╯", "─", "┴", "┐", "┤", "┬", "┼",
+];
+const LINE_ASCII = [
+  " ", "|", "-", "+", "|", "|", "+", "+",
+  "-", "+", "-", "+", "+", "+", "+", "+",
+];
 
 const UNICODE: Charset = {
   tl: "┌", tr: "┐", bl: "└", br: "┘",
@@ -32,6 +56,13 @@ const UNICODE: Charset = {
   ok: "✓", fail: "✗", active: "◆", pending: "○",
   cont: "↪",
   spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+  line: LINE_UNICODE,
+  hHeavy: "═", vHeavy: "║", hDotted: "╌", vDotted: "┆",
+  arrowUp: "▲", arrowRight: "▶", arrowDown: "▼", arrowLeft: "◀",
+  cornerRect: ["┌", "┐", "┘", "└"],
+  cornerRound: ["╭", "╮", "╯", "╰"],
+  cornerDiamond: ["╱", "╲", "╱", "╲"],
+  loop: "↩",
 };
 
 const ASCII: Charset = {
@@ -43,6 +74,13 @@ const ASCII: Charset = {
   ok: "v", fail: "x", active: ">", pending: "o",
   cont: ">",
   spinner: ["-", "\\", "|", "/"],
+  line: LINE_ASCII,
+  hHeavy: "=", vHeavy: "|", hDotted: ".", vDotted: ":",
+  arrowUp: "^", arrowRight: ">", arrowDown: "v", arrowLeft: "<",
+  cornerRect: ["+", "+", "+", "+"],
+  cornerRound: ["+", "+", "+", "+"],
+  cornerDiamond: ["/", "\\", "/", "\\"],
+  loop: "<-",
 };
 
 export function isAsciiMode(): boolean {

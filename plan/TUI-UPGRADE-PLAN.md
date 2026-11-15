@@ -308,6 +308,34 @@ Mục tiêu: có bộ mẫu markdown "khó" để tái hiện mọi lỗi §3 tr
 - **Gate:** ≥ 5 test mới (thực tế nhiều hơn), 835+ test xanh, fuzz 10k case
   không throw.
 
+### P9 — Vẽ flowchart thật trong terminal (`markdown/graph.ts`) (L) ✅
+
+- Bỏ giới hạn "chỉ tóm tắt" của P4: ```mermaid `flowchart` giờ **được vẽ bằng
+  box-drawing** ngay trong TUI. Engine thuần (không Ink, không I/O):
+  parse (shapes, `--> -.-> ==>`, edge label 2 kiểu, chain `A-->B-->C`,
+  subgraph, comment) → longest-path ranking (DFS cycle-break + Kahn) →
+  barycenter ordering → đặt box → rasterize lưới cell kèm *kind*
+  (`box/label/edge/arrow/elabel`) để Ink tô màu riêng.
+- Hai chế độ xếp: `layered` (mỗi rank một dải — graph phân nhánh) và `strip`
+  (chuỗi dài wrap thành nhiều hàng nối `──▶`, connector `┌──╯` khi xuống
+  hàng). Thử label cap rộng→hẹp cho tới khi khít pane; không khít → degrade
+  về summary box P4 (không bao giờ vẽ cắt xén).
+- Approximations có chủ đích, ghi note dưới đồ thị: shape quy về 3 kiểu
+  corner; subgraph dẹt hóa; cạnh đóng chu trình liệt kê `↩ cycle edge` thay
+  vì vẽ ngược; edge label hết chỗ thì bỏ + note. `BT/RL` đảo cạnh rồi đặt
+  mũi tên phía upstream (không transpose raster).
+- `charset.ts`: bảng glyph theo connection-mask (16 ô) + heavy/dotted +
+  arrowheads + corners, đủ fallback ASCII.
+- Export hint hết placeholder `<file>`: nguồn diagram được ghi deterministic
+  vào `.scoder/diagrams/<slug>-<sha6>.mmd` (gitignored) — câu hint copy/paste
+  chạy được ngay. Labels `<br/>`/HTML entity làm sạch ở cả summary lẫn graph.
+- `estimateMarkdownRows` dùng chiều cao raster thật (virtualization khớp).
+- Test: `test/graph-layout.test.mjs` (parse/label/fit/invariant width/ASCII
+  child-process/fuzz deterministic) + fixture snapshot mới `mermaid-br /
+  mermaid-chain / mermaid-branch` ở 40/80/120.
+- **Gate:** 1000 test xanh; snapshot không dòng nào vượt pane; ASCII mode
+  không còn glyph ngoài ASCII trong raster.
+
 ### Thứ tự & phụ thuộc
 
 ```

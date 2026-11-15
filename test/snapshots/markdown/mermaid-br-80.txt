@@ -1,0 +1,19 @@
+◉ flowchart TD · 3 nodes · 2 edges
+┌───────────────────┐
+│ Xây dựng frontend │
+└───────────────────┘
+          │
+          │
+          ▼
+      ╱──────╲
+      │ Đạt? │
+      ╲──────╱
+          │
+          │có
+          ▼
+ ┌─────────────────┐
+ │ Deploy & verify │
+ └─────────────────┘
+• ↩ cycle edge: Đạt? → Xây dựng frontend
+export: npx @mermaid-js/mermaid-cli
+  -i .scoder/diagrams/diagram-5d5697.mmd -o diagram.svg

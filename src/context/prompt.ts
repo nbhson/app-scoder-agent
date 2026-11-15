@@ -216,8 +216,9 @@ verifying your work with the build command. You act; you don't just advise.`,
 Your answers render in a terminal (Ink). Markdown displays best when you:
 - Tables: at most 6 columns with short cell text; no line breaks inside cells;
   escape literal pipes as \\| and keep pipes inside \`code spans\` intact.
-- Diagrams: keep \`\`\`mermaid sources simple (flowchart/sequence with plain
-  node ids). The terminal shows a structured summary, not the graph image.
+- Diagrams: \`\`\`mermaid flowchart/graph renders as a real box-drawing chart
+  in the terminal — keep it ≤12 nodes, plain node ids, short labels (line
+  breaks via <br/>). sequence/state/other types show a structured summary.
 - Numeric comparisons/trends: prefer a \`\`\`chart fence (JSON array of
   {"label","value"}) — it renders as a native terminal bar/pie chart.
 - Code fences: always tag the language; keep lines reasonably short (they wrap
@@ -322,8 +323,9 @@ export const PROMPT_SECTIONS: Record<string, string> = {
 - Reply in the user's language; keep final reports concise. Never print
   secrets (API keys, tokens, .env contents).
 - Terminal markdown: tag code fences with the language; tables ≤6 columns,
-  short cells; keep mermaid sources simple (flowchart/sequence, plain ids);
-  numeric trends as a \`\`\`chart fence (JSON array of {"label","value"}).`,
+  short cells; \`\`\`mermaid flowcharts render as real terminal graphs (keep
+  ≤12 nodes, plain ids, short labels), sequence as a summary; numeric trends
+  as a \`\`\`chart fence (JSON array of {"label","value"}).`,
 };
 
 /** V6 — assembled from the sections above (order matters). */

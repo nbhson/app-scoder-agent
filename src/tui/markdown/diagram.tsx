@@ -1,18 +1,26 @@
 /**
- * Diagram & data previews: mermaid structured summary, ```chart fences
- * (bar/line/pie), ```timeline fences. All boxes are measured in display cells
- * (text-width.ts) — borders stay aligned with Unicode/emoji content.
+ * Diagram & data previews: mermaid flowcharts drawn for real (via
+ * markdown/graph.ts), mermaid summary boxes for types we cannot draw,
+ * ```chart fences (bar/line/pie) and ```timeline fences. All boxes are
+ * measured in display cells (text-width.ts) — borders stay aligned with
+ * Unicode/emoji content.
  *
- * Mermaid strategy: NO real graph layout in the terminal. We parse the source
- * just enough to show an honest structured summary (type, nodes, edges,
- * participants, messages). Unsupported/complex diagrams fall back to
- * syntax-highlighted source + a friendly note.
+ * Mermaid strategy: DRAW what the terminal can hold. A flowchart is laid out
+ * and rasterized; if it cannot fit the pane (too many nodes, labels too long),
+ * we degrade to an honest structured summary (type, nodes, edges,
+ * participants, messages). Other diagram types fall back to syntax-highlighted
+ * source plus a friendly note. Every preview also writes its source to a real
+ * file, so the export hint is a command that actually runs.
  */
 import React from "react";
 import { Box, Text } from "ink";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { theme } from "../theme.js";
 import { charset } from "../charset.js";
 import { clipCells, measure, padEndCells } from "../text-width.js";
+import { cleanMermaidLabel, renderFlowchart, MAX_GRAPH_ROWS, type CellKind, type Raster } from "./graph.js";
 
 // ── Chart / timeline specs (unchanged data formats) ─────────────────────────
 
@@ -166,9 +174,9 @@ const MERMAID_EDGE_RX = new RegExp(
   "gu",
 );
 
-/** Strip surrounding shape brackets to get the label: "[Start]" → "Start". */
+/** Shape wrapper → display label: `"[Start<br/>2016]"` → `"Start 2016"`. */
 function nodeLabel(shape: string): string {
-  return shape.replace(/^[[({]+|[)\]}]+$/g, "").trim().replace(/^"|"$/g, "");
+  return cleanMermaidLabel(shape.replace(/^[[({]+|[)\]}]+$/g, "").trim());
 }
 
 export function summarizeMermaid(source: string[]): MermaidSummary {
@@ -237,20 +245,128 @@ export function summarizeMermaid(source: string[]): MermaidSummary {
   };
 }
 
-const MERMAID_EXPORT_HINT = "export: npx @mermaid-js/mermaid-cli -i <file> -o out.svg";
 const MAX_SOURCE_LINES = 12;
 
-/** Mermaid block: structured summary box; unsupported types → source + note. */
+const exported = new Set<string>();
+
+/** `Angular 12-14 <br/> 2021` → `angular-12-14-2021-a1b2c3`. */
+function diagramSlug(source: string[]): string {
+  const first = source.join(" ").match(/\["?([^"\]]{3,40})"\?\]/)?.[1] ?? "diagram";
+  const base = first
+    .toLowerCase()
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+  const hash = createHash("sha1").update(source.join("\n")).digest("hex").slice(0, 6);
+  return `${base || "diagram"}-${hash}`;
+}
+
+/**
+ * Save the diagram source so the export hint becomes a command that actually
+ * runs. Idempotent per source and silent on failure — rendering must never
+ * break because the filesystem did. `.scoder/` is gitignored.
+ */
+function exportDiagram(source: string[]): string | null {
+  const path = join(".scoder", "diagrams", `${diagramSlug(source)}.mmd`);
+  if (exported.has(path)) return path;
+  try {
+    mkdirSync(join(".scoder", "diagrams"), { recursive: true });
+    writeFileSync(path, `${source.join("\n")}\n`, "utf8");
+    exported.add(path);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Export hint, pre-split so the real path is never clipped by a box border:
+ * break before the arguments and indent the continuation line.
+ */
+function exportHintLines(file: string | null, width: number): string[] {
+  if (!file) {
+    return [
+      "export: save these lines to a .mmd file, then",
+      "  npx @mermaid-js/mermaid-cli -i FILE -o diagram.svg",
+    ];
+  }
+  const oneLine = `export: npx @mermaid-js/mermaid-cli -i ${file} -o diagram.svg`;
+  if (measure(oneLine) <= width) return [oneLine];
+  const args = `-i ${file} -o diagram.svg`;
+  return [
+    "export: npx @mermaid-js/mermaid-cli",
+    `  ${measure(args) <= width - 2 ? args : clipCells(args, Math.max(4, width - 2))}`,
+  ];
+}
+
+/** Cell kind → text props: boxes/edges stay quiet, labels carry the meaning. */
+function cellStyle(kind: CellKind): { color?: string; bold?: boolean } {
+  switch (kind) {
+    case "box": return { color: theme.mermaid };
+    case "arrow": return { color: theme.mermaid };
+    case "edge": return { color: theme.dim };
+    case "label": return { bold: true };
+    case "elabel": return { color: theme.accent };
+    default: return {};
+  }
+}
+
+/** A flowchart drawn for real: box-drawing nodes, routed edges, edge labels. */
+export function FlowchartView({ raster, source, width }: {
+  raster: Raster;
+  source: string[];
+  width: number;
+}): React.JSX.Element {
+  const file = exportDiagram(source);
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>
+        <Text color={theme.mermaid} bold>◉ </Text>
+        flowchart {raster.direction} · {raster.nodes} nodes · {raster.edges} edges
+        {raster.mode === "strip" ? " · chain layout" : ""}
+      </Text>
+      {raster.rows.map((segs, y) => (
+        <Text key={y}>
+          {segs.map((seg, i) => (
+            <Text key={i} {...cellStyle(seg.kind)}>{seg.text}</Text>
+          ))}
+        </Text>
+      ))}
+      {raster.notes.map((note, i) => (
+        <Text key={`note-${i}`} dimColor>{`${charset.bullet} ${clipCells(note, Math.max(8, width - 2))}`}</Text>
+      ))}
+      {exportHintLines(file, Math.max(24, width)).map((line, i) => (
+        <Text key={`hint-${i}`} dimColor>{line}</Text>
+      ))}
+    </Box>
+  );
+}
+
+/**
+ * Mermaid block: draw the graph when it fits the pane; otherwise an honest
+ * structured summary (supported types) or source + note (unsupported).
+ */
 export function MermaidPreview({ source, width }: { source: string[]; width: number }): React.JSX.Element {
+  const graph = renderFlowchart(source, Math.max(24, width), MAX_GRAPH_ROWS);
+  if (graph) return <FlowchartView raster={graph} source={source} width={width} />;
+
   const summary = summarizeMermaid(source);
   if (summary.supported) {
+    const boxWidth = Math.min(width, 72);
     return (
       <Box flexDirection="column" marginTop={1}>
         <Text dimColor>  ◉ mermaid diagram</Text>
-        <ContentBox title="◈ diagram preview" lines={[...summary.lines, "", MERMAID_EXPORT_HINT]} width={Math.min(width, 72)} color={theme.mermaid} />
+        <ContentBox
+          title="◈ diagram preview"
+          lines={[...summary.lines, "", ...exportHintLines(exportDiagram(source), boxWidth - 4)]}
+          width={boxWidth}
+          color={theme.mermaid}
+        />
       </Box>
     );
   }
+  const file = exportDiagram(source);
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>  ◉ mermaid diagram — {summary.lines[0]}</Text>
@@ -260,7 +376,9 @@ export function MermaidPreview({ source, width }: { source: string[]; width: num
       {source.length > MAX_SOURCE_LINES && (
         <Text dimColor>  … +{source.length - MAX_SOURCE_LINES} more lines</Text>
       )}
-      <Text dimColor>  {MERMAID_EXPORT_HINT}</Text>
+      {exportHintLines(file, Math.max(24, width - 2)).map((line, i) => (
+        <Text key={`hint-${i}`} dimColor>  {line}</Text>
+      ))}
     </Box>
   );
 }

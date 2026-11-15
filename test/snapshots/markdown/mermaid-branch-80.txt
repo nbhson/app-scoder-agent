@@ -1,0 +1,14 @@
+◉ flowchart LR · 5 nodes · 4 edges
+                                      ┌──────┐
+                                      │ Emit │
+┌────────┐   ┌──────────┐   ╱─────╲══▶└──────┘
+│ Parser │──▶│ Analyzer │╌╌▶│ OK? │──┐
+└────────┘   └──────────┘   ╲─────╱  │no
+                                     │┌────────┐
+                                     ▶│ Report │
+                                      └────────┘
+• subgraph flattened: Pipeline
+• 1 edge label(s) omitted (no room)
+• ↩ cycle edge: Report → Analyzer
+export: npx @mermaid-js/mermaid-cli
+  -i .scoder/diagrams/diagram-efa135.mmd -o diagram.svg

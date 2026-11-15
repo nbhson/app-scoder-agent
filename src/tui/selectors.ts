@@ -4,6 +4,7 @@
  */
 import type { ChatItem } from "./state.js";
 import { parseMarkdown } from "./markdown/parse.js";
+import { MAX_GRAPH_ROWS, renderFlowchart } from "./markdown/graph.js";
 import { measure } from "./text-width.js";
 
 const EST_WIDTH = 80;
@@ -53,10 +54,15 @@ export function estimateMarkdownRows(text: string, width = EST_WIDTH): number {
       case "quote":
         rows += wrapEstimate(block.text, Math.max(8, width - 2));
         break;
-      case "mermaid":
-        // summary box: ~4 header lines + ≤6 nodes + ≤8 edges + hint + 2 border
-        rows += Math.min(block.lines.length, 12) + 6;
+      case "mermaid": {
+        // Drawn graph: header + raster + notes + hint. Summary fallback:
+        // ~4 header lines + ≤6 nodes + ≤8 edges + hint + 2 border.
+        const graph = renderFlowchart(block.lines, Math.max(24, width), MAX_GRAPH_ROWS);
+        rows += graph
+          ? graph.height + 2 + Math.min(graph.notes.length, 4) + 2
+          : Math.min(block.lines.length, 12) + 6;
         break;
+      }
       case "chart":
         rows += 2 + 40 + 1; // ContentBox max: borders + ≤40 data rows
         break;

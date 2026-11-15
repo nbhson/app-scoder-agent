@@ -7,7 +7,8 @@
  *
  * Supported:
  * - Fenced code blocks with syntax highlighting, line numbers, soft-wrapping
- * - Mermaid diagram blocks (```mermaid) → structured summary preview
+ * - Mermaid diagram blocks (```mermaid) → flowcharts drawn as real graphs
+ *   (graph.ts layout engine), other types as a structured summary preview
  * - # Headers (1-6, bold)
  * - GFM tables with full unicode borders, alignment row, cell wrapping,
  *   narrow-pane key-value fallback, row cap
