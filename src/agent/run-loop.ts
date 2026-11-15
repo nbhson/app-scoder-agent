@@ -230,9 +230,12 @@ export async function runAgentLoop(
       }
       // Execute each tool call (validate args before running)
       const stepToolResults = new Map<string, { ok: boolean; output: string }>();
-      // H-11: checkpoint before any batch that may write files.
+      // H-11: checkpoint before any batch that may write files. P-perf:
+      // `capture` is async (spawnSync `git add -A` used to freeze the whole
+      // process for 100 ms–1 s+ per write batch); it must complete BEFORE the
+      // batch executes so the checkpoint predates the modifications.
       const batchMayWrite = (message.tool_calls ?? []).some((tc) => tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch");
-      if (batchMayWrite) runtime.snapshots.capture(`step ${steps}: ${(message.tool_calls ?? []).map((t) => t.name).join(",")}`);
+      if (batchMayWrite) await runtime.snapshots.capture(`step ${steps}: ${(message.tool_calls ?? []).map((t) => t.name).join(",")}`);
       // I-09: parallelize read-only tool calls (concurrency cap 4); mutating
       // calls (and any batch containing an ask-gated call) run sequentially.
       const calls = message.tool_calls ?? [];

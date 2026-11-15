@@ -139,7 +139,10 @@ export function rebuildToolList(runtime: McpBridgeRuntime): void {
   }
 }
 
-export async function connectMcp(runtime: McpBridgeRuntime): Promise<void> {
+export async function connectMcp(
+  runtime: McpBridgeRuntime,
+  opts: { rebuildTools?: boolean } = {},
+): Promise<void> {
   const servers = runtime.config.mcpServers ?? {};
   if (Object.keys(servers as Record<string, unknown>).length === 0) return;
   if (runtime.getMcp()) return;
@@ -159,7 +162,10 @@ export async function connectMcp(runtime: McpBridgeRuntime): Promise<void> {
     runtime.emit({ type: "mcp_status", line, server: name, state });
   };
   await manager.connectAll();
-  rebuildToolList(runtime);
+  // P-perf: run()/resume() chạy probe song song với connect và tự gọi
+  // rebuildToolList SAU khi probe set contextWindow (trần schema window-aware)
+  // → connect không rebuild khi được bảo defer.
+  if (opts.rebuildTools !== false) rebuildToolList(runtime);
 }
 
 export function shutdownMcp(runtime: McpBridgeRuntime): void {

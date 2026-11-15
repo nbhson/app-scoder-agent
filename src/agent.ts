@@ -939,8 +939,8 @@ export class Agent {
   }
 
   /** Connect configured MCP stdio servers (if any) and merge their tools. */
-  private async connectMcp(): Promise<void> {
-    await connectMcpBridge(this.mcpBridgeRuntime());
+  private async connectMcp(opts: { rebuildTools?: boolean } = {}): Promise<void> {
+    await connectMcpBridge(this.mcpBridgeRuntime(), opts);
   }
 
   /**
@@ -1278,8 +1278,13 @@ export class Agent {
     this.logger.log({ type: "prompt_version", version: PROMPT_VERSION });
     this.emitRunBoundary(rawTask, buildCmd, task);
 
-    await this.applyContextProbe();
-    await this.connectMcp();
+    // P-perf: probe (HTTP GET window thật) và MCP connect (spawn + handshake
+    // N server) là hai việc network ĐỘC LẬP — trước đây chạy tuần tự trên
+    // đường start (~0,5–1,5s). Ràng buộc thứ tự duy nhất: trần schema MCP là
+    // window-aware (SCHEMA_SHARE_OF_WINDOW) ⇒ rebuildToolList phải chạy SAU
+    // khi probe set config.contextWindow — connect defer rebuild, gọi ở đây.
+    await Promise.all([this.applyContextProbe(), this.connectMcp({ rebuildTools: false })]);
+    if (this.mcp) this.rebuildToolList();
     this.promptContext.clearPendingTools();
     return this.runLoop(0, buildCmd, null);
   }
@@ -1325,7 +1330,12 @@ export class Agent {
     const buildCmd = this.buildCmd;
     const rawTask = task;
     task = expandMentions(task, this.config.workdir);
+    // P-perf: cap — chuỗi này nối thêm MỖI lượt REPL và đi vào verification
+    // prompt, session save, run-boundary event. Trần 8k giữ các lượt GẦN NHẤT
+    // (thứ mà "task hiện tại" cần tham chiếu); session thường dưới xa mức này.
     this.currentTask = `${this.currentTask}\n${task}`.trim();
+    const MAX_TASK_CTX = 8_000;
+    if (this.currentTask.length > MAX_TASK_CTX) this.currentTask = `…${this.currentTask.slice(-(MAX_TASK_CTX - 1))}`;
     this.resetRunSignal();
     this.resetUsageTotals();
     this.filesModified = false;
@@ -1339,8 +1349,10 @@ export class Agent {
     // Cùng một dấu mốc run_start mà run() phát — UI reset anchor per-run ở đó.
     this.emitRunBoundary(rawTask, buildCmd, task);
     this.rebuildToolList();
-    await this.applyContextProbe();
-    await this.connectMcp();
+    // P-perf: xem run() — probe ∥ connect, rebuild sau probe (giữ skill-filter
+    // rebuild ở trên: nó áp allowed-tools của skill staged ngay lập tức).
+    await Promise.all([this.applyContextProbe(), this.connectMcp({ rebuildTools: false })]);
+    if (this.mcp) this.rebuildToolList();
     this.promptContext.clearPendingTools();
     return this.runLoop(0, buildCmd, null);
   }
@@ -1395,8 +1407,9 @@ export class Agent {
     // append lại task thành một dòng user mới.
     this.emitRunBoundary(this.currentTask, buildCmd, undefined, true);
 
-    await this.applyContextProbe();
-    await this.connectMcp();
+    // P-perf: probe ∥ connect — xem comment ở run().
+    await Promise.all([this.applyContextProbe(), this.connectMcp({ rebuildTools: false })]);
+    if (this.mcp) this.rebuildToolList();
     return this.runLoop(session.steps ?? 0, buildCmd, lastBuild);
   }
 
