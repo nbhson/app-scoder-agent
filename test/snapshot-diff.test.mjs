@@ -21,33 +21,33 @@ beforeEach(() => {
 
 afterEach(() => rmSync(workdir, { recursive: true, force: true }));
 
-describe("SnapshotManager.diff (T-06)", () => {
-  it("diff between two checkpoints shows the change", () => {
+describe("SnapshotManager.diff (T-06)", async () => {
+  it("diff between two checkpoints shows the change", async () => {
     const sm = new SnapshotManager(workdir, true);
-    const cp1 = sm.capture("before");
+    const cp1 = await sm.capture("before");
     writeFileSync(join(workdir, "a.txt"), "one\ntwo\n");
-    const cp2 = sm.capture("after");
+    const cp2 = await sm.capture("after");
     assert.ok(cp1 && cp2);
     const d = sm.diff(cp1.tree, cp2.tree);
     assert.ok(d, "diff should be non-null");
     assert.match(d, /\+two/);
   });
-  it("diff vs worktree (to=null)", () => {
+  it("diff vs worktree (to=null)", async () => {
     const sm = new SnapshotManager(workdir, true);
-    const cp1 = sm.capture("before");
+    const cp1 = await sm.capture("before");
     writeFileSync(join(workdir, "a.txt"), "changed\n");
     const d = sm.diff(cp1.tree, null);
     assert.ok(d);
     assert.match(d, /changed/);
   });
-  it("no change → null", () => {
+  it("no change → null", async () => {
     const sm = new SnapshotManager(workdir, true);
-    const cp1 = sm.capture("a");
-    const cp2 = sm.capture("b");
+    const cp1 = await sm.capture("a");
+    const cp2 = await sm.capture("b");
     assert.ok(cp1 && cp2);
     assert.equal(sm.diff(cp1.tree, cp2.tree), null);
   });
-  it("disabled → null", () => {
+  it("disabled → null", async () => {
     const sm = new SnapshotManager(workdir, false);
     assert.equal(sm.diff("head", null), null);
   });

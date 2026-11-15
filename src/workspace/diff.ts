@@ -16,8 +16,33 @@ const MAX_DIFF_TEXT_LINES = 120; // cap rendered diff lines
 
 type Op = { type: " " | "-" | "+"; line: string };
 
-/** LCS-based line diff producing ops in order. */
+/** LCS-based line diff producing ops in order.
+ *
+ * P-perf: the full DP is O(n·m) — a 5-line edit in a 1500-line file allocated
+ * a 1500×1500 matrix (~13 ms + 9 MB). The COMMON PREFIX is provably part of
+ * the old backtracking walk: its first branch takes the diagonal whenever
+ * `a[i] === b[j]` (no tie-breaking), so the walk consumes the prefix in
+ * lockstep; from (p,p) onward the dp values of the truncated arrays equal the
+ * full table's `dp[p+i][p+j]`, so every decision (and the emitted ops) is
+ * IDENTICAL (verified: 3000-case fuzz vs old implementation).
+ *
+ * NOTE: peeling the common SUFFIX is NOT output-equivalent — the walk matches
+ * an equal trailing line at its EARLIEST optimal position (t=14 golden fuzz:
+ * old matched "L9" mid-array, suffix-peel matched it at the end). Removed
+ * deliberately; rollback of the prefix peel = delete these 6 lines.
+ */
 function computeOps(a: string[], b: string[]): Op[] {
+  let p = 0; // common prefix lines
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+
+  const mid = lcsOps(a.slice(p), b.slice(p));
+  const ops: Op[] = [];
+  for (let i = 0; i < p; i++) ops.push({ type: " ", line: a[i] });
+  for (const o of mid) ops.push(o);
+  return ops;
+}
+
+function lcsOps(a: string[], b: string[]): Op[] {
   const n = a.length;
   const m = b.length;
 
