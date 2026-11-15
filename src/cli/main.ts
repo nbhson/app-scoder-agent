@@ -2,7 +2,6 @@
 import process from "node:process";
 import { resolve } from "node:path";
 import { loadConfig } from "../config/config.js";
-import { Agent } from "../agent.js";
 import { listSessions, resolveSessionId } from "../session/session.js";
 import { JsonlLogger } from "../session/logger.js";
 import { collectUsage, formatCostReport } from "../session/cost.js";
@@ -10,9 +9,7 @@ import { getVersion as getPackageVersion } from "../shared/version.js";
 import { selectableAgents } from "../context/agents.js";
 import * as ui from "../io/terminal.js";
 import { parseArgs, HELP, type CliArgs } from "./args.js";
-import { runOnce } from "./run-once.js";
 import { runInit } from "./init.js";
-import { repl } from "./repl.js";
 import { runMcpCommand } from "./mcp-command.js";
 
 // Single source of truth: read version from package.json (see src/version.ts).
@@ -96,6 +93,10 @@ async function main(): Promise<void> {
       ui.error(`Session not found: ${args.resumeId ?? "last"}. Run \`scoder list\` to see saved sessions.`);
       process.exit(2);
     }
+    // P-perf: `agent.js` (→ gpt-tokenizer ~60ms, chain tools/) chỉ được load
+    // trên các đường THỰC SỰ chạy agent — `--help`/list/logs/cost/init/models
+    // không phải trả tiền đó nữa (cold start đo: ~110ms → ~55ms).
+    const { Agent } = await import("../agent.js");
     const agent = new Agent(cfg);
     process.on("SIGINT", () => {
       ui.warn("\nSIGINT received — finishing current tool, then stopping...");
@@ -173,6 +174,7 @@ async function main(): Promise<void> {
   if (args.subcommand === "tui") {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       ui.warn("TUI requires an interactive terminal (TTY) — falling back to the classic REPL.");
+      const { repl } = await import("./repl.js");
       await repl(cfg);
       return;
     }
@@ -212,10 +214,12 @@ async function main(): Promise<void> {
   }
 
   if (args.task) {
+    const { runOnce } = await import("./run-once.js");
     const code = await runOnce(cfg, args.task);
     process.exit(code);
   }
 
+  const { repl } = await import("./repl.js");
   await repl(cfg);
 }
 
