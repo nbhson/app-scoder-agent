@@ -31,21 +31,21 @@ afterEach(() => {
   rmSync(workdir, { recursive: true, force: true });
 });
 
-describe("SnapshotManager — capture + restore", () => {
-  it("capture creates a checkpoint with tree hash", () => {
+describe("SnapshotManager — capture + restore", async () => {
+  it("capture creates a checkpoint with tree hash", async () => {
     const sm = new SnapshotManager(workdir, true);
-    const cp = sm.capture("test batch");
+    const cp = await sm.capture("test batch");
     assert.ok(cp, "checkpoint created");
     assert.match(cp.id, /^cp1-/);
     assert.match(cp.tree, /^[0-9a-f]{40}$/);
     assert.equal(cp.label, "test batch");
   });
 
-  it("multiple captures + list ordering", () => {
+  it("multiple captures + list ordering", async () => {
     const sm = new SnapshotManager(workdir, true);
-    sm.capture("first");
+    await sm.capture("first");
     writeFileSync(join(workdir, "a.txt"), "changed\n");
-    sm.capture("second");
+    await sm.capture("second");
     const list = sm.list();
     assert.equal(list.length, 2);
     assert.equal(list[0].label, "first");
@@ -53,9 +53,9 @@ describe("SnapshotManager — capture + restore", () => {
     assert.notEqual(list[0].tree, list[1].tree, "trees differ after change");
   });
 
-  it("restore reverts file changes to a checkpoint", () => {
+  it("restore reverts file changes to a checkpoint", async () => {
     const sm = new SnapshotManager(workdir, true);
-    sm.capture("before");
+    await sm.capture("before");
     writeFileSync(join(workdir, "a.txt"), "broken change\n");
     writeFileSync(join(workdir, "b.txt"), "new file\n");
     const list = sm.list();
@@ -65,27 +65,27 @@ describe("SnapshotManager — capture + restore", () => {
     assert.ok(!existsSync2(join(workdir, "b.txt")), "added file removed on restore");
   });
 
-  it("disabled manager captures nothing", () => {
+  it("disabled manager captures nothing", async () => {
     const sm = new SnapshotManager(workdir, false);
-    assert.equal(sm.capture("x"), null);
+    assert.equal(await sm.capture("x"), null);
     assert.equal(sm.list().length, 0);
   });
 
-  it("non-git directory → degraded, never throws", () => {
+  it("non-git directory → degraded, never throws", async () => {
     const wd = mkdtempSync(join(tmpdir(), "nogit-"));
     try {
       const sm = new SnapshotManager(wd, true);
-      assert.equal(sm.capture("x"), null);
+      assert.equal(await sm.capture("x"), null);
       assert.ok(sm.degradedReason, "degraded reason set");
     } finally {
       rmSync(wd, { recursive: true, force: true });
     }
   });
 
-  it("checkpoint survives write to subdirectory", () => {
+  it("checkpoint survives write to subdirectory", async () => {
     mkdirSync(join(workdir, "src"), { recursive: true });
     const sm = new SnapshotManager(workdir, true);
-    sm.capture("cp0");
+    await sm.capture("cp0");
     writeFileSync(join(workdir, "src", "x.ts"), "export {};\n");
     const list = sm.list();
     sm.restore(list[0].tree);

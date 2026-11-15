@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { DiffResult } from "../workspace/diff.js";
@@ -49,8 +49,18 @@ export async function gateWrite(
   return null;
 }
 
-/** Run the project formatter on a just-written file. */
-export function formatFile(ctx: ToolContext, abs: string): string | null {
+/**
+ * Run the project formatter on a just-written file.
+ *
+ * P-perf: async (spawn) — `prettier --write` on a cold node_modules takes
+ * 0,5–3s; as `spawnSync` it froze the ENTIRE process (TUI paint, SSE, LLM
+ * stream parsing) inside the write tool. Same command resolution, same
+ * timeout, same notice strings (the old r.error messages were "spawnSync
+ * <cmd> …" — normalized back for byte-identical tool output).
+ * All callers (write/edit/apply-patch tools) are async and awaited by the
+ * tool-executor.
+ */
+export async function formatFile(ctx: ToolContext, abs: string): Promise<string | null> {
   const fmt = ctx.formatter;
   if (!fmt) return null;
   let cmd: string[];
@@ -73,18 +83,53 @@ export function formatFile(ctx: ToolContext, abs: string): string | null {
     else if (eslint) cmd = [eslint, "--fix", abs];
     else return null;
   }
-  const r = spawnSync(cmd[0], cmd.slice(1), {
+  const r = await spawnCapture(cmd[0], cmd.slice(1), {
     cwd: ctx.workdir,
-    encoding: "utf8",
     timeout: FORMATTER_TIMEOUT_MS,
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
   });
-  if (r.error) return `formatter notice: ${(r.error as Error).message.split("\n")[0]}`;
+  if (r.error) return `formatter notice: ${r.error.split("\n")[0]}`;
   if (r.status !== 0) {
     return `formatter notice: ${cmd[0]} exited ${r.status}\n${(r.stderr ?? r.stdout ?? "").slice(0, 500)}`;
   }
   return null;
+}
+
+function spawnCapture(
+  file: string,
+  args: string[],
+  opts: { cwd: string; timeout: number; stdio: ["ignore", "pipe", "pipe"]; shell: boolean },
+): Promise<{ status: number | null; stdout: string; stderr: string; error?: string }> {
+  return new Promise((res) => {
+    let child;
+    try {
+      child = spawn(file, args, { ...opts, signal: AbortSignal.timeout(opts.timeout) });
+    } catch (err) {
+      res({ status: null, stdout: "", stderr: "", error: `spawnSync ${file} ${(err as Error).message}` });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    let spawnError: string | undefined;
+    child.stdout?.on("data", (c: Buffer) => {
+      if (stdout.length < 64_000) stdout += c.toString("utf8");
+    });
+    child.stderr?.on("data", (c: Buffer) => {
+      if (stderr.length < 64_000) stderr += c.toString("utf8");
+    });
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      // Normalize to the sync wording so tool output is byte-identical:
+      // AbortSignal.timeout ⇒ AbortError, but spawnSync reported ETIMEDOUT.
+      spawnError =
+        err.code === "ABORT_ERR"
+          ? `spawnSync ${file} ETIMEDOUT`
+          : `spawnSync ${file} ${err.message.replace(/^spawn\s/, "spawnSync ")}`;
+    });
+    child.on("close", (code) => {
+      res({ status: code, stdout, stderr, ...(spawnError ? { error: spawnError } : {}) });
+    });
+  });
 }
 
 /** v2: whitespace-insensitive regex for edit_file fuzzy fallback. */

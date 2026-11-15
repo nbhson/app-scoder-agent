@@ -25,7 +25,7 @@ export async function toolWriteFile(ctx: ToolContext, args: { path: string; cont
 
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, args.content, "utf8");
-  const fmtNote = formatFile(ctx, abs);
+  const fmtNote = await formatFile(ctx, abs);
   return {
     ok: true,
     output: `Wrote ${args.content.split("\n").length} lines to ${args.path}${fmtNote ? `\n${fmtNote}` : ""}`,

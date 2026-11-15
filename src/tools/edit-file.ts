@@ -24,7 +24,7 @@ export async function toolEditFile(
   if (gate) return gate;
 
   writeFileSync(abs, newContent, "utf8");
-  const fmtNote = formatFile(ctx, abs);
+  const fmtNote = await formatFile(ctx, abs);
   return {
     ok: true,
     output: `Edited ${args.path}${outcome.fuzzy ? " (fuzzy whitespace match)" : ""}${fmtNote ? `\n${fmtNote}` : ""}`,

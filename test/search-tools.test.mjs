@@ -26,49 +26,49 @@ afterEach(() => {
 });
 
 describe("toolGrep (I-07)", () => {
-  it("tìm được hits dạng path:line:text", () => {
-    const r = toolGrep(workdir, { pattern: "alpha" });
+  it("tìm được hits dạng path:line:text", async () => {
+    const r = await toolGrep(workdir, { pattern: "alpha" });
     assert.equal(r.ok, true);
     assert.match(r.output, /src\/a\.ts:\d+:/);
     assert.match(r.output, /root\.md:\d+:/);
   });
-  it("node_modules bị skip", () => {
-    const r = toolGrep(workdir, { pattern: "alpha" });
+  it("node_modules bị skip", async () => {
+    const r = await toolGrep(workdir, { pattern: "alpha" });
     assert.ok(!r.output.includes("node_modules"));
   });
-  it("include filter", () => {
-    const r = toolGrep(workdir, { pattern: "alpha", include: "*.md" });
+  it("include filter", async () => {
+    const r = await toolGrep(workdir, { pattern: "alpha", include: "*.md" });
     assert.match(r.output, /root\.md/);
     assert.ok(!r.output.includes("a.ts"));
   });
-  it("no matches → (no matches)", () => {
-    const r = toolGrep(workdir, { pattern: "zzznotexist" });
+  it("no matches → (no matches)", async () => {
+    const r = await toolGrep(workdir, { pattern: "zzznotexist" });
     assert.equal(r.ok, true);
     assert.match(r.output, /no matches/);
   });
-  it("pattern rỗng → lỗi", () => {
-    const r = toolGrep(workdir, { pattern: "" });
+  it("pattern rỗng → lỗi", async () => {
+    const r = await toolGrep(workdir, { pattern: "" });
     assert.equal(r.ok, false);
   });
 });
 
 describe("globToRegExp (I-07)", () => {
-  it("** cross directories", () => {
+  it("** cross directories", async () => {
     const rx = globToRegExp("src/**/*.ts");
     assert.ok(rx.test("src/a/b/c.ts"));
     assert.ok(rx.test("src/x.ts"));
     assert.ok(!rx.test("root.md"));
   });
-  it("* một level", () => {
+  it("* một level", async () => {
     const rx = globToRegExp("src/*.ts");
     assert.ok(rx.test("src/a.ts"));
     assert.ok(!rx.test("src/x/a.ts"));
   });
-  it("? một ký tự", () => {
+  it("? một ký tự", async () => {
     assert.ok(globToRegExp("?.ts").test("a.ts"));
     assert.ok(!globToRegExp("?.ts").test("ab.ts"));
   });
-  it("{a,b} alternatives", () => {
+  it("{a,b} alternatives", async () => {
     const rx = globToRegExp("*.{ts,md}");
     assert.ok(rx.test("a.ts"));
     assert.ok(rx.test("b.md"));
@@ -77,17 +77,17 @@ describe("globToRegExp (I-07)", () => {
 });
 
 describe("toolGlob (I-07)", () => {
-  it("tìm files theo pattern", () => {
+  it("tìm files theo pattern", async () => {
     const r = toolGlob(workdir, { pattern: "src/**/*.ts" });
     assert.equal(r.ok, true);
     assert.match(r.output, /src\/a\.ts/);
     assert.match(r.output, /src\/b\.ts/);
   });
-  it("node_modules bị skip", () => {
+  it("node_modules bị skip", async () => {
     const r = toolGlob(workdir, { pattern: "**/*.js" });
     assert.ok(!r.output.includes("node_modules"));
   });
-  it("no match → (no files match)", () => {
+  it("no match → (no files match)", async () => {
     const r = toolGlob(workdir, { pattern: "**/*.rs" });
     assert.match(r.output, /no files match/);
   });

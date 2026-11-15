@@ -9,9 +9,28 @@
  * Layout: .scoder/snapshot/ (GIT_DIR, bare-ish) + checkpoint log in memory.
  * Restore: `git checkout <tree> -- .` onto the worktree via the shadow.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+
+/** Async git helper for the capture hot path (P-perf): `spawnSync` froze the
+ * event loop for 100 ms–1 s+ on every write batch — TUI paint, SSE delivery
+ * and LLM stream parsing all stall behind it. Same flags, non-blocking. */
+function gitAsync(workdir: string, gitDir: string, args: string[]): Promise<{ status: number; stdout: string }> {
+  return new Promise((res) => {
+    const child = spawn("git", args, {
+      cwd: workdir,
+      env: { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: workdir },
+    });
+    let stdout = "";
+    child.stdout?.on("data", (c: Buffer) => {
+      if (stdout.length < 1_000_000) stdout += c.toString("utf8").slice(0, 1_000_000 - stdout.length);
+    });
+    child.stderr?.resume(); // drain so the child never blocks on a full pipe
+    child.on("error", () => res({ status: -1, stdout: "" }));
+    child.on("close", (code) => res({ status: code ?? -1, stdout }));
+  });
+}
 
 export interface SnapshotEntry {
   id: string; // checkpoint id ("n" sequential + tree hash)
@@ -79,19 +98,20 @@ export class SnapshotManager {
     }
   }
 
-  /** Capture current state as a checkpoint. Returns the tree hash or null. */
-  capture(label: string): SnapshotEntry | null {
+  /**
+   * Capture current state as a checkpoint. Returns the tree hash or null.
+   * P-perf: async — this runs on every write batch inside the agent loop;
+   * the previous `spawnSync` pair blocked the whole process for its duration.
+   * Callers MUST await this before executing the write batch (the checkpoint
+   * has to predate the modifications).
+   */
+  async capture(label: string): Promise<SnapshotEntry | null> {
     if (!this.enabled || !this.init()) return null;
-    const run = (args: string[]) =>
-      spawnSync("git", args, {
-        cwd: this.workdir,
-        encoding: "utf8",
-        env: { ...process.env, GIT_DIR: this.gitDir, GIT_WORK_TREE: this.workdir },
-      });
     try {
       // Add all (shadow index is independent from the project's index).
-      if (run(["add", "-A", "--", ".", ":(exclude).scoder"]).status !== 0) return null;
-      const tree = run(["write-tree"]);
+      const add = await gitAsync(this.workdir, this.gitDir, ["add", "-A", "--", ".", ":(exclude).scoder"]);
+      if (add.status !== 0) return null;
+      const tree = await gitAsync(this.workdir, this.gitDir, ["write-tree"]);
       if (tree.status !== 0) return null;
       const hash = tree.stdout.trim();
       // Empty tree (nothing changed vs previous checkpoint) — still record.

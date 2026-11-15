@@ -1,11 +1,51 @@
 import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { safePath, clamp, toPosInt, toResult } from "./path-safety.js";
 import type { ToolResult } from "./types.js";
 
 const SEARCH_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
 const MAX_SEARCH_HITS = 50;
+
+/** P-perf: async equivalent of `spawnSync(..., { encoding:"utf8", maxBuffer })`.
+ *  Same failure surface: spawn error / stdout > maxBuffer ⇒ { status: null,
+ *  stdout: "" } (spawnSync killed the child and returned no usable stdout —
+ *  callers fall through to the next engine on that shape). stdout is decoded
+ *  from the concatenated buffers at close, so multi-byte characters split
+ *  across chunks decode identically. */
+function runCapture(file: string, args: string[]): Promise<{ status: number | null; stdout: string }> {
+  const MAX = 10 * 1024 * 1024;
+  return new Promise((res) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(file, args);
+    } catch {
+      res({ status: null, stdout: "" });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const done = (status: number | null, stdout: string) => {
+      if (settled) return;
+      settled = true;
+      res({ status, stdout });
+    };
+    child.stdout?.on("data", (c: Buffer) => {
+      if (settled) return;
+      size += c.length;
+      if (size > MAX) {
+        try { child.kill(); } catch { /* gone */ }
+        done(null, ""); // maxBuffer semantics of spawnSync
+        return;
+      }
+      chunks.push(c);
+    });
+    child.stderr?.resume();
+    child.on("error", () => done(null, ""));
+    child.on("close", (code) => done(code, Buffer.concat(chunks).toString("utf8")));
+  });
+}
 
 /** Walk files under root (bounded depth, skip noise dirs), collect relative paths. */
 function walkFiles(root: string, cb: (rel: string, abs: string) => void, depth = 8): void {
@@ -24,8 +64,11 @@ function walkFiles(root: string, cb: (rel: string, abs: string) => void, depth =
   }
 }
 
-/** ripgrep if on PATH; else grep -rn; else JS line-scan fallback. Returns formatted hits. */
-export function toolGrep(
+/** ripgrep if on PATH; else grep -rn; else JS line-scan fallback. Returns formatted hits.
+ *  P-perf: async — `rg` over a large tree took 0,3–3 s as `spawnSync`, freezing
+ *  TUI paint/SSE/stream parsing for its whole duration. Fallback chain and
+ *  output format unchanged. */
+export async function toolGrep(
   workdir: string,
   args: {
     pattern: string;
@@ -36,8 +79,27 @@ export function toolGrep(
     max_results?: number | string;
     type?: string;
   },
-): ToolResult {
-  return toResult(() => {
+): Promise<ToolResult> {
+  try {
+    return await grepRun(workdir, args);
+  } catch (err) {
+    return { ok: false, output: `ERROR: ${(err as Error).message}` };
+  }
+}
+
+async function grepRun(
+  workdir: string,
+  args: {
+    pattern: string;
+    path?: string;
+    include?: string;
+    context_before?: number | string;
+    context_after?: number | string;
+    max_results?: number | string;
+    type?: string;
+  },
+): Promise<ToolResult> {
+  {
     const pattern = String(args.pattern ?? "").trim();
     if (!pattern) return { ok: false, output: "ERROR: pattern is required." };
     const root = safePath(workdir, args.path ?? ".");
@@ -60,7 +122,7 @@ export function toolGrep(
     if (ctxAfter > 0) rgArgs.push("-A", String(ctxAfter));
     if (args.include) rgArgs.push("-g", args.include);
     if (args.type) rgArgs.push("--type", String(args.type));
-    const rg = spawnSync("rg", rgArgs, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    const rg = await runCapture("rg", rgArgs);
     const lines: string[] = [];
     let count = 0;
     if ((rg.status ?? 2) === 0 || rg.stdout) {
@@ -101,7 +163,7 @@ export function toolGrep(
     if (ctxBefore > 0) gArgs.push("-B", String(ctxBefore));
     if (ctxAfter > 0) gArgs.push("-A", String(ctxAfter));
     gArgs.push(root);
-    const g = spawnSync("grep", gArgs, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    const g = await runCapture("grep", gArgs);
     if ((g.status ?? 2) <= 1) {
       const hits = (g.stdout ?? "").split("\n").filter(Boolean);
       const out: string[] = [];
@@ -117,7 +179,7 @@ export function toolGrep(
     }
     // rg vắng mặt + grep vắng mặt/lỗi → scan JS thuần (luôn chạy được, không cần binary).
     return jsGrepFallback(workdir, root, pattern, args.include, ctxBefore, ctxAfter, maxResults);
-  });
+  }
 }
 
 /**

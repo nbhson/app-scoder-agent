@@ -55,7 +55,7 @@ export async function toolApplyPatch(
   if (gate) return gate;
 
   writeFileSync(abs, content, "utf8");
-  const fmtNote = formatFile(ctx, abs);
+  const fmtNote = await formatFile(ctx, abs);
   const fuzzyNote = fuzzy > 0 ? ` (${fuzzy} fuzzy whitespace match${fuzzy === 1 ? "" : "es"})` : "";
   return {
     ok: true,
