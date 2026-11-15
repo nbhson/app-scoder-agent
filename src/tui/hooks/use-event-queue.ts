@@ -52,6 +52,9 @@ export function useEventQueue(
       if (!runningRef.current) return;
       update((s) => ({ ...s }));
     }, 1000);
+    // P-perf: don't hold the event loop open — during TUI teardown/exits that
+    // race a live run, this 1s timer was the last handle keeping node alive.
+    id.unref?.();
     return () => clearInterval(id);
   }, [update]);
 

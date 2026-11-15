@@ -6,7 +6,7 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import type { Agent } from "../agent.js";
-import { applySuggestion, atQuery, fileIndex, suggest } from "./at-complete.js";
+import { applySuggestion, atQuery, fileIndexStale, suggest } from "./at-complete.js";
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg } from "../commands/definitions.js";
 import { applyNormalKey, type VimMode } from "./vim.js"; // T5
 import { theme } from "./theme.js";
@@ -63,7 +63,9 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
         }
         return;
       }
-      const suggestions = suggest(fileIndex(workdir), at.query);
+      // P-perf: stale-while-revalidate — không spawnSync `rg` giữa keystroke
+      // (xem file-index.ts); overlay cập nhật ở lần gõ kế sau khi rebuild xong.
+      const suggestions = suggest(fileIndexStale(workdir), at.query);
       const prev = atStateRef.current;
       // Keep selection when the query narrows (still points at same entry).
       const idx = prev && prev.at.start === at.start && suggestions[prev.idx] === prev.suggestions[prev.idx] ? prev.idx : 0;

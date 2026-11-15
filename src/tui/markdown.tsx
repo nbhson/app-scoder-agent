@@ -55,7 +55,7 @@ function contentWidth(width?: number): number {
 const PARSE_CACHE_MAX = 50;
 const parseCache = new Map<string, Block[]>();
 
-function parseCached(text: string): Block[] {
+export function parseCached(text: string): Block[] {
   const hit = parseCache.get(text);
   if (hit) {
     // Refresh recency (LRU).

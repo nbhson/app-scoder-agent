@@ -15,8 +15,10 @@ describe("estimateItemRows (T4)", () => {
     assert.equal(estimateItemRows(u("x".repeat(161))), 5); // 2 + ceil(161/60)=3
   });
 
-  it("tool: 3 (title + 2 preview)", () => {
-    assert.equal(estimateItemRows(tool()), 3);
+  it("tool: 1 title + min(5, preview lines) — khớp render thật", () => {
+    assert.equal(estimateItemRows(tool()), 2); // running, output "" → title + 1 placeholder
+    assert.equal(estimateItemRows({ ...tool(), output: "a\nb\nc\nd\ne\nf\ng" }), 6); // cap 5 preview
+    assert.equal(estimateItemRows({ ...tool(), output: "one" }), 2);
   });
 
   it("diff: 3 + min(24, lines)", () => {

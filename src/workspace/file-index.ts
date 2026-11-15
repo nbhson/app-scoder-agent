@@ -3,12 +3,14 @@
  * Sources: file index (.gitignore-aware via `rg --files`, fallback walk) +
  * directory prefixes so `@src/` opens the subtree. Engine: fuzzysort (MIT).
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import fuzzysort from "fuzzysort";
 
 const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
+
+const TTL_MS = 5_000;
 
 const cache = new Map<string, { files: string[]; built: number }>();
 
@@ -20,16 +22,12 @@ const cache = new Map<string, { files: string[]; built: number }>();
  */
 export function fileIndex(workdir: string, force = false): string[] {
   const hit = cache.get(workdir);
-  if (!force && hit && Date.now() - hit.built < 5_000) return hit.files;
+  if (!force && hit && Date.now() - hit.built < TTL_MS) return hit.files;
   const files: string[] = [];
   // Fast path: ripgrep --files (gitignore-aware). Bare-name globs match at any
   // depth; `!**/x/**` does NOT match absolute paths (I-07 lesson).
   try {
-    const r = spawnSync(
-      "rg",
-      ["--files", "--hidden", "-g", "!.git", "-g", "!node_modules", "-g", "!dist", "-g", "!build", "-g", "!.venv", "-g", "!__pycache__", "-g", "!.next", "--no-messages", workdir],
-      { maxBuffer: 16e6, timeout: 3_000 },
-    );
+    const r = spawnSync("rg", RG_FILES_ARGS(workdir), { maxBuffer: 16e6, timeout: 3_000 });
     if (r.status === 0) {
       for (const line of r.stdout.toString().split("\n")) {
         if (line) files.push(relative(workdir, line) || line);
@@ -42,6 +40,63 @@ export function fileIndex(workdir: string, force = false): string[] {
   files.sort();
   cache.set(workdir, { files, built: Date.now() });
   return files;
+}
+
+function RG_FILES_ARGS(workdir: string): string[] {
+  return ["--files", "--hidden", "-g", "!.git", "-g", "!node_modules", "-g", "!dist", "-g", "!build", "-g", "!.venv", "-g", "!__pycache__", "-g", "!.next", "--no-messages", workdir];
+}
+
+/**
+ * P-perf: stale-while-revalidate variant for the KEYSTROKE path (`@` overlay
+ * in the TUI). The sync `fileIndex` above runs `spawnSync rg` inline when the
+ * 5s TTL lapses — a 50–500 ms freeze exactly when the user types. This returns
+ * the cached (possibly stale) index immediately and refreshes in the
+ * background; the next keystroke sees the fresh list. Cold cache (nothing ever
+ * built) still builds synchronously once — the TUI warms it at mount anyway.
+ */
+const revalidating = new Set<string>();
+
+export function fileIndexStale(workdir: string): string[] {
+  const hit = cache.get(workdir);
+  if (!hit) return fileIndex(workdir);
+  if (Date.now() - hit.built >= TTL_MS && !revalidating.has(workdir)) {
+    revalidating.add(workdir);
+    rgFilesAsync(workdir)
+      .then((files) => {
+        if (files && files.length > 0) {
+          files.sort();
+          cache.set(workdir, { files, built: Date.now() });
+        } else {
+          hit.built = Date.now(); // rg failed/empty — wait a TTL before retrying
+        }
+      })
+      .finally(() => revalidating.delete(workdir));
+  }
+  return hit.files;
+}
+
+function rgFilesAsync(workdir: string): Promise<string[] | null> {
+  return new Promise((res) => {
+    const child = spawn("rg", RG_FILES_ARGS(workdir));
+    let out = "";
+    let failed = false;
+    child.stdout.on("data", (c: Buffer) => {
+      if (out.length < 16e6) out += c.toString("utf8");
+    });
+    child.stderr.resume();
+    child.on("error", () => {
+      failed = true;
+      res(null); // no rg on PATH
+    });
+    child.on("close", (code) => {
+      if (failed || code !== 0) return res(null);
+      const files: string[] = [];
+      for (const line of out.split("\n")) {
+        if (line) files.push(relative(workdir, line) || line);
+      }
+      res(files);
+    });
+  });
 }
 
 /** Cache invalidate — call after write/edit tool_result (scope: whole index). */
@@ -72,24 +127,46 @@ export function atQuery(value: string): { start: number; query: string } | null 
   return { start: m.index + m[1].length, query: m[2] };
 }
 
-/** Candidate suggestions for a query: fuzzy files + dir prefixes, max 8. */
-export function suggest(files: string[], query: string, limit = 8): string[] {
+/**
+ * P-perf: candidate list + fuzzysort-prepared targets memoized by the index
+ * array IDENTITY (the module cache hands back the same string[] until a
+ * rebuild replaces it). The old code rebuilt the dirs Set and re-prepared
+ * every target on EVERY keystroke — O(files × depth) + full fuzzysort.prepare
+ * inside a useInput handler.
+ */
+interface PreparedIndex {
+  candidates: string[];
+  prepared: Fuzzysort.Prepared[];
+}
+const preparedMemo = new WeakMap<string[], PreparedIndex>();
+
+function preparedIndex(files: string[]): PreparedIndex {
+  const hit = preparedMemo.get(files);
+  if (hit) return hit;
   const dirs = new Set<string>();
   for (const f of files) {
     const parts = f.split("/");
     for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
   }
-  const all = [...files, ...[...dirs].map((d) => `${d}/`)];
-  let hits: string[];
+  const candidates = [...files, ...[...dirs].map((d) => `${d}/`)];
+  const value: PreparedIndex = { candidates, prepared: candidates.map((c) => fuzzysort.prepare(c)) };
+  try {
+    preparedMemo.set(files, value);
+  } catch {
+    /* frozen array — không memo được, tính lại mỗi lần (đúng như trước) */
+  }
+  return value;
+}
+
+/** Candidate suggestions for a query: fuzzy files + dir prefixes, max 8. */
+export function suggest(files: string[], query: string, limit = 8): string[] {
+  const { candidates, prepared } = preparedIndex(files);
   if (query.includes("/") || query.endsWith("/")) {
     // Subtree mode: prefix match on directories (`@src/tui/…`).
-    hits = all.filter((t) => t.startsWith(query));
-  } else if (query === "") {
-    hits = all.slice(0, limit * 4);
-  } else {
-    hits = fuzzysort.go(query, all, { limit: limit * 4 }).map((r) => r.target);
+    return candidates.filter((t) => t.startsWith(query)).slice(0, limit);
   }
-  return hits.slice(0, limit);
+  if (query === "") return candidates.slice(0, limit);
+  return fuzzysort.go(query, prepared, { limit }).map((r) => r.target);
 }
 
 /** Replace the active @token with `sel` (dirs keep the trailing slash). */

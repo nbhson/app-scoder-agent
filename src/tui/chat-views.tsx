@@ -7,7 +7,7 @@ import React, { memo, useEffect, useMemo, useState } from "react";
 import { Box, Text } from "ink";
 import type { ChatItem } from "./state.js";
 import { Markdown } from "./markdown.js";
-import { detectImageCaps, halfblockRows } from "./image.js"; // T7
+import { detectImageCaps, halfblockRowsFromDataUrl } from "./image.js"; // T7
 import { AgentMark, fit, theme, toolIcon } from "./theme.js";
 import { clipCells } from "./text-width.js";
 import { boxBorderStyle, charset } from "./charset.js";
@@ -38,17 +38,6 @@ export function Spinner({ active }: { active: boolean }): React.JSX.Element | nu
 
 const OUTPUT_PREVIEW_LINES = 5;
 
-/** T7: decode data URL → halfblock rows (null khi không PNG/không decode được). */
-function halfblockFromDataUrl(dataUrl: string): Array<{ text: string }> | null {
-  const m = /^data:image\/(\w+);base64,(.+)$/.exec(dataUrl);
-  if (!m) return null;
-  try {
-    return halfblockRows(Buffer.from(m[2], "base64"));
-  } catch {
-    return null;
-  }
-}
-
 /** Collapse run_command scaffolding ("--- stdout ---" etc.) to real content. */
 function previewLines(output: string): string[] {
   const lines = output
@@ -75,9 +64,11 @@ function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" 
   const preview = previewLines(item.output);
 
   // T7: image result — halfblock preview khi terminal truecolor, fallback link.
+  // P-perf: decode qua module-level LRU (halfblockRowsFromDataUrl) — survives
+  // virtualization remounts, mỗi ảnh chỉ decode một lần mỗi phiên.
   const caps = useMemo(() => detectImageCaps(), []);
   const halfblocks = useMemo(
-    () => (item.image && caps.truecolor ? halfblockFromDataUrl(item.image) : null),
+    () => (item.image && caps.truecolor ? halfblockRowsFromDataUrl(item.image) : null),
     [item.image, caps.truecolor],
   );
 

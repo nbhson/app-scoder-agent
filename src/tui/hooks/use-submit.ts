@@ -34,16 +34,17 @@ export function useSubmit(deps: {
   const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame } = deps;
   // Close any lingering streaming messages when the user sends a new query —
   // prevents green/dim text from the previous response appearing stale.
+  // P-perf: immutable rewrite. Mutating `it.streaming = false` in place left
+  // the SAME object references in `items`, so memoized row components (and the
+  // virtualization window) saw no prop change and could keep painting the old
+  // streaming style until the next unrelated re-render.
   const closeStreamingItems = useCallback(() => {
     update((s) => {
-      let changed = false;
-      for (const it of s.items) {
-        if (it.kind === "assistant" && it.streaming) {
-          it.streaming = false;
-          changed = true;
-        }
-      }
-      return changed ? { ...s, items: [...s.items] } : s;
+      if (!s.items.some((it) => it.kind === "assistant" && it.streaming)) return s;
+      return {
+        ...s,
+        items: s.items.map((it) => (it.kind === "assistant" && it.streaming ? { ...it, streaming: false } : it)),
+      };
     });
   }, [update]);
 

@@ -3,7 +3,7 @@
  * Extracted verbatim from state.ts — no behavior change.
  */
 import type { ChatItem } from "./state.js";
-import { parseMarkdown } from "./markdown/parse.js";
+import { parseCached } from "./markdown.js";
 import { MAX_GRAPH_ROWS, renderFlowchart } from "./markdown/graph.js";
 import { measure } from "./text-width.js";
 
@@ -23,7 +23,7 @@ function wrapEstimate(text: string, width: number): number {
 export function estimateMarkdownRows(text: string, width = EST_WIDTH): number {
   if (!text) return 1;
   let rows = 0;
-  for (const block of parseMarkdown(text)) {
+  for (const block of parseCached(text)) {
     switch (block.kind) {
       case "paragraph":
         rows += wrapEstimate(block.text, width);
@@ -96,7 +96,10 @@ export function estimateItemRows(item: ChatItem): number {
       // Render: collapse to last 4 lines.
       return 1 + Math.min(4, item.text ? item.text.split("\n").length : 0);
     case "tool":
-      return 1 + 2; // title + preview 2 lines
+      // Render: 1 title + ≤5 preview lines (OUTPUT_PREVIEW_LINES ở chat-views,
+      // clipCells nên mỗi preview đúng 1 row). Estimate cũ `1 + 2`
+      // under-estimate 3 dòng/tool ⇒ virtualization window hẹp hơn thực tế.
+      return 1 + (item.output ? Math.min(5, item.output.split("\n").length) : 1);
     case "compaction":
       return 2; // marginTop + divider
     case "diff":
