@@ -65,9 +65,9 @@ function makeSkills(workdir, count) {
 }
 
 async function main() {
-  const { buildRepoMap, repoMapKey, renderRepoMap, invalidateRepoMap } = await import(join(DIST, "repo-map.js"));
-  const { buildEnvInfo } = await import(join(DIST, "prompt-builder.js"));
-  const { discoverSkills, findSkill } = await import(join(DIST, "skills.js"));
+  const { buildRepoMap, repoMapKey, renderRepoMap, invalidateRepoMap } = await import(join(DIST, "context/repo-map.js"));
+  const { buildEnvInfo } = await import(join(DIST, "context/prompt-builder.js"));
+  const { discoverSkills, findSkill } = await import(join(DIST, "context/skills.js"));
 
   const repo = makeRepo(2000); // walk cap is 2000 — the realistic upper bound per map
   makeSkills(repo, 100);
