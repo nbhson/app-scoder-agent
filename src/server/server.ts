@@ -53,6 +53,14 @@ interface RunRecord {
   createdAt: string;
   finishedAt: string | null;
   events: AgentEvent[];
+  /**
+   * P-perf (leak): ring buffer — sau MAX_EVENTS_PER_RUN, event cũ nhất bị
+   * bỏ khỏi bộ nhớ (agent dài ngày với tool_output dày đặc từng giữ chuỗi
+   * delta vô hạn). `dropped` = số event đã bỏ ở HEAD; mọi chỉ số trong
+   * đường SSE dùng seq TUYỆT ĐỐI (dropped + index) nên client đang kết nối
+   * không lệch vị trí.
+   */
+  dropped: number;
   subscribers: Set<() => void>;
   agent: Agent | null;
   abortRequested: boolean;
@@ -61,6 +69,18 @@ interface RunRecord {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
+/** P-perf: trần event giữ trong bộ nhớ mỗi run (replay cho client reconnect). */
+export const MAX_EVENTS_PER_RUN = 5_000;
+/** P-perf: số run hoàn tất giữ lại cho GET /api/runs (LRO theo insertion). */
+export const MAX_RETAINED_RUNS = 200;
+
+function pushEvent(record: RunRecord, ev: AgentEvent): void {
+  record.events.push(ev);
+  if (record.events.length > MAX_EVENTS_PER_RUN) {
+    record.events.shift();
+    record.dropped++;
+  }
+}
 
 function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -113,7 +133,7 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
     status: r.status,
     createdAt: r.createdAt,
     finishedAt: r.finishedAt,
-    eventCount: r.events.length,
+    eventCount: r.dropped + r.events.length,
     result: r.result,
     error: r.error,
     eventsUrl: `/api/runs/${r.id}/events`,
@@ -127,7 +147,7 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
     const agent = new Agent(cfg);
     record.agent = agent;
     agent.onEvent = (ev: AgentEvent) => {
-      record.events.push(ev);
+      pushEvent(record, ev);
       if (ev.type === "finish") {
         record.status = ev.success ? "success" : record.abortRequested ? "aborted" : "failed";
         record.finishedAt = new Date().toISOString();
@@ -147,8 +167,8 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
       .catch((err: unknown) => {
         record.error = (err as Error).message;
         // Synthetic terminal events so SSE clients always see a stream end.
-        record.events.push({ type: "error", message: record.error });
-        record.events.push({ type: "finish", success: false, steps: 0, summary: `run failed: ${record.error}` });
+        pushEvent(record, { type: "error", message: record.error });
+        pushEvent(record, { type: "finish", success: false, steps: 0, summary: `run failed: ${record.error}` });
         record.status = "error";
         record.finishedAt = new Date().toISOString();
         for (const sub of record.subscribers) sub();
@@ -164,7 +184,9 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    let sent = 0;
+    // Absolute sequence cursor: record.events[seq - record.dropped].
+    // Starts at `dropped` → a late-joining client gets the retained tail.
+    let sent = record.dropped;
     const heartbeat = setInterval(() => {
       if (!res.writableEnded) res.write(": ping\n\n");
     }, 15_000);
@@ -172,12 +194,21 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
 
     /** Replay buffered events + live ones; ends the stream on a terminal event. */
     const flush = (): void => {
-      while (sent < record.events.length) {
-        const ev = record.events[sent++];
-        res.write(`data: ${JSON.stringify(ev)}\n\n`);
-        if (ev.type === "finish" || ev.type === "error") {
+      while (sent < record.dropped + record.events.length) {
+        const ev = record.events[sent - record.dropped];
+        sent++;
+        const terminal = ev.type === "finish" || ev.type === "error";
+        // P-perf: honor backpressure — a slow/stalled consumer used to grow
+        // the socket queue unboundedly (every event written regardless).
+        // res.once("drain") resumes the pump; terminal events still close.
+        const ok = res.write(`data: ${JSON.stringify(ev)}\n\n`);
+        if (terminal) {
           res.end();
           record.subscribers.delete(flush);
+          return;
+        }
+        if (!ok && !res.writableEnded) {
+          res.once("drain", flush);
           return;
         }
       }
@@ -187,6 +218,7 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
     flush(); // replays the buffer, then stays live via the subscription
     req.on("close", () => {
       record.subscribers.delete(flush);
+      res.removeListener("drain", flush);
       clearInterval(heartbeat);
     });
   };
@@ -256,6 +288,7 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
           createdAt: new Date().toISOString(),
           finishedAt: null,
           events: [],
+          dropped: 0,
           subscribers: new Set(),
           agent: null,
           abortRequested: false,
@@ -263,6 +296,18 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
           error: null,
         };
         runs.set(record.id, record);
+        // P-perf (leak): Map giữ theo thứ tự khởi tạo — bỏ run cũ NHẤT đã
+        // kết nối khi vượt trần; run đang chạy không bao giờ bị xoá.
+        while (runs.size > MAX_RETAINED_RUNS) {
+          let victim: string | null = null;
+          for (const [id, r] of runs) {
+            if (r.status === "running") continue;
+            victim = id;
+            break;
+          }
+          if (victim === null) break; // mọi run đều đang chạy — không xoá gì
+          runs.delete(victim);
+        }
         launchRun(record, cfg, body.task);
         sendJson(res, 202, publicRun(record));
         return;
