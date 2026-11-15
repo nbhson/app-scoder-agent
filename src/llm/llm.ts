@@ -21,8 +21,17 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
   [/\b(api[_-]?key|token|secret|password)["'\s:=]+[^\s"'&]{8,}/gi, "$1=***REDACTED***"],
 ];
 
+/** Literals that every redaction pattern requires, case-insensitively. A text
+ *  containing NONE of them cannot match any pattern ⇒ the 9 regex passes are
+ *  skipped entirely (P-perf: a 500 KB build log was fully scanned 9× per pass
+ *  on the streaming path). If any literal IS present, the original loop runs
+ *  UNCHANGED → byte-identical output. */
+const REDACT_GATE = ["bearer", "sk-", "ghp_", "github_pat_", "xox", "akia", "private key", "api", "token", "secret", "password"];
+
 /** Redact known secret shapes from arbitrary tool/LLM/log output. */
 export function redactSecrets(text: string): string {
+  const probe = text.toLowerCase();
+  if (!REDACT_GATE.some((lit) => probe.includes(lit))) return text;
   let out = text;
   for (const [rx, replacement] of REDACTION_PATTERNS) {
     out = out.replace(rx, replacement);
@@ -404,19 +413,31 @@ export class LlmClient {
     // through the same signal — stopTimer keeps the external listener alive.
     stopTimer();
     const idleTimeoutMs = opts.idleTimeoutMs ?? this.timeoutMs;
+    // P-perf: MỘT watchdog interval + timestamp thay vì AbortController +
+    // setTimeout + Promise.race + listener per chunk — stream 50 chunk/s từng
+    // tạo ~200 object tạm/giây trên hot path. Độ trễ phát hiện idle hơn tối
+    // đa 1s (trần timeout vốn ≥30s) — đổi lại loop đọc không còn timer churn.
+    const idleAc = new AbortController();
+    let lastActivity = Date.now();
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastActivity >= idleTimeoutMs) {
+        idleAc.abort(new DOMException(`stream idle for ${idleTimeoutMs / 1000}s`, "TimeoutError"));
+      }
+    }, 1_000);
+    watchdog.unref?.();
     const readWithIdleTimeout = async (): Promise<{ done: boolean; value?: Uint8Array }> => {
-      const ac = new AbortController();
-      const t = setTimeout(
-        () => ac.abort(new DOMException(`stream idle for ${idleTimeoutMs / 1000}s`, "TimeoutError")),
-        idleTimeoutMs,
-      );
+      if (idleAc.signal.aborted) throw idleAc.signal.reason;
+      let onAbort: () => void = () => {};
+      const abortP = new Promise<never>((_, rej) => {
+        onAbort = () => rej(idleAc.signal.reason);
+        idleAc.signal.addEventListener("abort", onAbort, { once: true });
+      });
       try {
-        return await Promise.race([
-          reader.read(),
-          new Promise<never>((_, rej) => ac.signal.addEventListener("abort", () => rej(ac.signal.reason), { once: true })),
-        ]) as { done: boolean; value?: Uint8Array };
+        return await Promise.race([reader.read(), abortP]);
       } finally {
-        clearTimeout(t);
+        // Shared signal: remove this read's listener, otherwise one per chunk
+        // would accumulate for the whole stream (MaxListenersExceeded + leak).
+        idleAc.signal.removeEventListener("abort", onAbort);
       }
     };
 
@@ -448,6 +469,7 @@ export class LlmClient {
         pending.catch(() => {});
         const { done, value } = await pending;
         if (done) break;
+        lastActivity = Date.now(); // watchdog: chunk tới là connection còn sống
 
         buffer += decoder.decode(value, { stream: true });
 
@@ -562,6 +584,7 @@ export class LlmClient {
       }
       throw err;
     } finally {
+      clearInterval(watchdog); // P-perf: shared idle watchdog off
       // H-09: record complete tool calls accumulated so far, for continuation.
       this.lastPartialToolCalls = accumulatedToolCalls
         .filter((tc) => tc.name)

@@ -37,6 +37,32 @@ interface AnthropicResponse {
 // Translation: OpenAI-style -> Anthropic
 // ---------------------------------------------------------------------------
 
+// P-perf: `toAnthropicMessages` chạy TOÀN bộ history mỗi request — mỗi lần
+// lại JSON.parse mọi tool_call arguments (write_file chứa cả file vài trăm KB).
+// History append-only (P0-1) ⇒ memo WeakMap theo object tool_call là hợp lệ;
+// validate bằng reference chuỗi arguments. `block.input` chỉ đi qua
+// JSON.stringify phía serialize (và phía parse ở fromAnthropicResponse),
+// không ai mutate ⇒ chia sẻ object an toàn.
+const parsedArgsMemo = new WeakMap<object, { raw: string; value: Record<string, unknown> }>();
+
+function parseToolArgs(tc: { arguments?: string }): Record<string, unknown> {
+  const raw = tc.arguments ?? "";
+  const hit = parsedArgsMemo.get(tc);
+  if (hit && hit.raw === raw) return hit.value;
+  let value: Record<string, unknown>;
+  try {
+    value = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    value = {};
+  }
+  try {
+    parsedArgsMemo.set(tc, { raw, value });
+  } catch {
+    /* frozen tool_call object — parse lại mỗi lần như trước */
+  }
+  return value;
+}
+
 export function toAnthropicMessages(messages: ChatMessage[]): {
   system: string | undefined;
   messages: AnthropicMessage[];
@@ -71,12 +97,7 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
       const blocks: AnthropicContentBlock[] = [];
       if (m.content) blocks.push({ type: "text", text: m.content });
       for (const tc of m.tool_calls ?? []) {
-        let input: Record<string, unknown>;
-        try {
-          input = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
-        } catch {
-          input = {};
-        }
+        const input = parseToolArgs(tc);
         blocks.push({ type: "tool_use", id: tc.id || `call_${tc.name}`, name: tc.name, input });
       }
       out.push({
