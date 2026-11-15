@@ -174,10 +174,47 @@ the client side: with two 8.5k/11.3k-token prompts interleaved, unpinned gave
 is no API to clear a slot cache (`POST /slots {"action":"clear"}` 404s), so to
 reproduce a cold run, restart the server.
 
+## Per-step CPU (measured, this pass)
+
+Batch of memoizations and event-loop unblocking. All follow the §Policy gates:
+typecheck, 1000 tests, lint, and golden comparisons where output identity is
+claimed. Rollback for every row = revert the named file.
+
+| Change | Measured | Gate |
+|---|---|---|
+| `estimateTokens` memo (array-level + per-message WeakMap, `src/context/compaction.ts`) — the 3–4 calls/step re-encoded the whole history each time | 810 KB history: 58 ms first / 23 ms repeat → 50 ms first / **0 ms steady** (one re-encode per structural change, ~21 ms) | golden: 140+ cases vs old impl incl. append/trim/replace/single-array paths |
+| `messageHashes`/`historyTokens` per-message memos (`prompt-metrics.ts`, `context.ts`) | 40×80k chars: 2 ms → 0 ms on repeat | same hash function, WeakMap with field-reference validation |
+| `models-cache.json` (1.9 MB) read+parse was per `lookupModel` call — sits on the TUI render path (~20×/s while streaming) and every step (`compactionSettings`); now mtime-gated memo + `fallbackCatalog` reuse (`model-catalog.ts`) | ×10 calls: ~80 ms → 7 ms | writeCache drops the memo; malformed-file handling unchanged |
+| `getVersion` memo (`version.ts`), `Intl.Segmenter` module singleton (`text-width.ts`) | per-call fs/parse and Segmenter construction removed from render hot path | pure memoization |
+| rc-file text memo keyed (mtime,size), parse per call (`config.ts`) | `loadRcFile` (every `run_command` env build) re-reads nothing when unchanged | returned objects stay unshared |
+| `classifyShell`: compiled-wildcard cache, scanner module memo + command→scan LRU, `activeRules()` memo by source-array reference (`permissions.ts`) | ×200 classify: 11 ms (was: RegExp compile + tree-sitter parse per rule evaluation, 2× per `run_command`) | rules evaluated fresh; memo validates array identity |
+| LCS diff: peel the **common prefix** before the O(n·m) DP (`workspace/diff.ts`) | 1500-line mid-file edit: 13 → 4 ms; tail edit: ~0 ms | golden: 3.500 fuzz cases, ops sequence byte-identical. **Suffix peel tried and reverted** — old walk matches equal trailing lines at their earliest optimal position (fuzz caught it) |
+| Session snapshot save: compact `JSON.stringify` (drop `null, 2`) (`session/session.ts`) | 127 KB history: 1 → ~0 ms and ~1.3 % fewer bytes per save | pretty-vs-compact timing measured first: throttling NOT worth changing crash-recovery semantics |
+| `snapshot.capture()` sync→async spawn (`workspace/snapshot.ts`, awaited in `run-loop.ts` before the write batch) | `git add -A` (100 ms–1 s+) no longer freezes the event loop during TUI paint / SSE / stream parsing | checkpoint still predates the batch; `init/diff/restore/list` stay sync |
+| `formatFile` (prettier/biome/eslint) sync→async spawn (`tools/file-edit-common.ts`) | formatter (0,5–3 s) no longer blocks the process; notice strings byte-identical (`spawn…` normalized to the `spawnSync…` wording, ETIMEDOUT preserved) | all 3 callers already async, executor awaits |
+| `@`-complete: stale-while-revalidate file index (`fileIndexStale`) + prepared fuzzysort targets memoized by index identity (`workspace/file-index.ts`) | up to ~500 ms `spawnSync rg` removed from the keystroke path; per-keystroke dirs-set + re-prepare → O(1) | suggestion output identical (fuzzysort prepared targets use the same `prepare()` as `go`); cold cache still builds once; fingerprint keeps the sync forced path |
+| Agent start: context-window probe ∥ MCP connect in `run()`/`runTurn()`/`resume()` (`agent.ts`, `connectMcp({rebuildTools:false})`); probe engines ollama/llamacpp/vllm run concurrently (`context-probe.ts`) | removed one serial network leg from every start; worst-case probe 3×1.5 s → 1.5 s | ordering kept: `rebuildToolList` (window-aware schema cap) runs AFTER the probe sets `config.contextWindow` — same precedence ollama > llama.cpp > vllm |
+| CLI cold start: `Agent`/`run-once`/`repl` dynamic imports (`cli/main.ts`) — `agent.js` transitively loads `gpt-tokenizer` (~60–70 ms) | `--help` ~110 ms → ~25 ms | `--help`/list/logs/cost/init/models paths never touch the agent |
+| TUI: `closeStreamingItems` immutable rewrite (was in-place mutation — memoized rows could keep stale streaming style); `estimateItemRows` tool case `1+2` → `1+min(5, lines)` matching the real render; `selectors` reuse the markdown parse LRU; 1 s tick `unref()`; PNG halfblock module-level LRU + 16 MP decode cap (`media/image.ts`) | parse/decode once per distinct text/image even across virtualization remounts | test `tui-virtual.test.mjs` updated with the new tool-case semantics |
+| `scoder serve`: per-run event ring buffer (5.000, absolute-seq subscribers), completed-run cap (200), SSE backpressure via `drain` (`server/server.ts`) | bounded memory for long runs / stalled consumers (was unbounded) | under the caps byte-identical; reconnecting clients get the retained tail |
+| MCP transports: offset-based line scan (was per-line head re-slice → quadratic on bursts) (`transport-stdio/http`) | burst parsing O(total) | framing output identical |
+| `grep_files` tool: `spawnSync rg`/`grep` → async spawn helper (`tools/search.ts`, `runCapture`) | 0,3–3 s searches no longer freeze TUI paint/SSE (verified: event loop ticks 1/ms during the run); registry awaited `run` already supported promises | failure surface emulated exactly: spawn error / >10 MB stdout ⇒ `{status:null}` → same rg→grep→JS fallback chain; 12/12 search tests pass |
+| Anthropic: tool-call args `JSON.parse` memoized per tool_call object (`provider-anthropic.ts`) | O(history) parses per request → O(new messages) | history messages are append-only; `block.input` is only ever stringified |
+| `redactSecrets` literal gate (`llm/llm.ts`): skip the 9 regex passes when the text contains none of the 11 literals every pattern requires | 468 KB clean build log: 9 full scans → one `toLowerCase`+`includes` pass (2 ms) | golden: 5.015 cases (hand-built + fuzz) byte-identical; on gate-hit the original loop runs unchanged |
+| `chatWithStream` idle watchdog: per-chunk AbortController+setTimeout+listener → one 1 s interval + timestamp + per-read listener cleanup (`llm/llm.ts`) | ~200 temp objects/s at 50 chunks/s removed from the hot path | idle detection ≤1 s coarser (timeout floors are ≥30 s); `TimeoutError` normalization unchanged |
+| `currentTask` append cap 8k keeping the tail (`agent.ts`) | REPL sessions no longer grow the verification prompt + session save without bound | normal sessions never hit 8k |
+
+**Invariant checked before memoizing message-derived values**: no code path
+mutates an existing history message in place — the single `m.content =`
+(`agent.ts:873`, stream-recovery fallback) runs on `final.message` BEFORE it is
+pushed. `trimLastTurn`/trim/compaction replace arrays; appends change length
+(the memo validates length + first/last identity + last content).
+
 ## Non-goals
 
-- Micro-optimizing `estimateTokens`/`trimHistory` CPU time (already fast; the
-  fix above is about *what* they change, not how long they take).
+- ~~Micro-optimizing `estimateTokens`/`trimHistory` CPU time~~ — overtaken by
+  facts: at 0.8 MB+ histories `estimateTokens` cost 3–4 × 20–60 ms per step;
+  see “Per-step CPU” above (memoized, golden-verified).
 - Cross-process caches without a complete invalidation key.
 - Lazily discovering MCP tools at call time (would bypass the per-server
   permission/allowlist checks) — use `mcpTools` + `limits.mcpSchemaTokens`.
