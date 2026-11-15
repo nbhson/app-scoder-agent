@@ -49,15 +49,37 @@ const KEEP_RECENT_TOOL_RESULTS = 20;
 /** Placeholder do prune thay vào — test và UI nhận diện chuỗi này. */
 export const PRUNED_TOOL_RESULT = "[pruned — old tool result]";
 
-/** Token count for one message (tool_calls arguments included). Never throws. */
+/**
+ * Token count for one message (tool_calls arguments included). Never throws.
+ * P-perf: WeakMap memo keyed on the message object with content/tool_calls
+ * reference validation — history is append-only (P0-1) and messages are never
+ * mutated in place, so repeated `historyTokens` passes across steps are free
+ * after the first encode.
+ */
+const tokenMemo = new WeakMap<
+  object,
+  { content?: string | null; calls?: ChatMessage["tool_calls"]; nCalls: number; n: number }
+>();
+
 function messageTokens(m: ChatMessage): number {
+  const hit = tokenMemo.get(m);
+  if (hit && hit.content === m.content && hit.calls === m.tool_calls && hit.nCalls === (m.tool_calls?.length ?? 0)) {
+    return hit.n;
+  }
   let text = m.content ?? "";
   if (m.tool_calls) for (const tc of m.tool_calls) text += tc.name + tc.arguments;
+  let n: number;
   try {
-    return encode(text).length;
+    n = encode(text).length;
   } catch {
-    return Math.ceil(text.length / 4);
+    n = Math.ceil(text.length / 4);
   }
+  try {
+    tokenMemo.set(m, { content: m.content, calls: m.tool_calls, nCalls: m.tool_calls?.length ?? 0, n });
+  } catch {
+    /* non-extensible message — skip the cache */
+  }
+  return n;
 }
 
 const historyTokens = (msgs: ChatMessage[]) => msgs.reduce((n, m) => n + messageTokens(m), 0);

@@ -303,7 +303,12 @@ export class SessionStore {
         createdAt: createdAt ?? now,
         updatedAt: now,
       };
-      atomicWrite(this.filePath, JSON.stringify(full, null, 2));
+      // P-perf: compact JSON (no pretty-print). The snapshot is re-serialized
+      // every save tick over the WHOLE history; indent cost ~30% of stringify
+      // time and bytes. Readers (load/listSessions) are parse-based, humans
+      // inspect sessions via `scoder logs`/events.jsonl. Rollback: re-add
+      // `null, 2` here.
+      atomicWrite(this.filePath, JSON.stringify(full));
     } catch (err) {
       // Never crash the agent because of a logging/persistence failure
       console.error(`⚠  session save failed: ${(err as Error).message}`);

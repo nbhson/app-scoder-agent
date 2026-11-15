@@ -34,32 +34,101 @@ export const DEFAULT_COMPACTION: CompactionConfig = {
 /**
  * P1-1 (RC-4): tool schema KHÔNG nằm trong messages nhưng chiếm phần lớn
  * prompt thật. Session baseline: 25.799 input token cho một câu "chào", trong
- * đó ~20.300 token là schema (46 tool GitHub MCP + prompt-gate + built-ins).
+ * đó ~20.300 token là schema (46 tool MCP + prompt-gate + built-ins).
  * Counting only messages made compaction trigger ~20k token quá muộn.
+ *
+ * P-perf: cache keyed by the serialized schema TEXT instead of array identity.
+ * The old WeakMap missed whenever callers passed freshly-built arrays
+ * (`capMcpSchemaTokens`'s per-spec `[spec]` arrays, `allToolSpecs()` per task)
+ * — with a content key those become hits. Text building itself is cheap
+ * (string concat); `encode` is the expensive part that now runs once per
+ * distinct schema content.
  */
-const schemaTokenCache = new WeakMap<ToolSpec[], number>();
+const SCHEMA_CACHE_MAX = 64;
+const schemaTokenCache = new Map<string, number>();
 
-export function estimateSchemaTokens(tools: ToolSpec[] | readonly ToolSpec[] | undefined): number {
-  if (!tools || tools.length === 0) return 0;
-  const key = tools as ToolSpec[];
-  const hit = schemaTokenCache.get(key);
-  if (hit !== undefined) return hit;
+function schemaText(tools: readonly ToolSpec[]): string {
   let text = "";
   for (const t of tools) {
     text += t.function.name + "\n" + (t.function.description ?? "") + "\n" + JSON.stringify(t.function.parameters ?? {}) + "\n";
   }
+  return text;
+}
+
+export function estimateSchemaTokens(tools: ToolSpec[] | readonly ToolSpec[] | undefined): number {
+  if (!tools || tools.length === 0) return 0;
+  const key = schemaText(tools);
+  const hit = schemaTokenCache.get(key);
+  if (hit !== undefined) return hit;
   let n: number;
   try {
-    n = encode(text).length;
+    n = encode(key).length;
   } catch {
-    n = Math.ceil(text.length / 4);
+    n = Math.ceil(key.length / 4);
   }
-  try {
-    schemaTokenCache.set(key, n);
-  } catch {
-    /* readonly array from a frozen literal — cache bỏ qua */
+  schemaTokenCache.set(key, n);
+  if (schemaTokenCache.size > SCHEMA_CACHE_MAX) {
+    const oldest = schemaTokenCache.keys().next().value;
+    if (oldest !== undefined) schemaTokenCache.delete(oldest);
   }
   return n;
+}
+
+/**
+ * P-perf: `estimateTokens` used to re-`encode` the WHOLE history on every
+ * call — 3–4 calls per agent step (chatWithStream, emitContextEvent,
+ * shouldCompact, compaction before/after), ~60 ms each on a 0.8 MB history.
+ * History is append-only between structural changes (P0-1): appends mutate
+ * `runtime.messages` in place (length changes), while trim/compaction REPLACE
+ * the array. A memo keyed on (array identity + length + first/last message
+ * identity + last content) is therefore exact for this codebase's update
+ * patterns and turns the repeated per-step calls into O(1) sums.
+ * Single-element arrays (findCutIndex's per-message loop) route to a
+ * per-message memo — fresh `[m]` arrays would never hit the array memo.
+ */
+const joinMemo = new WeakMap<
+  ChatMessage[],
+  { len: number; first?: ChatMessage; last?: ChatMessage; lastContent?: string | null; value: number }
+>();
+const singleMemo = new WeakMap<
+  object,
+  { content?: string | null; calls?: ChatMessage["tool_calls"]; nCalls: number; value: number }
+>();
+
+function textsOf(messages: ChatMessage[]): string[] {
+  const texts: string[] = [];
+  for (const m of messages) {
+    if (m.content) texts.push(m.content);
+    if (m.tool_calls) {
+      for (const tc of m.tool_calls) texts.push(tc.name + tc.arguments);
+    }
+  }
+  return texts;
+}
+
+function joinEncodedLength(texts: string[]): number {
+  try {
+    return encode(texts.join("\n")).length + texts.length;
+  } catch {
+    // old fallback formula (char/4, no boundary bonus) — kept identical
+    let chars = 0;
+    for (const t of texts) chars += t.length;
+    return Math.ceil(chars / 4);
+  }
+}
+
+function singleMessageTokens(m: ChatMessage): number {
+  const hit = singleMemo.get(m);
+  if (hit && hit.content === m.content && hit.calls === m.tool_calls && hit.nCalls === (m.tool_calls?.length ?? 0)) {
+    return hit.value;
+  }
+  const value = joinEncodedLength(textsOf([m]));
+  try {
+    singleMemo.set(m, { content: m.content, calls: m.tool_calls, nCalls: m.tool_calls?.length ?? 0, value });
+  } catch {
+    /* non-extensible message — skip the cache */
+  }
+  return value;
 }
 
 /**
@@ -68,20 +137,25 @@ export function estimateSchemaTokens(tools: ToolSpec[] | readonly ToolSpec[] | u
  * `extraTokens` (P1-1): phần chi phí cố định ngoài messages — tool schemas.
  */
 export function estimateTokens(messages: ChatMessage[], extraTokens = 0): number {
-  let chars = 0;
-  const texts: string[] = [];
-  for (const m of messages) {
-    if (m.content) texts.push(m.content);
-    if (m.tool_calls) {
-      for (const tc of m.tool_calls) texts.push(tc.name + tc.arguments);
-    }
+  if (messages.length === 1) return singleMessageTokens(messages[0]) + extraTokens;
+  const last = messages[messages.length - 1];
+  const hit = joinMemo.get(messages);
+  if (
+    hit &&
+    hit.len === messages.length &&
+    hit.first === messages[0] &&
+    hit.last === last &&
+    hit.lastContent === last?.content
+  ) {
+    return hit.value + extraTokens;
   }
+  const value = joinEncodedLength(textsOf(messages));
   try {
-    return encode(texts.join("\n")).length + texts.length + extraTokens;
+    joinMemo.set(messages, { len: messages.length, first: messages[0], last, lastContent: last?.content, value });
   } catch {
-    for (const t of texts) chars += t.length;
-    return Math.ceil(chars / 4) + extraTokens;
+    /* frozen array — skip the cache */
   }
+  return value + extraTokens;
 }
 
 /** True when the history should be compacted now. */
