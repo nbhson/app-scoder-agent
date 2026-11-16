@@ -169,7 +169,7 @@ export function StatusBar({ state, scroll, selectMode = false }: { state: TuiSta
     ? "⊝ select · drag to highlight · ⌘C/ctrl+c copy · ctrl+o back"
     : scroll
       ? `scroll ${scroll} · esc→tail`
-      : `⏎ send · ctrl+s sessions · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
+      : `⏎ send · ⇧⏎ line · ⇧⇥ agent · ⇧P perm · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
 
   const leftBudget = Math.max(24, width - rightText.length - 3);
   let left = statusLabel;
@@ -198,8 +198,9 @@ export function StatusBar({ state, scroll, selectMode = false }: { state: TuiSta
         {state.status === "running" ? "  " : statusIcon ? `${statusIcon} ` : "   "}
         <Text color={statusColor} bold>{left}</Text>
       </Text>
-      {/* Right: hints */}
-      <Text dimColor>{fit(rightText, Math.floor(width * 0.5))}</Text>
+      {/* Right: hints — cap 0.62: dòng hint đầy đủ (⇧⏎/⇧⇥/⇧P, ~75 cell) vượt
+          nửa ngang; left (status+model) đã có leftBudget riêng co theo right. */}
+      <Text dimColor>{fit(rightText, Math.floor(width * 0.62))}</Text>
     </Box>
   );
 }

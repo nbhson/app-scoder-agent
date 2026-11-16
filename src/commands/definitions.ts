@@ -41,7 +41,7 @@ export interface CommandDef {
 /** Built-in commands — the single catalog both help and completion read. */
 export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/help", aliases: [], description: "show this command list (builtin + custom)", usage: "/help", visibility: "public", source: "builtin" },
-  { name: "/agent", aliases: [], description: "list selectable agents — /agent <name> to switch (idle only)", usage: "/agent [name]", visibility: "public", source: "builtin" },
+  { name: "/agent", aliases: [], description: "list selectable agents — /agent <name> to switch (idle only; ⇧⇥ cycles build/plan/review)", usage: "/agent [name]", visibility: "public", source: "builtin" },
   { name: "/init", aliases: [], description: "create an AGENTS.md template in this project", usage: "/init", visibility: "public", source: "builtin" },
   { name: "/theme", aliases: [], description: "switch palette: /theme <name> — /theme list (mission|paper|mono|light|high-contrast|solarized)", usage: "/theme [name|list]", visibility: "tui-only", source: "builtin" },
   { name: "/clear", aliases: [], description: "clear the conversation and reset agent context", usage: "/clear", visibility: "public", source: "builtin" },
@@ -50,8 +50,21 @@ export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/model", aliases: [], description: "show the active model & provider", usage: "/model [provider/model]", visibility: "public", source: "builtin" },
   { name: "/skill", aliases: [], description: "list skills, or load one into context: /skill <name>", usage: "/skill [name]", visibility: "public", source: "builtin" },
   { name: "/mcp", aliases: [], description: "MCP servers & tools: /mcp [server] [tool] [json|text]", usage: "/mcp [server [tool [json]]]", visibility: "public", source: "builtin" },
-  { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly>", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
+  { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly> (⇧P cycles)", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
 ];
+
+// ── TUI quick-switch — ⇧⇥ agent / ⇧P permission (use-keybinds.ts) ────────────
+
+/** Thứ tự cycle của ⇧⇥ — chỉ 3 agent builtin; agent custom chuyển qua /agent <name>. */
+export const AGENT_CYCLE = ["build", "plan", "review"] as const;
+/** Thứ tự cycle của ⇧P. */
+export const PERMISSION_CYCLE = ["auto", "ask", "readonly"] as const;
+
+/** Phần tử kế tiếp trong cycle; giá trị không thuộc cycle (vd agent custom) → phần tử đầu. */
+export function nextInCycle<T extends string>(cycle: readonly T[], current: string | undefined): T {
+  const i = current ? cycle.indexOf(current as T) : -1;
+  return cycle[(i + 1) % cycle.length];
+}
 
 /** Back-compat view used by completion + /help — derived from BUILTIN_COMMANDS. */
 export const SLASH_COMMANDS: Array<{ cmd: string; desc: string }> = BUILTIN_COMMANDS

@@ -82,7 +82,7 @@ export function useSubmit(deps: {
         if (slash.cmd === "/theme") {
           // T-09: palette hot-swap.
           if (!slash.arg) {
-            pushNotice(`themes: ${Object.keys(THEMES).join(", ")} — /theme <name>; project default qua .scoder/theme.json`);
+            pushNotice(`themes: ${Object.keys(THEMES).join(", ")} — /theme <name>; mặc định qua .scoderrc "theme" hoặc .scoder/theme.json`);
             return;
           }
           pushNotice(useNamedTheme(slash.arg.trim()), "info");

@@ -120,6 +120,11 @@ export interface AgentConfig {
   compaction?: { trigger?: number; keep?: number; buffer?: number; contextWindow?: number } | false;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost` estimation */
   modelPricing?: Record<string, import("../shared/constants.js").ModelPricing>;
+  /**
+   * TUI palette name (mission | paper | mono | light | high-contrast |
+   * solarized). Priority: --theme flag > SCODER_THEME env > rc "theme".
+   */
+  theme?: string;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -190,6 +195,8 @@ interface RcFile {
   snapshots?: boolean;
   /** I-05: reasoning/thinking — "off" (default) | "on". */
   reasoning?: "off" | "on";
+  /** TUI palette name — mission | paper | mono | light | high-contrast | solarized. */
+  theme?: string;
 }
 
 /**
@@ -569,6 +576,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     verifyCache: rc.verifyCache,
     localProfile: rc.localProfile,
     modelPricing: parsePricing(rc.modelPricing),
+    theme: overrides.theme ?? process.env.SCODER_THEME ?? rc.theme,
   };
 
   // P2: local engine → mặc định rẻ hơn (maxSteps, timeout, output cap, MCP

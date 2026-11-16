@@ -1,10 +1,11 @@
 /**
  * TUI design system — theme engine (T-09).
  *
- * Three built-in palettes (mission / paper / mono) + user override via
- * .scoder/theme.json in the project. Ink color names only (16-color safe).
- * getTheme(workdir) resolves once per TUI mount — no hot reload (ponytail:
- * add FS-watch when a use-case appears).
+ * Six built-in palettes + config-file support. Resolution order:
+ * .scoder/theme.json (project, also inline color overrides) > SCODER_THEME env >
+ * config "theme" (rc / --theme) > terminal-capability autodetect. Ink color
+ * names only (16-color safe). getTheme(workdir, cfg.theme) resolves once per
+ * TUI mount — no hot reload (ponytail: add FS-watch when a use-case appears).
  */
 import React from "react";
 import { Text } from "ink";
@@ -74,24 +75,29 @@ function noColorSet(v: string | undefined): boolean {
   return v !== undefined && v !== "" && v !== "0";
 }
 
-export function defaultThemeName(env: NodeJS.ProcessEnv = process.env): string {
+/**
+ * Palette mặc định khi project không có .scoder/theme.json:
+ * env SCODER_THEME > config "theme" (rc/flag, truyền qua cfg.theme) > autodetect caps.
+ */
+export function defaultThemeName(env: NodeJS.ProcessEnv = process.env, configTheme?: string): string {
   if (env.SCODER_THEME && THEMES[env.SCODER_THEME]) return env.SCODER_THEME;
+  if (configTheme && THEMES[configTheme]) return configTheme;
   if (env.SCODER_PLAIN === "1" || noColorSet(env.NO_COLOR) || noColorSet(process.env.NO_COLOR)) return "mono";
   if (env.TERM === "dumb" || !env.TERM) return "mono";
   if (env.COLOR_COUNT && Number(env.COLOR_COUNT) < 16) return "mono";
   return "mission";
 }
 
-export function getTheme(workdir: string): Theme {
+export function getTheme(workdir: string, configTheme?: string): Theme {
   const p = join(workdir, ".scoder", "theme.json");
   if (existsSync(p)) {
     try {
       const raw = JSON.parse(readFileSync(p, "utf8")) as { name?: string } & Partial<Theme>;
-      const base = raw.name ? THEMES[raw.name] ?? THEMES[defaultThemeName()] : THEMES[defaultThemeName()];
+      const base = raw.name ? THEMES[raw.name] ?? THEMES[defaultThemeName(process.env, configTheme)] : THEMES[defaultThemeName(process.env, configTheme)];
       return { ...base, ...Object.fromEntries(Object.entries(raw).filter(([k]) => k in base)) } as Theme;
     } catch { /* malformed → default */ }
   }
-  return THEMES[defaultThemeName()];
+  return THEMES[defaultThemeName(process.env, configTheme)];
 }
 
 let active: Theme = MISSION;

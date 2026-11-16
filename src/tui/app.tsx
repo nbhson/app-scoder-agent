@@ -20,7 +20,8 @@ import { discoverSkills } from "../context/skills.js";
 import { discoverAgents } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";
 import { transcriptWindow, estimateTotalRows } from "./selectors.js";
-import { SLASH_COMMANDS, formatSlashHelp } from "../commands/definitions.js";
+import { SLASH_COMMANDS, formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE } from "../commands/definitions.js";
+import { dispatchCommand } from "../commands/registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
@@ -69,14 +70,14 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // /permission) — the prop is the initial value, cfg is the live one.
   const [cfg, setCfg] = useState(config);
   const { exit } = useApp();
-  // T-09: theme resolve at mount (.scoder/theme.json > builtin). Proxy-based
-  // theme reads re-render via a bump.
+  // T-09: theme resolve at mount (.scoder/theme.json > env > rc "theme" >
+  // builtin). Proxy-based theme reads re-render via a bump.
   const [, bump] = useState(0);
   const bumpFrame = useCallback(() => bump((n) => n + 1), []);
   useEffect(() => {
-    setActiveTheme(getTheme(cfg.workdir));
+    setActiveTheme(getTheme(cfg.workdir, cfg.theme));
     bumpFrame();
-  }, [cfg.workdir, bumpFrame]);
+  }, [cfg.workdir, cfg.theme, bumpFrame]);
   const [state, setState] = useState<TuiState>(initialState);
   const [input, setInput] = useState(initialTask ?? "");
   /** Rows scrolled up from the bottom; 0 = follow the newest content. */
@@ -162,6 +163,17 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     cfg, setCfg, update, agentRef, runningRef, eventQueue, setScrollOffset, setPermMode,
   });
 
+  // ⇧⇥ / ⇧P — quick-switch dispatch qua registry, giống hệt gõ /agent, /permission
+  // (thừa hưởng gate: ⇧⇥ chặn khi đang chạy + reset conversation; ⇧P đổi live).
+  const cycleAgent = useCallback(() => {
+    const next = nextInCycle(AGENT_CYCLE, tuiHost().config.agent ?? "build");
+    void dispatchCommand(`/agent ${next}`, tuiHost(), pushNotice);
+  }, [tuiHost, pushNotice]);
+  const cyclePermission = useCallback(() => {
+    const next = nextInCycle(PERMISSION_CYCLE, tuiHost().config.permissionMode);
+    void dispatchCommand(`/permission ${next}`, tuiHost(), pushNotice);
+  }, [tuiHost, pushNotice]);
+
   const { submit } = useSubmit({
     cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode,
     tuiHost, agentRef, runningRef, stateRef,
@@ -183,7 +195,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   useTuiKeybinds({
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
     setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef,
-    setScrollOffset, selectMode, setSelectMode, exit,
+    setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, exit,
   });
 
   // WARMUP (plan/WARMUP-PLAN.md): tạo agent + prefill prefix system+tools nền
@@ -343,6 +355,10 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       {helpOpen && (
         <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.dim} paddingX={1} paddingY={1}>
           <Text color={theme.brand} bold>Help (?)</Text>
+          <Text dimColor>
+            keys: ⇧⏎ newline · ⇧⇥ agent build/plan/review · ⇧P permission auto/ask/readonly (input trống) · ⌃P palette
+            · ⌃S sessions · ⌃T thinking · ⌃O select · ? help · esc abort · ⌃C quit
+          </Text>
           <Text>{formatSlashHelp("scoder tui")}</Text>
         </Box>
       )}
@@ -381,6 +397,10 @@ export async function runTui(config: AgentConfig, initialTask: string | null): P
   const altScreen = process.stdout.isTTY === true && process.env.TERM !== "dumb";
   const { waitUntilExit } = render(<TuiApp config={config} initialTask={initialTask} />, {
     alternateScreen: altScreen,
+    // ⇧⏎/⇧⇥ phân biệt được với Enter/Tab thường chỉ khi terminal báo modifier
+    // — kitty keyboard protocol, auto mode: query CSI ?u, terminal không
+    // hỗ trợ im lặng (timeout 200ms) → fallback như cũ.
+    kittyKeyboard: { mode: "auto" },
   });
   await waitUntilExit();
   // Ink restores the terminal on unmount; exit explicitly so provider

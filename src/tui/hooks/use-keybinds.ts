@@ -21,9 +21,13 @@ export function useTuiKeybinds(deps: {
   /** Ctrl+O — release mouse tracking so the terminal's native drag-select/copy works. */
   selectMode: boolean;
   setSelectMode: Dispatch<SetStateAction<boolean>>;
+  /** ⇧⇥ — cycle primary agent build→plan→review (dispatch /agent, cùng gate idle). */
+  cycleAgent: () => void;
+  /** ⇧P (khi input trống) — cycle permission auto→ask→readonly (dispatch /permission). */
+  cyclePermission: () => void;
   exit: () => void;
 }) {
-  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, exit } = deps;
+  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, exit } = deps;
   // Esc aborts the running task (like SIGINT in the CLI); when scrolled up,
   // the first Esc returns to the bottom instead.
   const scrollOffsetRef = useRef(0);
@@ -59,6 +63,19 @@ export function useTuiKeybinds(deps: {
     // ── Ctrl+P: command palette ──
     if (key.ctrl && _input === "p") {
       setPaletteOpen((o) => !o);
+      return;
+    }
+    // ── ⇧⇥ (ESC [ Z hoặc kitty): cycle agent build→plan→review. Dispatch qua
+    // registry nên thừa hưởng gate của /agent: đang chạy thì chặn, switch =
+    // reset conversation. Session picker mở thì nhường keyboard cho modal. ──
+    if (key.tab && key.shift) {
+      if (!sessionPickerOpen) cycleAgent();
+      return;
+    }
+    // ── ⇧P: cycle permission auto→ask→readonly. Chỉ khi input trống —
+    // cùng quy ước với "?" (help) — để vẫn gõ được chữ "P" hoa giữa câu. ──
+    if (key.shift && _input === "P" && !inputRef.current) {
+      if (!sessionPickerOpen) cyclePermission();
       return;
     }
     // ── ?: help overlay (when input empty) ──

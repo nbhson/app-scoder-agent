@@ -22,6 +22,13 @@ export interface ModelPricing {
 /** Fallback price when a model is unknown (deliberately conservative, not zero). */
 export const DEFAULT_MODEL_PRICING: ModelPricing = { input: 0.5, output: 1.5 };
 
+/**
+ * TUI palette names — whitelist for the --theme flag and rc "theme" key.
+ * Source of truth for palettes is THEMES in src/tui/theme.tsx (kept in sync
+ * by test/theme.test.mjs).
+ */
+export const THEME_NAMES = ["mission", "paper", "mono", "light", "high-contrast", "solarized"] as const;
+
 /** Approximate list prices, USD per 1M tokens. Longest matching prefix wins. */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenAI

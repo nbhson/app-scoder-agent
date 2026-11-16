@@ -89,3 +89,27 @@ describe("T8 — theme pack + terminal caps", () => {
     assert.equal(getTheme(workdir).brand, "magenta"); // TERM thật trong test env ≠ dumb
   });
 });
+
+describe("config-file theme (rc \"theme\" / --theme)", () => {
+  it("THEME_NAMES (CLI whitelist) đồng bộ THEMES", async () => {
+    const { THEME_NAMES } = await import("../dist/shared/constants.js");
+    assert.deepEqual([...THEME_NAMES].sort(), Object.keys(THEMES).sort());
+  });
+  it("defaultThemeName: config theme thắng autodetect", () => {
+    assert.equal(defaultThemeName({ TERM: "xterm-256color" }, "paper"), "paper");
+  });
+  it("SCODER_THEME env thắng config theme", () => {
+    assert.equal(defaultThemeName({ TERM: "xterm-256color", SCODER_THEME: "solarized" }, "paper"), "solarized");
+  });
+  it("config theme lạ -> bỏ qua, về autodetect", () => {
+    assert.equal(defaultThemeName({ TERM: "xterm-256color" }, "bogus"), "mission");
+  });
+  it("getTheme nhận config theme khi không có theme.json", () => {
+    assert.equal(getTheme(workdir, "paper").brand, "blue");
+  });
+  it(".scoder/theme.json vẫn thắng config theme", () => {
+    mkdirSync(join(workdir, ".scoder"), { recursive: true });
+    writeFileSync(join(workdir, ".scoder", "theme.json"), JSON.stringify({ name: "mono" }));
+    assert.equal(getTheme(workdir, "paper").brand, "white");
+  });
+});

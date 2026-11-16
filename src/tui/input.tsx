@@ -35,6 +35,17 @@ export interface InputProps {
   modalRef: React.MutableRefObject<unknown>;
 }
 
+/**
+ * ⇧⏎ / ⌥⏎ có phải "xuống dòng" không? Nguồn: kitty keyboard protocol
+ * (ink 8 trả key.shift/key.meta trên key.return), ESC+CR legacy (iTerm2 bind),
+ * hoặc `\n` trần — số terminal gửi LF cho Shift+Enter, và Ctrl+J cũng rơi vào
+ * đây (fallback phổ thông). Terminal không phân biệt được Enter có modifier
+ * sẽ gửi `\r` thường — ⇧⏎ lúc đó giống Enter, không có cách nào bắt.
+ */
+export function isNewlineKey(input: string, key: { return?: boolean; shift?: boolean; meta?: boolean }): boolean {
+  return (key.return === true && (key.shift === true || key.meta === true)) || input === "\n";
+}
+
 export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
@@ -92,6 +103,16 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
     (input, key) => {
       if (modalRef.current) return; // T-03: modal owns the keyboard
       const current = valueRef.current;
+      // ⇧⏎ (hoặc ⌥⏎, Ctrl+J, \n) — xuống dòng thay vì gửi. Đặt TRƯỚC mọi
+      // nhánh khác để thắng vim-Enter-submit và @ overlay.
+      if (isNewlineKey(input, key)) {
+        const next = current + "\n";
+        valueRef.current = next;
+        onChange(next);
+        refreshAt(next);
+        if (vimRef.current.mode === "insert") setCursor(null);
+        return;
+      }
       // T5: vim mode — Esc → normal (nếu không có @ overlay), normal keys qua keymap.
       if (key.escape && !atStateRef.current) {
         setCursor(vimRef.current.cursor);
@@ -164,8 +185,10 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
         onChange(v);
         return;
       }
-      // Tab — complete slash command (and /skill, /mcp arguments)
+      // Tab — complete slash command (and /skill, /mcp arguments).
+      // ⇧⇥ được reserved cho global cycle-agent (use-keybinds) — không complete.
       if (key.tab) {
+        if (key.shift) return;
         const argMatch = /^\/skill\s+(\S*)$/.exec(current);
         if (argMatch) {
           const partial = argMatch[1].toLowerCase();
@@ -218,6 +241,8 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
         return;
       }
       if (input.length > 0 && !key.ctrl && !key.meta && !key.escape && !key.upArrow && !key.downArrow && !key.tab) {
+        // ⇧P với input trống = phím tắt cycle permission (use-keybinds) — đừng chèn "P".
+        if (key.shift && input === "P" && current === "") return;
         // A chunk may contain several pasted chars — even a trailing newline
         // (terminal pastes / PTY writes deliver "exit\r" as one chunk).
         const parts = input.split(/[\r\n]+/);
@@ -243,6 +268,51 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
   const ghost = useMemo(() => (atState ? null : ghostText(value, providers)), [value, providers, atState]);
   const ghostRef = useRef(ghost);
   ghostRef.current = ghost;
+  // Multi-line (⇧⏎): dòng 0 sau prompt ❯, dòng nối lùi 2 ô cho thẳng hàng.
+  // Con trỏ vim normal mode: map index → dòng/cột để block đúng chỗ.
+  const lines = value.split("\n");
+  const curPos = vimMode === "normal" && cursor !== null ? Math.min(cursor, value.length) : null;
+  let lineStart = 0;
+  const lineNodes = lines.map((ln, i) => {
+    const start = lineStart;
+    lineStart += ln.length + 1;
+    const isLast = i === lines.length - 1;
+    const cursorOnLine = curPos !== null && curPos >= start && curPos <= start + ln.length;
+    let body: React.ReactNode;
+    if (cursorOnLine) {
+      const c = (curPos as number) - start;
+      body = (
+        <>
+          <Text>{ln.slice(0, c)}</Text>
+          <Text backgroundColor="gray" color="black">{ln[c] ?? " "}</Text>
+          <Text>{ln.slice(c + 1)}</Text>
+        </>
+      );
+    } else if (isLast && value.length === 0) {
+      body = (
+        <>
+          <Text dimColor>type a message…</Text>
+          <Text dimColor>▌</Text>
+        </>
+      );
+    } else if (isLast) {
+      body = (
+        <>
+          <Text>{ln}</Text>
+          {ghost && <Text dimColor>{ghost.rest}</Text>}
+          <Text dimColor>▌</Text>
+        </>
+      );
+    } else {
+      body = <Text>{ln === "" ? " " : ln}</Text>;
+    }
+    return (
+      <Box key={i}>
+        {i === 0 ? <Text color={theme.brand} bold>❯{" "}</Text> : <Text>  </Text>}
+        {body}
+      </Box>
+    );
+  });
   return (
     <Box flexDirection="column">
       {at && (
@@ -256,32 +326,10 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
           <Text dimColor>  ↑/↓ select · tab/enter accept · esc close</Text>
         </Box>
       )}
-      {/* Input row — styled prompt + typed text + ghost + block cursor */}
-      <Box>
-        <Text color={theme.brand} bold>
-          ❯{" "}
-        </Text>
-        {vimMode === "normal" && cursor !== null ? (
-          <>
-            <Text>{value.slice(0, cursor)}</Text>
-            <Text backgroundColor="gray" color="black">{value[cursor] ?? " "}</Text>
-            <Text>{value.slice(cursor + 1)}</Text>
-          </>
-        ) : value.length === 0 ? (
-          <>
-            <Text dimColor>type a message…</Text>
-            <Text dimColor>▌</Text>
-          </>
-        ) : (
-          <>
-            <Text>{value}</Text>
-            {ghost && <Text dimColor>{ghost.rest}</Text>}
-            <Text dimColor>▌</Text>
-          </>
-        )}
-      </Box>
+      {/* Input row(s) — styled prompt + typed text + ghost + block cursor */}
+      {lineNodes}
       {candidates && <Text dimColor>  {candidates}  (tab completes)</Text>}
-      {vimMode === "normal" && <Text dimColor>  -- NORMAL -- h/l/w/b/e · x · i/a/A insert · ⏎ send</Text>}
+      {vimMode === "normal" && <Text dimColor>  -- NORMAL -- h/l/w/b/e · x · i/a/A insert · ⏎ send · ⇧⏎ newline</Text>}
     </Box>
   );
 }

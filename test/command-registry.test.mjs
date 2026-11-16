@@ -14,7 +14,8 @@ import {
   formatSkills,
   formatMcpStatus,
 } from "../dist/commands/registry.js";
-import { discoverCustomCommands, runCustomCommand } from "../dist/commands/definitions.js";
+import { discoverCustomCommands, runCustomCommand, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE } from "../dist/commands/definitions.js";
+import { isNewlineKey } from "../dist/tui/input.js";
 
 /** Fake host — agent chỉ cần các method /cost /skills /permission đụng tới. */
 /** @typedef {import("../dist/commands/registry.js").CommandHost} CommandHost */
@@ -288,5 +289,38 @@ describe("custom commands dispatch", () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("quick-switch helpers — ⇧⇥ agent / ⇧P permission", () => {
+  it("nextInCycle: build→plan→review→build", () => {
+    assert.equal(nextInCycle(AGENT_CYCLE, "build"), "plan");
+    assert.equal(nextInCycle(AGENT_CYCLE, "plan"), "review");
+    assert.equal(nextInCycle(AGENT_CYCLE, "review"), "build");
+  });
+  it("nextInCycle: agent custom / undefined → về đầu cycle (build)", () => {
+    assert.equal(nextInCycle(AGENT_CYCLE, "my-reviewer"), "build");
+    assert.equal(nextInCycle(AGENT_CYCLE, undefined), "build");
+  });
+  it("nextInCycle: auto→ask→readonly→auto", () => {
+    assert.equal(nextInCycle(PERMISSION_CYCLE, "auto"), "ask");
+    assert.equal(nextInCycle(PERMISSION_CYCLE, "ask"), "readonly");
+    assert.equal(nextInCycle(PERMISSION_CYCLE, "readonly"), "auto");
+  });
+});
+
+describe("isNewlineKey — ⇧⏎/⌥⏎/\\n = xuống dòng", () => {
+  it("kitty protocol: return + shift hoặc meta → newline", () => {
+    assert.equal(isNewlineKey("\r", { return: true, shift: true }), true);
+    assert.equal(isNewlineKey("\r", { return: true, meta: true }), true);
+  });
+  it("ESC+CR legacy (macOS meta return) → newline", () => {
+    assert.equal(isNewlineKey("\r", { return: true, meta: true }), true);
+  });
+  it("\\n trần (iTerm2 Shift+Enter / Ctrl+J) → newline", () => {
+    assert.equal(isNewlineKey("\n", {}), true);
+  });
+  it("Enter thường → submit (không phải newline)", () => {
+    assert.equal(isNewlineKey("\r", { return: true }), false);
   });
 });

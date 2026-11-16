@@ -3,6 +3,8 @@
   "provider": "openai",
   "baseUrl": "https://api.openai.com/v1",
 
+  "theme": "mission",
+
   "buildCmd": null,
   "maxSteps": 40,
 

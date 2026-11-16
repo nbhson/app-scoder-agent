@@ -58,6 +58,7 @@ async function main(): Promise<void> {
     noSave: args.noSave,
     logFile: args.logFile,
     agent: args.agent,
+    theme: args.theme,
   });
 
   // v2: --agent must reference a selectable (mode primary|all) agent.

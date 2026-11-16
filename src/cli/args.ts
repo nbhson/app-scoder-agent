@@ -1,4 +1,6 @@
 /** CLI argument parsing: CliArgs shape, help text, and the pure parser. */
+import { THEME_NAMES } from "../shared/constants.js";
+
 export interface CliArgs {
   task: string | null;
   model?: string;
@@ -12,6 +14,7 @@ export interface CliArgs {
   noMotion?: boolean;
   plain?: boolean;
   highContrast?: boolean;
+  theme?: string;
   agent?: string;
   permission?: string;
   provider?: string;
@@ -64,6 +67,8 @@ OPTIONS
   -y, --yes                 Non-interactive mode (auto-approves commands)
   --permission <mode>       auto | ask | readonly (env SCODER_PERMISSION, default auto)
   --agent <name>            primary agent to run (default build; see /agent): build | plan | review | <custom>
+  --theme <name>            TUI palette: mission | paper | mono | light | high-contrast | solarized
+                            (env SCODER_THEME, config "theme")
   --no-save                 Disable session auto-save to .scoder/sessions/
   --log-file                Write a JSONL event log to .scoder/logs/<session>.jsonl
                             (or set SCODER_LOG_FILE=1 / =/path/to/log.jsonl)
@@ -146,6 +151,14 @@ export function parseArgs(argv: string[]): CliArgs {
       case "--high-contrast":
         args.highContrast = true;
         break;
+      case "--theme": {
+        const t = next();
+        if (!THEME_NAMES.includes(t as (typeof THEME_NAMES)[number])) {
+          throw new Error(`Invalid --theme: ${t} (expected ${THEME_NAMES.join(" | ")})`);
+        }
+        args.theme = t;
+        break;
+      }
       case "--log-file":
         args.logFile = true;
         break;

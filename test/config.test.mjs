@@ -28,6 +28,7 @@ afterEach(() => {
   delete process.env.SCODER_BASE_URL;
   delete process.env.SCODER_PROVIDER;
   delete process.env.SCODER_MAX_STEPS;
+  delete process.env.SCODER_THEME;
 });
 
 describe("loadConfig", () => {
@@ -212,5 +213,31 @@ describe("global config (~/.scoder/config.json, override bằng SCODER_CONFIG)",
     writeFileSync(GLOBAL, "{ not json");
     const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
     assert.equal(cfg.model, "gpt-4o-mini");
+  });
+});
+
+describe("loadConfig — theme (rc/env/flag precedence)", () => {
+  it('rc "theme" được đọc vào cfg.theme', () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ theme: "paper" }));
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.theme, "paper");
+  });
+
+  it("SCODER_THEME env thắng rc", () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ theme: "paper" }));
+    process.env.SCODER_THEME = "solarized";
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.theme, "solarized");
+  });
+
+  it("flag (overrides) thắng env", () => {
+    process.env.SCODER_THEME = "solarized";
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test", theme: "mono" });
+    assert.equal(cfg.theme, "mono");
+  });
+
+  it("không cấu hình -> theme undefined (TUI tự detect caps)", () => {
+    const cfg = loadConfig({ workdir: TMP, apiKey: "test" });
+    assert.equal(cfg.theme, undefined);
   });
 });

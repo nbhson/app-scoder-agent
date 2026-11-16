@@ -37,6 +37,7 @@ Create `.scoderrc.json` in your project root:
   "baseUrl": "https://api.openai.com/v1",
   "apiKey": "sk-...",
   "model": "gpt-4o-mini",
+  "theme": "mission",
   "buildCmd": "npm run build",
   "maxSteps": 40,
   "permission": "auto",
@@ -53,10 +54,14 @@ See [.scoderrc.example.json](../.scoderrc.example.json) for full config referenc
 
 ## Config Precedence
 
-1. **CLI flags** — `-m`, `--base-url`, `-k`, `--provider`, `-B`
+1. **CLI flags** — `-m`, `--base-url`, `-k`, `--provider`, `-B`, `--theme`
 2. **Environment variables** — `SCODER_API_KEY`, `SCODER_BASE_URL`, etc.
 3. **`.scoderrc.json`** — project root, merged with global `~/.scoder/config.json`
 4. **Built-in defaults**
+
+The `theme` key picks the TUI palette (`mission` | `paper` | `mono` | `light` |
+`high-contrast` | `solarized`); `.scoder/theme.json` in the project still wins over
+it (it also accepts inline per-color overrides).
 
 ## Runtime Limits (`limits`)
 

@@ -3,6 +3,40 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.17] — 2026-11-16
+
+### Added
+- **Theme in the config file** — `"theme": "solarized"` in `.scoderrc.json` /
+  `~/.scoder/config.json` (plus a `--theme <name>` CLI flag) now sets the TUI
+  palette; precedence `.scoder/theme.json` > `SCODER_THEME` env > config
+  `theme` > terminal-capability autodetect. `/theme` stays a session-only
+  hot-swap (`src/config/config.ts`, `src/tui/theme.tsx`)
+- **`Shift+Enter` inserts a newline** in the TUI input (multi-line messages;
+  `Enter` still sends) — via the kitty keyboard protocol, negotiated at
+  startup with `render({ kittyKeyboard: { mode: "auto" } })`, with universal
+  fallbacks `Alt+Enter` / `Ctrl+J` / bare `\n` (iTerm2-style). Continuation
+  lines render indented under the `❯` prompt (`src/tui/input.tsx`)
+- **`Shift+Tab` cycles the primary agent** build→plan→review in the TUI —
+  dispatches `/agent` through the shared registry, so it inherits its gates
+  (blocked while running, conversation reset on switch; custom agents stay
+  on `/agent <name>`)
+- **`Shift+P` cycles the permission mode** auto→ask→readonly (dispatches
+  `/permission`, applies live) — fires only when the input is empty, the
+  same convention as `?` for help, so a capital `P` can still be typed
+  mid-message
+- Status-bar keybind hints and the `?` help overlay document the three new
+  keys
+
+### Tests
+- `test/tui.test.mjs` — PTY integration: `\x1b[Z` (⇧Tab) → `agent → plan`
+  notice, `P` → `permission mode → ask` notice, kitty `\x1b[13;2u`
+  (⇧Enter) renders two input lines without submitting
+- `test/command-registry.test.mjs` — `nextInCycle` (agent/permission cycles,
+  unknown/custom value wraps to the first entry) + `isNewlineKey`
+- `test/config.test.mjs` / `test/theme.test.mjs` — `theme` precedence
+  (rc/env/flag), config theme in `defaultThemeName`/`getTheme`,
+  `THEME_NAMES` ↔ `THEMES` sync
+
 ## [0.9.15] — 2026-11-15
 
 ### Added

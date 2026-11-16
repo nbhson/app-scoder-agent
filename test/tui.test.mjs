@@ -141,6 +141,32 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
     assert.ok(/no LLM calls yet|session usage/.test(clean), "/cost phải báo usage");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
   }, 90_000);
+
+  it("⇧⇥ cycle agent + ⇧P cycle permission (input trống) — dispatch qua /agent, /permission", async () => {
+    // "\x1b[Z" = legacy Shift+Tab (backtab); "P" = Shift+P trên terminal legacy.
+    const { clean, raw, exitCode, ptyErr } = await runPty("cycles", [
+      "--send-after", "All done:\x1b[Z",
+      "--send-after", "agent → plan:P",
+      "--send-after", "permission mode → ask:exit\\r",
+    ]);
+    const where = () => ctx(clean, raw.length, ptyErr, exitCode);
+    assert.ok(/agent → plan/.test(clean), `⇧⇥ phải switch build→plan (${where()})`);
+    assert.ok(/permission mode → ask/.test(clean), `⇧P phải cycle auto→ask (${where()})`);
+    assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
+  }, 90_000);
+
+  it("⇧⏎ (kitty CSI 13;2u) xuống dòng trong input, không submit", async () => {
+    // Buffer còn nguyên "MARK-A⏎MARK-B" nên đóng bằng Ctrl+C (idle → quit
+    // ngay), không gõ "exit" — exit sẽ bị ghép vào dòng thứ 3.
+    const { clean, raw, exitCode, ptyErr } = await runPty("multiline", [
+      "--send-after", "All done:MARK-A\x1b[13;2uMARK-B",
+      "--send-after", "MARK-B:\x03",
+    ]);
+    const where = () => ctx(clean, raw.length, ptyErr, exitCode);
+    assert.ok(/MARK-A/.test(clean) && /MARK-B/.test(clean), `cả 2 dòng phải hiện trong input (${where()})`);
+    assert.ok(!/MARK-AMARK-B/.test(clean), "⇧⏎ phải ngắt thành 2 dòng, không nối một dòng");
+    assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
+  }, 90_000);
 });
 
 after(() => {

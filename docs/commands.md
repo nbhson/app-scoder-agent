@@ -77,16 +77,16 @@ scoder --no-save -y "run the migration"
 | Command | Description |
 |---------|-------------|
 | `/help` | Show command list (builtin + custom) |
-| `/agent` | List/select primary agents (build/plan/review/custom) |
+| `/agent` | List/select primary agents (build/plan/review/custom) — **⇧Tab** cycles the built-ins in the TUI |
 | `/init` | Create an AGENTS.md template in this project |
-| `/theme` | Switch palette (TUI) |
+| `/theme` | Switch palette (TUI) — persist the default via `theme` in the config file |
 | `/clear` | Reset conversation + agent context |
 | `/compact` | Summarize older history now (manual compaction) |
 | `/cost` | Session token usage |
 | `/model` | Active model/provider/build |
 | `/skill [name]` | List discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
-| `/permission <mode>` | Switch permission mode |
+| `/permission <mode>` | Switch permission mode — **⇧P** cycles auto/ask/readonly in the TUI (input empty) |
 
 Sessions are managed with `scoder list` / `scoder resume` (CLI) or the
 **Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.

@@ -137,6 +137,9 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
+| `Shift+Enter` | Insert a newline (multi-line input; continues with `⏎ send` on the last line) |
+| `Shift+Tab` | Cycle primary agent build→plan→review (dispatches `/agent`; idle-only, resets the conversation) |
+| `Shift+P` | Cycle permission mode auto→ask→readonly (dispatches `/permission`; only when the input is empty — otherwise it types a capital `P`) |
 | `↑/↓` | Recall message history |
 | `Tab` | Autocomplete (commands, skill names, MCP tools) |
 | `PgUp/PgDn` | Page scroll (0.8 viewport) |
@@ -148,6 +151,16 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | `?` | Show help modal |
 | Mouse wheel | Scroll chat pane |
 
+**Modified-Enter terminal support.** `Shift+Enter` is only distinguishable from
+`Enter` when the terminal reports modifiers. The TUI negotiates the
+[kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)
+at startup (`render({ kittyKeyboard: { mode: "auto" } }` — a `CSI ?u` query,
+200 ms timeout, silently ignored by unsupporting terminals). Universal
+fallbacks that work in every terminal: `Alt+Enter`, `Ctrl+J`, and any terminal
+that sends a bare `\n` for Shift+Enter (e.g. iTerm2's default binding).
+On terminals that send a plain `\r` with no modifier info, Shift+Enter behaves
+like Enter.
+
 ## Slash Commands
 
 Same commands available in TUI and REPL:
@@ -155,7 +168,7 @@ Same commands available in TUI and REPL:
 | Command | Description |
 |---------|-------------|
 | `/help` | Command list (builtin + custom) |
-| `/agent` | List/select primary agents |
+| `/agent` | List/select primary agents (⇧Tab cycles build/plan/review) |
 | `/init` | Create AGENTS.md template |
 | `/theme` | Switch palette |
 | `/clear` | Reset conversation |
@@ -164,15 +177,22 @@ Same commands available in TUI and REPL:
 | `/model` | Model info |
 | `/skill [name]` | List skills; with a name, load it |
 | `/mcp` | MCP servers & tools |
-| `/permission <mode>` | Switch mode |
+| `/permission <mode>` | Switch mode (⇧P cycles auto/ask/readonly) |
 
 Sessions are resumed via the **Ctrl+S** session picker; quit with `exit` or
 **Ctrl+C**.
 
 ## Themes
 
-TUI supports 6 built-in palettes (mission, paper, mono, light, high-contrast, solarized)
-plus terminal capability detection and a project default via `.scoder/theme.json`:
+TUI supports 6 built-in palettes (mission, paper, mono, light, high-contrast, solarized).
+Default resolution order: `.scoder/theme.json` (project — also accepts inline color
+overrides) > `SCODER_THEME` env > `theme` key in the config file (`.scoderrc.json` /
+`~/.scoder/config.json`, or the `--theme` flag) > terminal capability detection:
+
+```jsonc
+// .scoderrc.json
+{ "theme": "solarized" }
+```
 
 ```bash
 # In the TUI:
@@ -180,6 +200,8 @@ plus terminal capability detection and a project default via `.scoder/theme.json
 /theme mission
 /theme high-contrast
 ```
+
+`/theme <name>` hot-swaps for the current session only — persist it via the config key.
 
 ## Non-TTY Fallback
 
