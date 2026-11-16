@@ -3,6 +3,19 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [0.9.18] — 2026-11-16
+
+### Fixed
+- **TUI: chat-only replies no longer duplicated as a raw green block** — the
+  `✔ <summary>` line rendered after the transcript reprinted the assistant's
+  full reply (guardrails `chat-done` / `text-only-streak` / `completion-claim`
+  set the finish summary to the reply text, sliced to 2000 chars). The reply
+  is already rendered as markdown above, so the raw-markdown echo read as a
+  duplicate-output bug (it vanished on the next question because `run_start`
+  resets the summary). The summary is display-only — it never entered the LLM
+  context, and it still lands in events and the session manifest; the dedup
+  happens at render time in `src/tui/app.tsx`
+
 ## [0.9.17] — 2026-11-16
 
 ### Added

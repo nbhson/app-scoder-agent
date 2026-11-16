@@ -220,8 +220,17 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
 
   const lastSummary = useMemo(() => {
     if (state.status === "running" || state.status === "idle") return null;
+    const summary = state.summary?.trim();
+    if (!summary) return null;
+    // Chat-only runs (guardrail chat-done / text-only-streak / completion-claim
+    // without files): finish summary = the assistant's FULL reply (sliced to
+    // 2000). The transcript above already renders that text as markdown —
+    // printing it again as a raw green "✔ …" block reads as a duplicate-output
+    // bug. Dedup on display; the summary still lands in events/session log.
+    const last = state.items[state.items.length - 1];
+    if (last && last.kind === "assistant" && last.text.trim().startsWith(summary)) return null;
     return state.summary;
-  }, [state.status, state.summary]);
+  }, [state.status, state.summary, state.items]);
 
       // When the run ends, jump back to the bottom so the final summary is always
   // visible — a user scrolled up would otherwise never see the conclusion.
