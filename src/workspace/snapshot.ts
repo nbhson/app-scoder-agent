@@ -53,31 +53,69 @@ export class SnapshotManager {
   private checkpoints: SnapshotEntry[] = [];
   private initialized = false;
   private available = false;
+  /**
+   * P-perf (item 19): the git probe was MOVED OUT of the constructor. Every
+   * `new Agent` — main run, every subagent, every resume — used to pay a
+   * synchronous `git rev-parse` (10–100 ms of frozen event loop) even when
+   * the run never writes a file. Now it happens lazily on first use; `capture`
+   * (the only production entry point) probes asynchronously.
+   * null = never probed; false = probed-degraded; true = probed-available.
+   */
+  private probed: boolean | null = null;
   /** Set when the project has no .git — fallback: no-op (copy-tree skipped, see ponytail). */
-  readonly degradedReason: string | null = null;
+  degradedReason: string | null = null;
 
   constructor(workdir: string, enabled: boolean) {
     this.workdir = resolve(workdir);
     this.gitDir = join(this.workdir, ".scoder", "snapshot");
     this.enabled = enabled;
-    if (!enabled) {
-      this.degradedReason = null;
+  }
+
+  /** Shared field-update for both probe paths (sync fallback + async fast path). */
+  private setProbeResult(gitOk: boolean): void {
+    if (!gitOk) {
+      this.degradedReason = "git binary unavailable or not a repo — snapshots disabled (fallback copy-tree not enabled)";
+      this.probed = false;
       return;
     }
     try {
-      if (!gitAvailable(this.workdir)) {
-        this.degradedReason = "git binary unavailable or not a repo — snapshots disabled (fallback copy-tree not enabled)";
-        return;
-      }
       mkdirSync(this.gitDir, { recursive: true });
       this.available = true;
+      this.probed = true;
     } catch (err) {
       this.degradedReason = (err as Error).message;
+      this.probed = false;
     }
+  }
+
+  /** Async probe for the capture hot path — no spawnSync on the event loop. */
+  private async probeAsync(): Promise<void> {
+    let ok: boolean;
+    try {
+      const r = await new Promise<{ status: number }>((res) => {
+        const child = spawn("git", ["rev-parse", "--git-dir"], { cwd: this.workdir, env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined } });
+        child.stdout.resume();
+        child.stderr.resume();
+        child.on("error", () => res({ status: -1 }));
+        child.on("close", (code) => res({ status: code ?? -1 }));
+      });
+      ok = r.status === 0;
+    } catch {
+      ok = false;
+    }
+    this.setProbeResult(ok);
+  }
+
+  /** Sync probe — only for the synchronous entry points (diff/restore, tests). */
+  private ensureProbed(): void {
+    if (this.probed !== null) return;
+    this.setProbeResult(gitAvailable(this.workdir));
   }
 
   /** Lazily init the shadow repo (first capture only). */
   private init(): boolean {
+    this.ensureProbed();
+    if (!this.probed) return false;
     if (this.initialized) return this.available;
     this.initialized = true;
     if (!this.available) return false;
@@ -106,7 +144,11 @@ export class SnapshotManager {
    * has to predate the modifications).
    */
   async capture(label: string): Promise<SnapshotEntry | null> {
-    if (!this.enabled || !this.init()) return null;
+    if (!this.enabled) return null;
+    // Item 19: probe asynchronously on the hot path — capture is awaited by
+    // the run loop, so the one-time git check must not block the event loop.
+    if (this.probed === null) await this.probeAsync();
+    if (!this.init()) return null;
     try {
       // Add all (shadow index is independent from the project's index).
       const add = await gitAsync(this.workdir, this.gitDir, ["add", "-A", "--", ".", ":(exclude).scoder"]);
