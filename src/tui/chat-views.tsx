@@ -37,14 +37,35 @@ export function Spinner({ active }: { active: boolean }): React.JSX.Element | nu
 }
 
 const OUTPUT_PREVIEW_LINES = 5;
+const SCAFFOLD_RX = /^--- (stdout|stderr) ---$/;
 
-/** Collapse run_command scaffolding ("--- stdout ---" etc.) to real content. */
+/** Collapse run_command scaffolding ("--- stdout ---" etc.) to real content.
+ *
+ * P-perf (item 12): TAIL scan via lastIndexOf — a 200 KB build log used to
+ * allocate a 5k-string array + a replace() copy just to render 5 lines, on
+ * EVERY ToolItemView re-render inside a live ink tree. Walks backward from
+ * the trimmed end, collecting exactly the last ≤5 non-scaffold lines.
+ * Identical to the old split+filter+slice(-5) for every input, including
+ * the "" → [""] and "\n\n" → [""] cases and a leading empty segment
+ * ("first line" before a newline at offset 0). */
 function previewLines(output: string): string[] {
-  const lines = output
-    .replace(/\n+$/, "")
-    .split("\n")
-    .filter((l) => !/^--- (stdout|stderr) ---$/.test(l.trim()));
-  return lines.slice(-OUTPUT_PREVIEW_LINES);
+  let end = output.length;
+  while (end > 0 && output.charCodeAt(end - 1) === 10) end--; // trim /\n+$/
+  const out: string[] = [];
+  let cursor = end;
+  for (;;) {
+    const nl = cursor > 0 ? output.lastIndexOf("\n", cursor - 1) : -1;
+    const line = output.slice(nl + 1, cursor);
+    if (!SCAFFOLD_RX.test(line.trim())) out.push(line);
+    if (out.length >= OUTPUT_PREVIEW_LINES) break;
+    if (nl === -1) break; // processed the first segment
+    cursor = nl;
+    if (cursor === 0) {
+      if (!SCAFFOLD_RX.test("")) out.push(""); // segment before a newline at offset 0
+      break;
+    }
+  }
+  return out.reverse();
 }
 
 function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" }>; width?: number }): React.JSX.Element {

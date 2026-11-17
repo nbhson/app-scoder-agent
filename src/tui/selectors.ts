@@ -9,9 +9,91 @@ import { measure } from "./text-width.js";
 
 const EST_WIDTH = 80;
 
-/** Ước lượng số dòng wrap của một đoạn text ở width cho trước. */
+/** Ước lượng số dòng wrap của một đoạn text ở width cho trước.
+ *
+ * P-perf (item 13): streaming re-measure used to `split` + stringWidth the
+ * ENTIRE (ever-growing) text on every paint — O(n²) over a turn. Two fixes:
+ *  - line counting via indexOf scans (`countLines`), no string arrays;
+ *  - an incremental memo: when the new text is the cached text + an appended
+ *    delta, only the DELTA is measured (prefix invariant per width, MRU
+ *    slots). Exact same sum as the full split+reduce. */
+function lineRows(line: string, width: number): number {
+  return Math.max(1, Math.ceil(measure(line) / width));
+}
+
+/** Mirror of `text.split("\n").reduce(...)` keeping the open last line so a
+ *  streamed append can resume from it. `cur` = rows the open line currently
+ *  contributes (already included in `rows`). */
+function scanRows(
+  text: string,
+  width: number,
+  base?: { rows: number; line: string; cur: number },
+): { rows: number; line: string; cur: number } {
+  let rows = base ? base.rows : 1; // the first (possibly empty) line always counts
+  let line = base ? base.line : "";
+  let cur = base ? base.cur : 1;
+  let idx = 0;
+  for (;;) {
+    const nl = text.indexOf("\n", idx);
+    const seg = text.slice(idx, nl === -1 ? text.length : nl);
+    if (seg.length) {
+      line += seg;
+      const nr = lineRows(line, width);
+      rows += nr - cur;
+      cur = nr;
+    }
+    if (nl === -1) break;
+    rows += 1; // a new line opens — contributes max(1, empty)
+    line = "";
+    cur = 1;
+    idx = nl + 1;
+  }
+  return { rows, line, cur };
+}
+
+interface WrapSlot {
+  text: string;
+  rows: number;
+  lastLine: string;
+  lastRows: number;
+}
+const wrapCache = new Map<number, WrapSlot[]>();
+const WRAP_SLOTS = 4;
+
 function wrapEstimate(text: string, width: number): number {
-  return text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(measure(line) / width)), 0);
+  let slots = wrapCache.get(width);
+  if (!slots) {
+    slots = [];
+    wrapCache.set(width, slots);
+  }
+  for (let i = 0; i < slots.length; i++) {
+    const e = slots[i];
+    if (e.text === text) {
+      if (i !== 0) {
+        slots.splice(i, 1);
+        slots.unshift(e);
+      }
+      return e.rows;
+    }
+    if (e.text.length >= 32 && text.startsWith(e.text)) {
+      const r = scanRows(text.slice(e.text.length), width, { rows: e.rows, line: e.lastLine, cur: e.lastRows });
+      slots.unshift({ text, rows: r.rows, lastLine: r.line, lastRows: r.cur });
+      slots.length = Math.min(slots.length, WRAP_SLOTS);
+      return r.rows;
+    }
+  }
+  const r = scanRows(text, width);
+  slots.unshift({ text, rows: r.rows, lastLine: r.line, lastRows: r.cur });
+  slots.length = Math.min(slots.length, WRAP_SLOTS);
+  return r.rows;
+}
+
+/** Number of "\n"-split segments, capped: counting stops once `cap` is
+ *  reached (callers clamp with Math.min anyway). */
+function countLines(s: string, cap = Infinity): number {
+  let n = 1;
+  for (let i = s.indexOf("\n"); i !== -1 && n < cap; i = s.indexOf("\n", i + 1)) n++;
+  return n;
 }
 
 /**
@@ -67,7 +149,7 @@ export function estimateMarkdownRows(text: string, width = EST_WIDTH): number {
         rows += 2 + 40 + 1; // ContentBox max: borders + ≤40 data rows
         break;
       case "timeline":
-        rows += 1 + block.source.split("\n").length * 2;
+        rows += 1 + countLines(block.source) * 2;
         break;
     }
   }
@@ -94,16 +176,16 @@ export function estimateItemRows(item: ChatItem): number {
         : 1 + estimateMarkdownRows(item.text ?? "", EST_WIDTH);
     case "thinking":
       // Render: collapse to last 4 lines.
-      return 1 + Math.min(4, item.text ? item.text.split("\n").length : 0);
+      return 1 + Math.min(4, item.text ? countLines(item.text, 4) : 0);
     case "tool":
       // Render: 1 title + ≤5 preview lines (OUTPUT_PREVIEW_LINES ở chat-views,
       // clipCells nên mỗi preview đúng 1 row). Estimate cũ `1 + 2`
       // under-estimate 3 dòng/tool ⇒ virtualization window hẹp hơn thực tế.
-      return 1 + (item.output ? Math.min(5, item.output.split("\n").length) : 1);
+      return 1 + (item.output ? Math.min(5, countLines(item.output, 5)) : 1);
     case "compaction":
       return 2; // marginTop + divider
     case "diff":
-      return 3 + Math.min(24, (item.text?.split("\n").length ?? 0)); // header + ≤24 lines + border
+      return 3 + Math.min(24, item.text ? countLines(item.text, 24) : 0); // header + ≤24 lines + border
     case "todo":
       // TodoItemView render null (plan hiển thị ở sidebar qua state.plan) —
       // chiếm 0 dòng thực tế trong transcript.

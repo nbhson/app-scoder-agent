@@ -249,8 +249,19 @@ const MAX_SOURCE_LINES = 12;
 
 const exported = new Set<string>();
 
-/** `Angular 12-14 <br/> 2021` → `angular-12-14-2021-a1b2c3`. */
+/** `Angular 12-14 <br/> 2021` → `angular-12-14-2021-a1b2c3`.
+ *
+ * P-perf (item 14): memo keyed on the source ARRAY identity — markdown AST
+ * is cached (parseCached), so a finished mermaid block keeps the same array
+ * across every repaint of a streaming session. The slug (two joins + regex
+ * + sha1) and the writeFileSync behind it now happen ONCE per source;
+ * `exported` already deduped the write, but the hash still ran per frame.
+ */
+const slugMemo = new WeakMap<string[], string>();
+
 function diagramSlug(source: string[]): string {
+  const hit = slugMemo.get(source);
+  if (hit !== undefined) return hit;
   const first = source.join(" ").match(/\["?([^"\]]{3,40})"\?\]/)?.[1] ?? "diagram";
   const base = first
     .toLowerCase()
@@ -259,7 +270,11 @@ function diagramSlug(source: string[]): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 24);
   const hash = createHash("sha1").update(source.join("\n")).digest("hex").slice(0, 6);
-  return `${base || "diagram"}-${hash}`;
+  const slug = `${base || "diagram"}-${hash}`;
+  try {
+    slugMemo.set(source, slug);
+  } catch { /* frozen array — recompute per render, as before */ }
+  return slug;
 }
 
 /**

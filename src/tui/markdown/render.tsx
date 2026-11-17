@@ -36,8 +36,34 @@ const TYPE_KEYWORDS = new Set(["string", "number", "boolean", "any", "unknown", 
  * Highlight one logical line. `inBlockComment` carries multi-line comment
  * state across lines (returned so the caller can thread it through the block).
  * Node keys derive from nodes.length — no separate counter.
+ *
+ * P-perf (item 14): result memo. CodeBlock re-highlights every visible line
+ * on EVERY ink render (streaming repaints run at frame rate) — but the
+ * output depends ONLY on (line, inBlockComment) and React elements are
+ * immutable descriptors, so the node array is safely shareable. LRU-bounded
+ * Map (hit moves to the tail) so a long session can't grow it without limit.
  */
+const highlightMemo = new Map<string, { nodes: React.ReactNode[]; inBlockComment: boolean }>();
+const HIGHLIGHT_MAX = 4096;
+
 function highlightLine(line: string, inBlockComment: boolean): { nodes: React.ReactNode[]; inBlockComment: boolean } {
+  const key = inBlockComment ? "\u0001" + line : line;
+  const hit = highlightMemo.get(key);
+  if (hit) {
+    highlightMemo.delete(key);
+    highlightMemo.set(key, hit);
+    return hit;
+  }
+  const result = highlightLineCore(line, inBlockComment);
+  if (highlightMemo.size >= HIGHLIGHT_MAX) {
+    const oldest = highlightMemo.keys().next();
+    if (!oldest.done) highlightMemo.delete(oldest.value);
+  }
+  highlightMemo.set(key, result);
+  return result;
+}
+
+function highlightLineCore(line: string, inBlockComment: boolean): { nodes: React.ReactNode[]; inBlockComment: boolean } {
   const nodes: React.ReactNode[] = [];
   const keyed = (color: string | undefined, text: string, bold = false): void => {
     nodes.push(<Text key={`n${nodes.length}`} color={color} bold={bold}>{text}</Text>);

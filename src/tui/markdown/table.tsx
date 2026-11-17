@@ -37,8 +37,25 @@ function alignCell(plain: string, width: number, align: TableAlign): string {
   return padEndCells(clipped, width);
 }
 
-/** Column widths: natural content widths, proportionally shrunk to fit. */
+/** Column widths: natural content widths, proportionally shrunk to fit.
+ *
+ * P-perf (item 14): memoized per ROWS array (identity). The markdown AST is
+ * cached (parseCached), so a table block's arrays are stable across renders,
+ * yet every ink repaint re-ran inlineToPlain + measure over EVERY cell —
+ * with streaming that is O(cells) per frame for a table finished long ago.
+ * One entry per rows array; a recompute replaces it (terminal resize is the
+ * only realistic miss). */
+interface ColWidthEntry {
+  header: string[];
+  cols: number;
+  available: number;
+  widths: number[] | null;
+}
+const colWidthMemo = new WeakMap<string[][], ColWidthEntry>();
+
 function columnWidths(spec: TableSpec, cols: number, available: number): number[] | null {
+  const hit = colWidthMemo.get(spec.rows);
+  if (hit && hit.header === spec.header && hit.cols === cols && hit.available === available) return hit.widths;
   const natural: number[] = [];
   for (let c = 0; c < cols; c++) {
     const cells = [spec.header[c] ?? "", ...spec.rows.map((r) => r[c] ?? "")];
@@ -46,11 +63,18 @@ function columnWidths(spec: TableSpec, cols: number, available: number): number[
   }
   const overhead = cols * 2 + (cols + 1); // 2 padding cells + 1 border per column
   const totalNatural = natural.reduce((a, b) => a + b, 0);
-  if (totalNatural + overhead <= available) return natural;
-  const budget = available - overhead;
-  if (cols * MIN_CELL > budget) return null; // cannot fit even minimal columns
-  const shrunk = natural.map((n) => Math.max(MIN_CELL, Math.floor((n / totalNatural) * budget)));
-  return shrunk;
+  let result: number[] | null;
+  if (totalNatural + overhead <= available) result = natural;
+  else {
+    const budget = available - overhead;
+    result = cols * MIN_CELL > budget
+      ? null // cannot fit even minimal columns
+      : natural.map((n) => Math.max(MIN_CELL, Math.floor((n / totalNatural) * budget)));
+  }
+  try {
+    colWidthMemo.set(spec.rows, { header: spec.header, cols, available, widths: result });
+  } catch { /* non-extensible rows array — compute fresh each render, as before */ }
+  return result;
 }
 
 /** One physical border line: ┌───┬───┐ / ├───┼───┤ / └───┴───┘ */
