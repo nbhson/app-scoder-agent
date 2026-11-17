@@ -3,7 +3,48 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.9.19] — 2026-11-18
+
+### Performance
+- **Round-2 deep perf pass — 25 verified hot-path issues fixed with behavior
+  held byte-identical** (tool outputs, error strings, redaction results and
+  the permission decision matrix unchanged; 1024 tests + e2e + MCP smoke
+  green):
+  - `estimateTokens` is an incremental prefix sum keyed on array identity —
+    the per-step full re-encode of the joined history (2–3 encodes/step,
+    quadratic over a run) becomes O(new messages); tool-schema text and
+    sizes memoized per array (`src/context/compaction.ts`, `src/llm/prompt-metrics.ts`)
+  - snapshot + manifest rewrites throttled to ≥5 s at the persist layer
+    with a forced write on every terminal path; `compaction.ran` carries the
+    replacement history so the event-log projection and `scoder resume` stop
+    re-growing trimmed messages (`src/agent/session-persistence.ts`, `src/session/session.ts`)
+  - Anthropic streams share the single idle watchdog (no per-chunk
+    AbortController/timer/race) and one WeakMap `parseToolArgsCached` replaces
+    7 JSON.parse sites — the provider serializer no longer re-parses whole
+    files from history every request (`src/llm/tool-args.ts`, `src/llm/provider-anthropic.ts`)
+  - `read_file` probes images via a 16-byte fd window (was a full binary
+    slurp + second utf8 read); `list_files` never dereferences symlinks (was
+    a realpath chain per entry); `edit_file` got the 2MB size gate; line
+    counting and edit matching switched to indexOf scans — no whole-file
+    split arrays (`src/tools/*`)
+  - shell decisions memoized on (mode, rules, policy, allowlist version);
+    the redaction pre-gate is one alternation regex (no `toLowerCase` copy
+    per 500 KB log); MCP `structuredContent` skips the stringify round-trip
+    when clean; reconnect backoff is cancelable (`src/security/permissions.ts`, `src/llm/llm.ts`, `src/mcp/connection.ts`)
+  - workspace fingerprint runs async (`verifyAll` froze the event loop
+    50–500 ms in `spawnSync rg` + 5 000 statSync); file-index invalidation
+    marks stale + scoped (no sync rg rebuild on the next `@` keystroke); the
+    snapshot git probe left the constructor (lazy, async on capture); sandbox
+    wrapper presence probed once per process (`src/workspace/*`, `src/security/sandbox.ts`)
+  - rc-derived permission lists, policy/approval files, custom commands,
+    skills and the repo map cache behind (mtime, size) signatures — the
+    per-prompt-build re-parse/re-scan happens once per actual change;
+    duplicate skill warnings are deduped instead of appended forever
+    (`src/config/config.ts`, `src/commands/definitions.ts`, `src/context/skills.ts`, `src/context/repo-map.ts`)
+  - TUI: tool-output previews tail-scan (no 200 KB log split per frame),
+    streaming wrap estimates measure only the appended delta, highlight and
+    table-column math cached per line/rows identity, mermaid slug+write once
+    per source (`src/tui/*`)
 
 ### Fixed
 - **Subagents no longer freeze mid-run** — the task relay dropped the child's
