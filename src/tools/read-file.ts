@@ -1,9 +1,51 @@
-import { readFileSync, statSync, realpathSync } from "node:fs";
+import { readFileSync, statSync, realpathSync, openSync, closeSync, readSync } from "node:fs";
 import { relative } from "node:path";
 import { detectImageBytes } from "../media/image.js";
 import { clamp, MAX_FILE_SIZE_BYTES, MAX_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, safePath, toPosInt, toResult } from "./path-safety.js";
 import { isProtectedEnvFile } from "./path-safety.js";
 import type { ToolResult } from "./types.js";
+
+// T7: image file → base64 notice cho TUI render (LLM vẫn nhận mô tả text).
+// P-perf (item 5): the old code slurped the WHOLE file just to sniff 8 magic
+// bytes, then read it a SECOND time as utf8 below — every text read paid a
+// full binary Buffer + toString conversion. Probe only the first 16 bytes
+// via a positional fd window; the full read happens only for real images.
+function sniffImageDataUrl(abs: string): string | undefined {
+  try {
+    const fd = openSync(abs, "r");
+    let ext: string | null;
+    try {
+      const head = Buffer.allocUnsafe(16);
+      const rd = readSync(fd, head, 0, 16, 0);
+      ext = detectImageBytes(head.subarray(0, rd));
+    } finally {
+      closeSync(fd);
+    }
+    if (!ext) return undefined;
+    return `data:image/${ext};base64,${readFileSync(abs).toString("base64")}`;
+  } catch {
+    return undefined; // not an image / unreadable — fall through to text read
+  }
+}
+
+// P-perf: line count via indexOf scan (no array of every line) + slice only
+// the requested window — semantics identical to `content.split("\n")`
+// (including the trailing empty entry for content ending in "\n").
+function windowLines(content: string, total: number, offset: number, limit: number): string[] {
+  const slice: string[] = [];
+  let pos = 0;
+  for (let k = 1; k < offset; k++) {
+    const nl = content.indexOf("\n", pos);
+    if (nl === -1) { pos = content.length; break; }
+    pos = nl + 1;
+  }
+  for (let j = offset - 1; j < total && slice.length < limit; j++) {
+    const nl = content.indexOf("\n", pos);
+    slice.push(nl === -1 ? content.slice(pos) : content.slice(pos, nl));
+    if (nl !== -1) pos = nl + 1;
+  }
+  return slice;
+}
 
 export function toolReadFile(workdir: string, args: { path: string; offset?: number | string; limit?: number | string }): ToolResult {
   return toResult(() => {
@@ -33,27 +75,19 @@ export function toolReadFile(workdir: string, args: { path: string; offset?: num
     };
   }
   // T7: image file → base64 notice cho TUI render (LLM vẫn nhận mô tả text).
-  let image: string | undefined;
-  try {
-    const probe = readFileSync(abs);
-    const ext = detectImageBytes(probe);
-    if (ext) image = `data:image/${ext};base64,${probe.toString("base64")}`;
-  } catch {
-    // not an image / unreadable — fall through to text read
-  }
+  // P-perf (item 5): 16-byte fd-window probe, not a full binary slurp (xem
+  // sniffImageDataUrl); text reads pay zero Buffer copies now.
+  const image = sniffImageDataUrl(abs);
   if (image) {
     return { ok: true, output: `[image: ${args.path}]`, image };
   }
-  if (statSync(abs).size > MAX_FILE_SIZE_BYTES) {
-    return { ok: false, output: `ERROR: ${args.path} exceeds the ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB edit limit.` };
-  }
   const content = readFileSync(abs, "utf8");
-  const lines = content.split("\n");
-  const total = lines.length;
+  let total = 1;
+  for (let i = content.indexOf("\n"); i !== -1; i = content.indexOf("\n", i + 1)) total++;
   // v2: line-range reads — offset (1-based, default 1) + limit (default all).
   const offset = Math.min(toPosInt(args.offset, 1), total);
   const limit = Math.min(toPosInt(args.limit, total - offset + 1), 2000);
-  const slice = lines.slice(offset - 1, offset - 1 + limit);
+  const slice = windowLines(content, total, offset, limit);
   const numberedAll = slice.map((l, i) => `${offset + i}: ${l}`);
 
   // P0-2 (RC-3): cắt theo DÒNG ngay tại ngân sách history (limits.toolOutputChars)

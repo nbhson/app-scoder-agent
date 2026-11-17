@@ -47,9 +47,18 @@ function runCapture(file: string, args: string[]): Promise<{ status: number | nu
   });
 }
 
-/** Walk files under root (bounded depth, skip noise dirs), collect relative paths. */
-function walkFiles(root: string, cb: (rel: string, abs: string) => void, depth = 8): void {
-  if (depth <= 0) return;
+/** Walk files under root (bounded depth, skip noise dirs), collect relative paths.
+ *  P-perf (item 25): `stop` aborts the walk mid-tree. Without it, grep hits at
+ *  the cap or glob at 4× the cap kept descending EVERY remaining directory —
+ *  the callbacks early-returned per file, but the readdir storm continued
+ *  (thousands of syscalls) for a result that was already final. */
+function walkFiles(
+  root: string,
+  cb: (rel: string, abs: string) => void,
+  depth = 8,
+  stop?: { stopped: boolean },
+): void {
+  if (depth <= 0 || stop?.stopped) return;
   let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(root, { withFileTypes: true });
@@ -57,9 +66,10 @@ function walkFiles(root: string, cb: (rel: string, abs: string) => void, depth =
     return;
   }
   for (const e of entries) {
+    if (stop?.stopped) return;
     if (SEARCH_SKIP.has(e.name)) continue;
     const abs = join(root, e.name);
-    if (e.isDirectory()) walkFiles(abs, cb, depth - 1);
+    if (e.isDirectory()) walkFiles(abs, cb, depth - 1, stop);
     else if (e.isFile()) cb(e.name, abs);
   }
 }
@@ -208,8 +218,12 @@ function jsGrepFallback(
     : null;
   const hits: string[] = [];
   let matches = 0;
+  const stop = { stopped: false };
   walkFiles(root, (_name, abs) => {
-    if (matches >= maxResults) return;
+    if (matches >= maxResults) {
+      stop.stopped = true; // P-perf: cap reached — the result is final, prune the tree walk
+      return;
+    }
     const rel = relative(workdir, abs).split(sep).join("/");
     if (includeRx && !includeRx.test(rel)) return;
     try {
@@ -242,7 +256,7 @@ function jsGrepFallback(
         }
       }
     } catch { /* unreadable — skip */ }
-  });
+  }, 8, stop);
   return { ok: true, output: hits.length > 0 ? clamp(hits.join("\n")) : "(no matches)" };
 }
 
@@ -276,11 +290,15 @@ export function toolGlob(workdir: string, args: { pattern: string; path?: string
     const root = safePath(workdir, args.path ?? ".");
     const rx = globToRegExp(pattern);
     const out: string[] = [];
+    const stop = { stopped: false };
     walkFiles(root, (_name, abs) => {
       // Pattern dùng '/' — normalize separator của OS (Windows trả '\') để khớp.
       const rel = relative(workdir, abs).split(sep).join("/");
-      if (rx.test(rel) && out.length < MAX_SEARCH_HITS * 4) out.push(rel);
-    });
+      if (rx.test(rel) && out.length < MAX_SEARCH_HITS * 4) {
+        out.push(rel);
+        if (out.length >= MAX_SEARCH_HITS * 4) stop.stopped = true; // P-perf item 25: cap reached, prune the walk
+      }
+    }, 8, stop);
     out.sort();
     return { ok: true, output: out.length > 0 ? clamp(out.join("\n")) : "(no files match)" };
   });

@@ -156,23 +156,45 @@ export function applyOneEdit(
   if (typeof oldString !== "string" || oldString.length === 0) {
     return { ok: false, error: "old_string must be a non-empty string." };
   }
-  if (content.includes(oldString)) {
-    const count = content.split(oldString).length - 1;
+  // P-perf (item 8): occurrence counting via indexOf scan — `split(oldString)`
+  // allocated the FULL fragment array (twice the file size in strings) just to
+  // count matches, and the fuzzy path materialized every regex match through
+  // `[...matchAll]` spread. Error texts below are byte-identical.
+  const first = content.indexOf(oldString);
+  if (first !== -1) {
+    let count = 1;
+    for (let idx = first + oldString.length; ;) {
+      const next = content.indexOf(oldString, idx);
+      if (next === -1) break;
+      count++;
+      idx = next + oldString.length;
+    }
     if (count > 1) {
       return { ok: false, error: `old_string matches ${count} locations in ${path}; include more surrounding context to make it unique.` };
     }
-    return { ok: true, content: content.replace(oldString, () => newString), fuzzy: false };
+    return { ok: true, content: content.slice(0, first) + newString + content.slice(first + oldString.length), fuzzy: false };
   }
-  const all = [...content.matchAll(new RegExp(wsInsensitiveRegex(oldString).source, "g"))];
-  if (all.length === 0) {
+  const rx = new RegExp(wsInsensitiveRegex(oldString).source, "g");
+  let count = 0;
+  let matchIndex = -1;
+  let matchLength = 0;
+  for (let m: RegExpExecArray | null; (m = rx.exec(content)) !== null; ) {
+    count++;
+    if (count === 1) {
+      matchIndex = m.index;
+      matchLength = m[0].length;
+    }
+    if (m.index === rx.lastIndex) rx.lastIndex++; // defensive: never spin on a zero-width match
+  }
+  if (count === 0) {
     return { ok: false, error: `old_string not found in ${path}. Read the file again and retry with exact text.` };
   }
-  if (all.length > 1) {
-    return { ok: false, error: `old_string not found exactly and ${all.length} whitespace-tolerant matches exist in ${path}; include more surrounding context to disambiguate.` };
+  if (count > 1) {
+    return { ok: false, error: `old_string not found exactly and ${count} whitespace-tolerant matches exist in ${path}; include more surrounding context to disambiguate.` };
   }
   return {
     ok: true,
-    content: content.slice(0, all[0].index) + newString + content.slice(all[0].index + all[0][0].length),
+    content: content.slice(0, matchIndex) + newString + content.slice(matchIndex + matchLength),
     fuzzy: true,
   };
 }

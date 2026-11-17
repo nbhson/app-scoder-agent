@@ -26,9 +26,13 @@ export async function toolWriteFile(ctx: ToolContext, args: { path: string; cont
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, args.content, "utf8");
   const fmtNote = await formatFile(ctx, abs);
+  // P-perf (item 11): count newlines with an indexOf scan — `split("\n")` on
+  // a 2MB file allocated ~50k throwaway strings just for the line count.
+  let writtenLines = 1;
+  for (let i = args.content.indexOf("\n"); i !== -1; i = args.content.indexOf("\n", i + 1)) writtenLines++;
   return {
     ok: true,
-    output: `Wrote ${args.content.split("\n").length} lines to ${args.path}${fmtNote ? `\n${fmtNote}` : ""}`,
+    output: `Wrote ${writtenLines} lines to ${args.path}${fmtNote ? `\n${fmtNote}` : ""}`,
     diff: toToolDiff(args.path, diff),
   };
 }

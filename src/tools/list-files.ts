@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { safePath, toPosInt, toResult, clamp } from "./path-safety.js";
 import { globToRegExp } from "./search.js";
@@ -23,31 +23,38 @@ export function toolListFiles(
     : null;
   const out: string[] = [];
 
+  // P-perf (item 7): the old walk paid a `safePath` (full realpath chain) on
+  // EVERY entry — hundreds of syscalls for a plain listing — only to reject
+  // symlink escapes. readdirSync(withFileTypes) already knows the entry type
+  // without a stat, and symlinks are simply NOT FOLLOWED: no traversal is
+  // possible by construction, so the per-entry realpath is dead weight.
+  // (Reads/writes that DO dereference a path still go through safePath.)
   const walk = (dir: string, depth: number) => {
     if (depth > maxDepth || out.length > 500) return;
-    let entries: string[];
+    let entries: Dirent[];
     try {
-      entries = readdirSync(dir).sort();
+      entries = readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const e of entries) {
-      if (skip.has(e)) continue;
-      if (!includeHidden && e.startsWith(".") && e !== ".github") continue;
-      if (excludeRx?.test(e)) continue;
-      const full = join(dir, e);
-      let st;
-      try {
-        safePath(workdir, relative(workdir, full));
-        st = statSync(full);
-      } catch {
-        continue;
-      }
+      if (skip.has(e.name)) continue;
+      if (!includeHidden && e.name.startsWith(".") && e.name !== ".github") continue;
+      if (excludeRx?.test(e.name)) continue;
+      if (e.isSymbolicLink()) continue; // never traversed, never dereferenced
+      const full = join(dir, e.name);
       const rel = relative(workdir, full).split(sep).join("/");
-      if (st.isDirectory()) {
+      if (e.isDirectory()) {
         out.push(`${rel}/`);
         walk(full, depth + 1);
       } else {
+        let st;
+        try {
+          st = statSync(full);
+        } catch {
+          continue; // raced with a delete — same as the old per-entry guard
+        }
         out.push(`${rel} (${st.size}b)`);
       }
       if (out.length > 500) {

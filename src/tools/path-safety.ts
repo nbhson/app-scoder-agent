@@ -34,6 +34,33 @@ export function clamp(s: string, max = MAX_OUTPUT_CHARS, hint?: string): string 
   return s.slice(0, max) + `\n... [truncated, ${s.length - max} more chars${tail}]`;
 }
 
+/**
+ * P-perf (item 6): safePath runs 1–3× per tool call and each pass resolved
+ * the workdir through `realpathSync` — a full symlink walk of every path
+ * component, for a value that is constant for the process lifetime (tmpdirs
+ * like /var → /private/var get re-walked thousands of times per run). Cache
+ * successes only: a missing workdir must keep re-probing (tests create and
+ * delete workdirs around the same string).
+ */
+const workdirRealMemo = new Map<string, string>();
+
+export function realWorkdirOf(workdir: string): string {
+  const hit = workdirRealMemo.get(workdir);
+  if (hit !== undefined) return hit;
+  try {
+    const real = realpathSync(workdir);
+    if (workdirRealMemo.size > 64) workdirRealMemo.clear();
+    workdirRealMemo.set(workdir, real);
+    return real;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw new Error(`Cannot resolve working directory "${workdir}": ${(err as Error).message}`, { cause: err });
+    }
+    return workdir;
+  }
+}
+
 /** Resolve a user-supplied path inside workdir; reject escapes and symlink traversal. */
 export function safePath(workdir: string, p: string): string {
   const abs = isAbsolute(p) ? resolve(p) : resolve(workdir, p);
@@ -41,15 +68,7 @@ export function safePath(workdir: string, p: string): string {
   if (relLex.startsWith("..") || isAbsolute(relLex)) {
     throw new Error(`Path escapes working directory: ${p}`);
   }
-  let realWorkdir = workdir;
-  try {
-    realWorkdir = realpathSync(workdir);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      throw new Error(`Cannot resolve working directory "${workdir}": ${(err as Error).message}`, { cause: err });
-    }
-  }
+  const realWorkdir = realWorkdirOf(workdir);
   let probe = abs;
   const missing: string[] = [];
   for (;;) {
