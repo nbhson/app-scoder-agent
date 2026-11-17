@@ -75,7 +75,7 @@ export function fileIndexStale(workdir: string): string[] {
   return hit.files;
 }
 
-function rgFilesAsync(workdir: string): Promise<string[] | null> {
+export function rgFilesAsync(workdir: string): Promise<string[] | null> {
   return new Promise((res) => {
     const child = spawn("rg", RG_FILES_ARGS(workdir));
     let out = "";
@@ -99,9 +99,21 @@ function rgFilesAsync(workdir: string): Promise<string[] | null> {
   });
 }
 
-/** Cache invalidate — call after write/edit tool_result (scope: whole index). */
-export function invalidateFileIndex(): void {
-  cache.clear();
+/** Cache invalidate — call after write/edit tool_result. P-perf (item 10):
+ *  mark STALE instead of deleting, and scope to the modified workdir when
+ *  known: `cache.clear()` also dropped OTHER workdirs (spawned sub-agents),
+ *  and a full delete left the keystroke path (`fileIndexStale`) with no hit →
+ *  the next `@` after any write ran `spawnSync rg` synchronously — a visible
+ *  freeze exactly when the user types. With built=0 the sync builder still
+ *  rebuilds on the next call (TTL check fails) while fileIndexStale serves the
+ *  old list and refreshes asynchronously. Same freshness, no blocking. */
+export function invalidateFileIndex(workdir?: string): void {
+  if (workdir !== undefined) {
+    const hit = cache.get(workdir);
+    if (hit) hit.built = 0;
+    return;
+  }
+  for (const hit of cache.values()) hit.built = 0;
 }
 
 function walkFiles(root: string, prefix: string, out: string[], depth: number): void {

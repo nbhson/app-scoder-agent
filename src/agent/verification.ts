@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../config/config.js";
 import { runBuild, type BuildResult } from "../workspace/build.js";
-import { workspaceFingerprint } from "../workspace/fingerprint.js";
+import { workspaceFingerprintAsync } from "../workspace/fingerprint.js";
 import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
 import type { ChatResult } from "../llm/llm.js";
 import { parseDiagnostics, detectVerifyCmds, type VerifyCommands } from "../workspace/diagnostics.js";
@@ -53,7 +53,7 @@ export async function verifyAll(runtime: VerificationRuntime, buildCmd: string):
   // P1-2: fingerprint chỉ khi bật cache (rc "verifyCache": false để tắt).
   const cacheEnabled = runtime.config.verifyCache !== false;
   const cacheKey = cmdList.join("\u0000");
-  const fingerprint = cacheEnabled ? workspaceFingerprint(runtime.config.workdir) : "";
+  const fingerprint = cacheEnabled ? await workspaceFingerprintAsync(runtime.config.workdir) : "";
   if (fingerprint) {
     const hit = runtime.verifyCache.read(cacheKey);
     if (hit && hit.fingerprint === fingerprint && hit.result.success) {

@@ -10,8 +10,9 @@
  */
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
+import { stat as statAsync } from "node:fs/promises";
 import { join } from "node:path";
-import { fileIndex } from "./file-index.js";
+import { fileIndex, rgFilesAsync } from "./file-index.js";
 
 /** Số file tối đa đưa vào fingerprint (file-index cap thực tế ~vài nghìn). */
 const MAX_FINGERPRINT_FILES = 5_000;
@@ -27,19 +28,63 @@ const MAX_FINGERPRINT_FILES = 5_000;
  */
 export function workspaceFingerprint(workdir: string, cap = MAX_FINGERPRINT_FILES): string {
   const files = fileIndex(workdir, true);
-  const hash = createHash("sha1");
-  const truncated = files.length > cap;
-  const list = truncated ? files.slice(0, cap) : files;
-  hash.update(`files=${files.length}${truncated ? " (capped)" : ""}\n`);
+  const list = files.slice(0, cap);
+  const stats: Array<{ size: number; mtimeMs: number } | null> = [];
   for (const rel of list) {
-    let st;
     try {
-      st = statSync(join(workdir, rel));
+      const st = statSync(join(workdir, rel));
+      stats.push({ size: st.size, mtimeMs: st.mtimeMs });
     } catch {
-      hash.update(`${rel}:gone\n`);
+      stats.push(null);
+    }
+  }
+  return digestFingerprint(files, list, stats);
+}
+
+/**
+ * P-perf (item 9): async twin for the verify hot path. `verifyAll` is awaited
+ * by the agent loop but runs INSIDE the event loop — the sync version's
+ * `spawnSync rg` + up to 5.000 statSync calls froze TUI paint and stream
+ * parsing for 50–500 ms. Same file list source (`rg --files`), same stats
+ * (batched), SAME digest bytes — the two functions are interchangeable for
+ * the verify cache.
+ */
+export async function workspaceFingerprintAsync(workdir: string, cap = MAX_FINGERPRINT_FILES): Promise<string> {
+  let files = await rgFilesAsync(workdir);
+  if (!files || files.length === 0) {
+    files = fileIndex(workdir, true); // no rg / empty → identical fallback to the sync path
+  } else {
+    files.sort();
+  }
+  const list = files.slice(0, cap);
+  const stats: Array<{ size: number; mtimeMs: number } | null> = [];
+  for (let i = 0; i < list.length; i += 200) {
+    const batch = await Promise.allSettled(
+      list.slice(i, i + 200).map((rel) => statAsync(join(workdir, rel))),
+    );
+    for (const r of batch) {
+      stats.push(r.status === "fulfilled" ? { size: r.value.size, mtimeMs: r.value.mtimeMs } : null);
+    }
+  }
+  return digestFingerprint(files, list, stats);
+}
+
+/** Shared digest core — identical string sequence for sync and async paths. */
+function digestFingerprint(
+  files: readonly string[],
+  list: readonly string[],
+  stats: ReadonlyArray<{ size: number; mtimeMs: number } | null>,
+): string {
+  const hash = createHash("sha1");
+  const truncated = files.length > list.length;
+  hash.update(`files=${files.length}${truncated ? " (capped)" : ""}\n`);
+  for (let i = 0; i < list.length; i++) {
+    const st = stats[i];
+    if (!st) {
+      hash.update(`${list[i]}:gone\n`);
       continue;
     }
-    hash.update(`${rel}:${st.size}:${Math.round(st.mtimeMs)}\n`);
+    hash.update(`${list[i]}:${st.size}:${Math.round(st.mtimeMs)}\n`);
   }
   return hash.digest("hex");
 }
