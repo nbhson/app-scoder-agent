@@ -61,10 +61,25 @@ function messageKey(m: ChatMessage): string {
 }
 
 /** Serialize phần tools — đặc trưng và ổn định theo thứ tự khai báo. */
+// P-perf (item 15): identity memo — `promptMetrics` runs per LLM call with
+// the agent's stable `tools` array (all 4 mutation sites REPLACE the array,
+// never push), yet every call re-stringified 25–50 JSON schemas just to hash
+// and measure a string that could not have changed.
+const toolsTextMemo = new WeakMap<ToolSpec[], string>();
+
 export function serializeTools(tools: ToolSpec[]): string {
-  return (tools ?? [])
+  const arr = tools ?? [];
+  const hit = toolsTextMemo.get(arr);
+  if (hit !== undefined) return hit;
+  const text = arr
     .map((t) => t.function.name + "\u0000" + (t.function.description ?? "") + "\u0000" + JSON.stringify(t.function.parameters ?? {}))
     .join("\u0003");
+  try {
+    toolsTextMemo.set(arr, text);
+  } catch {
+    /* non-extensible array — rebuild next time, as before */
+  }
+  return text;
 }
 
 /**

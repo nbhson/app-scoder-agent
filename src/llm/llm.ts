@@ -28,10 +28,23 @@ const REDACTION_PATTERNS: Array<[RegExp, string]> = [
  *  UNCHANGED → byte-identical output. */
 const REDACT_GATE = ["bearer", "sk-", "ghp_", "github_pat_", "xox", "akia", "private key", "api", "token", "secret", "password"];
 
+// P-perf (item 17): ONE case-insensitive alternation regex on the original
+// string. The old gate allocated `text.toLowerCase()` — a full copy of every
+// scanned string (500 KB build logs doubled memory traffic per call) — and
+// ran 11 separate `includes` passes. The literals are pure ASCII, so
+// /lit1|lit2/i on the raw text matches exactly the same strings.
+const REDACT_GATE_RX = new RegExp(REDACT_GATE.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i");
+
+/** True when the text MIGHT contain a secret shape (cheap pre-gate for
+ *  callers that would otherwise pay a serialize → redact → parse round trip
+ *  on every MCP result). */
+export function mayContainSecrets(text: string): boolean {
+  return REDACT_GATE_RX.test(text);
+}
+
 /** Redact known secret shapes from arbitrary tool/LLM/log output. */
 export function redactSecrets(text: string): string {
-  const probe = text.toLowerCase();
-  if (!REDACT_GATE.some((lit) => probe.includes(lit))) return text;
+  if (!mayContainSecrets(text)) return text;
   let out = text;
   for (const [rx, replacement] of REDACTION_PATTERNS) {
     out = out.replace(rx, replacement);

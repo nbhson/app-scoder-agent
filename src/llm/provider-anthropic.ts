@@ -11,6 +11,7 @@
 import type { ChatMessage, ChatResult, TokenUsage, ToolCall, StreamChunk, ToolSpec } from "./llm.js";
 import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal, redactSecrets } from "./llm.js";
 import { withRetry } from "./retry.js";
+import { parseToolArgsCached } from "./tool-args.js";
 
 // ---------------------------------------------------------------------------
 // Anthropic wire types
@@ -43,24 +44,15 @@ interface AnthropicResponse {
 // validate bằng reference chuỗi arguments. `block.input` chỉ đi qua
 // JSON.stringify phía serialize (và phía parse ở fromAnthropicResponse),
 // không ai mutate ⇒ chia sẻ object an toàn.
-const parsedArgsMemo = new WeakMap<object, { raw: string; value: Record<string, unknown> }>();
-
 function parseToolArgs(tc: { arguments?: string }): Record<string, unknown> {
-  const raw = tc.arguments ?? "";
-  const hit = parsedArgsMemo.get(tc);
-  if (hit && hit.raw === raw) return hit.value;
-  let value: Record<string, unknown>;
+  // P-perf: delegate to the shared memoized parser (same WeakMap semantics);
+  // Anthropic serialization SWALLOWS malformed args (the wire payload is
+  // `input: {}`) instead of throwing like the agent-side callers.
   try {
-    value = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    return parseToolArgsCached(tc as { arguments: string });
   } catch {
-    value = {};
+    return {};
   }
-  try {
-    parsedArgsMemo.set(tc, { raw, value });
-  } catch {
-    /* frozen tool_call object — parse lại mỗi lần như trước */
-  }
-  return value;
 }
 
 export function toAnthropicMessages(messages: ChatMessage[]): {
@@ -368,19 +360,31 @@ export class AnthropicClient {
     // (same rationale as LlmClient.streamChat: long streams are normal).
     stopTimer();
     const idleTimeoutMs = opts.idleTimeoutMs ?? this.timeoutMs;
+    // P-perf: ONE watchdog interval + activity timestamp instead of an
+    // AbortController + setTimeout + Promise.race + listener PER CHUNK — a
+    // 50 chunk/s stream used to allocate ~200 throwaway objects/second on the
+    // hot path. Idle detection lags at most 1s (the floor timeout is ≥30s).
+    const idleAc = new AbortController();
+    let lastActivity = Date.now();
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastActivity >= idleTimeoutMs) {
+        idleAc.abort(new DOMException(`stream idle for ${idleTimeoutMs / 1000}s`, "TimeoutError"));
+      }
+    }, 1_000);
+    watchdog.unref?.();
     const readWithIdleTimeout = async (): Promise<{ done: boolean; value?: Uint8Array }> => {
-      const ac = new AbortController();
-      const t = setTimeout(
-        () => ac.abort(new DOMException(`stream idle for ${idleTimeoutMs / 1000}s`, "TimeoutError")),
-        idleTimeoutMs,
-      );
+      if (idleAc.signal.aborted) throw idleAc.signal.reason;
+      let onAbort: () => void = () => {};
+      const abortP = new Promise<never>((_, rej) => {
+        onAbort = () => rej(idleAc.signal.reason);
+        idleAc.signal.addEventListener("abort", onAbort, { once: true });
+      });
       try {
-        return await Promise.race([
-          reader.read(),
-          new Promise<never>((_, rej) => ac.signal.addEventListener("abort", () => rej(ac.signal.reason), { once: true })),
-        ]) as { done: boolean; value?: Uint8Array };
+        return await Promise.race([reader.read(), abortP]);
       } finally {
-        clearTimeout(t);
+        // Shared signal: remove this read's listener, otherwise one per chunk
+        // would accumulate for the whole stream (MaxListenersExceeded + leak).
+        idleAc.signal.removeEventListener("abort", onAbort);
       }
     };
 
@@ -475,8 +479,14 @@ export class AnthropicClient {
 
     try {
       while (true) {
-        const { done, value } = await readWithIdleTimeout();
+        // Guard the pending read against a late abort (idle watchdog firing
+        // while the consumer paused at a yield): a no-op catch prevents an
+        // unhandled rejection from crashing the process.
+        const pending = readWithIdleTimeout();
+        pending.catch(() => {});
+        const { done, value } = await pending;
         if (done) break;
+        lastActivity = Date.now(); // watchdog: a chunk proves the connection is alive
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");
@@ -509,6 +519,7 @@ export class AnthropicClient {
         };
       }
     } finally {
+      clearInterval(watchdog); // P-perf: shared idle watchdog off
       // H-09: record complete tool calls accumulated so far, for continuation.
       this.lastPartialToolCalls = [...toolBlocks.values()]
         .filter((b) => b.name)
