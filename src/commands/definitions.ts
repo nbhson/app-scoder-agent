@@ -129,7 +129,7 @@ export interface CompletionProvider {
   candidates(token: string): CompletionCandidate[];
 }
 
-import { readdirSync, existsSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, basename, extname } from "node:path";
 import { suggest } from "../workspace/file-index.js";
@@ -172,9 +172,42 @@ function substituteTemplate(body: string, argStr: string): string {
   return out;
 }
 
-/** Discover custom commands from ~/.scoder/commands/*.md + .scoder/commands/*.md. */
+/** Discover custom commands from ~/.scoder/commands/*.md + .scoder/commands/*.md.
+ *
+ * P-perf (item 21): memoized by a stat signature of the same file set the
+ * scan reads (listing + per-file mtime+size), so every slash-command
+ * dispatch and `/help` render stopped re-reading + re-parsing every command
+ * .md. Rewrites/added/removed files change the signature → immediate
+ * re-scan (command-registry tests create files between calls). Returns a
+ * fresh array copy — callers filter/find without mutating, but keep the
+ * cached list pristine regardless.
+ */
+const customCmdMemo = new Map<string, { sig: string; cmds: CustomCommand[] }>();
+
 export function discoverCustomCommands(workdir: string): CustomCommand[] {
-  const dirs = [resolve(workdir, ".scoder", "commands"), join(homedir(), ".scoder", "commands")].filter((d) => existsSync(d));
+  const dirs = [resolve(workdir, ".scoder", "commands"), join(homedir(), ".scoder", "commands")];
+  let sig = "";
+  for (const dir of dirs) {
+    sig += `${dir}\u0001`;
+    let names: string[];
+    try {
+      names = readdirSync(dir).filter((f) => extname(f) === ".md").sort();
+    } catch {
+      sig += "\u0000"; // missing / not a directory — the scan skips it
+      continue;
+    }
+    for (const f of names) {
+      try {
+        const st = statSync(join(dir, f));
+        sig += `${f}:${st.isFile() ? 1 : 0}:${st.mtimeMs}:${st.size},`;
+      } catch {
+        sig += `${f}:gone,`;
+      }
+    }
+    sig += "\u0000";
+  }
+  const hit = customCmdMemo.get(workdir);
+  if (hit && hit.sig === sig) return [...hit.cmds];
 
   const results: CustomCommand[] = [];
   for (const dir of dirs) {
@@ -196,7 +229,9 @@ export function discoverCustomCommands(workdir: string): CustomCommand[] {
       if (parsed) results.push(parsed);
     }
   }
-  return results;
+  if (customCmdMemo.size > 64) customCmdMemo.clear();
+  customCmdMemo.set(workdir, { sig, cmds: results });
+  return [...results];
 }
 
 /** Parse a custom command .md file. Returns null on error. */

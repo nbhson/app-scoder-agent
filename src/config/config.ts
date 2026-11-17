@@ -602,13 +602,56 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return cfg;
 }
 
+/** P-perf (item 20): shared (mtimeMs, size) stat-stamp helpers — the same
+ *  invalidation contract as rcTextMemo above: a file is re-read/re-parsed
+ *  only when its stat changes (hot-reload tests that rewrite files keep
+ *  working: writeFileSync bumps mtimeMs). */
+interface FileStamp { m: number; s: number }
+const NO_FILE: FileStamp = { m: -1, s: -1 };
+
+function stampOf(path: string | null): FileStamp {
+  if (!path) return NO_FILE;
+  try {
+    const st = statSync(path);
+    return { m: st.mtimeMs, s: st.size };
+  } catch {
+    return NO_FILE;
+  }
+}
+
+function sameStamp(a: FileStamp, b: FileStamp): boolean {
+  return a.m === b.m && a.s === b.s;
+}
+
+/** The project rc actually chosen by loadRcFile (first hit wins), or null. */
+function projectRcPath(workdir: string): string | null {
+  for (const name of [".scoderrc.json", ".scoderrc"]) {
+    const p = resolve(workdir, name);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 /** Extract permission lists from the rc file (loaded again here to avoid widening AgentConfig). */
+const permListsMemo = new Map<string, { g: FileStamp; p: FileStamp; lists: { allowCommands: string[]; denyCommands: string[] } }>();
+
 export function loadPermissionLists(workdir: string): { allowCommands: string[]; denyCommands: string[] } {
+  // P-perf (item 20): derived-list cache — Agent construction + setPermissionMode
+  // + every subagent re-ran existsSync/JSON.parse/merge for two rc files to
+  // produce the same two small arrays. Callers (PermissionChecker via
+  // builtinRulesFromLists) only READ these arrays, so the cached object is
+  // shared deliberately.
+  const g = stampOf(globalRcPath());
+  const p = stampOf(projectRcPath(workdir));
+  const hit = permListsMemo.get(workdir);
+  if (hit && sameStamp(hit.g, g) && sameStamp(hit.p, p)) return hit.lists;
   const rc = loadRcFile(workdir);
-  return {
+  const lists = {
     allowCommands: parseList(rc.permissions?.allowCommands),
     denyCommands: parseList(rc.permissions?.denyCommands),
   };
+  permListsMemo.set(workdir, { g, p, lists });
+  return lists;
 }
 
 /**
@@ -617,6 +660,8 @@ export function loadPermissionLists(workdir: string): { allowCommands: string[];
  * ~/.scoder/policies.json (user-global), /etc/scoder/policies.json (machine),
  * SCODER_POLICY=<file> env (highest).
  */
+const policyFileMemo = new Map<string, FileStamp & { rules: PermissionRule[] }>();
+
 export function loadPolicyRules(_workdir: string): PermissionRule[] {
   const candidates = [
     join(homedir(), ".scoder", "policies.json"),
@@ -626,9 +671,18 @@ export function loadPolicyRules(_workdir: string): PermissionRule[] {
   const out: PermissionRule[] = [];
   for (const p of candidates) {
     if (!existsSync(p)) continue;
+    const st = stampOf(p);
+    const hit = policyFileMemo.get(p);
+    // Malformed files are never cached: every call must keep printing the
+    // warning, exactly like the old parse-on-every-call code path below.
+    if (hit && sameStamp(hit, st)) {
+      out.push(...hit.rules);
+      continue;
+    }
     try {
       const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
       const rules = parsePermissionRules(raw, p) ?? [];
+      policyFileMemo.set(p, { m: st.m, s: st.s, rules });
       out.push(...rules);
     } catch (err) {
       console.error(`⚠  ignoring malformed policy file ${p}: ${(err as Error).message}`);
@@ -646,15 +700,26 @@ export function savedApprovalsPath(workdir: string): string {
   return resolve(workdir, ".scoder", "permissions.local.json");
 }
 
+const approvalsFileMemo = new Map<string, FileStamp & { rules: PermissionRule[] }>();
+
 export function loadSavedApprovals(workdir: string): PermissionRule[] {
+  // P-perf (item 20): stat-keyed parse cache (same contract as policy above).
+  // Every "always allow" answer goes through saveApproval → writeFileSync →
+  // the next read sees a new mtime, so hot reload stays exact. Consumers
+  // (PermissionChecker, saveApproval's filter) only read the returned array.
   const p = savedApprovalsPath(workdir);
   if (!existsSync(p)) return [];
+  const st = stampOf(p);
+  const hit = approvalsFileMemo.get(p);
+  if (hit && sameStamp(hit, st)) return hit.rules;
   try {
     const raw = JSON.parse(readFileSync(p, "utf8")) as unknown;
     const rules = raw && typeof raw === "object" && !Array.isArray(raw) && "rules" in raw
       ? (raw as { rules?: unknown }).rules
       : raw;
-    return parsePermissionRules(rules, p) ?? [];
+    const parsed = parsePermissionRules(rules, p) ?? [];
+    approvalsFileMemo.set(p, { m: st.m, s: st.s, rules: parsed });
+    return parsed;
   } catch {
     return [];
   }

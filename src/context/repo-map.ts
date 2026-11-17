@@ -151,28 +151,55 @@ function cacheFile(workdir: string): string {
 /**
  * Build (or reuse from cache) the repo map for the workdir root.
  * Cache lives in .scoder/cache/ — safe to delete at any time.
+ *
+ * P-perf (item 22): short in-process memo in FRONT of the disk cache.
+ * buildRepoMap runs on every prompt rebuild; even on a hit it paid a full
+ * repoMapKey walk (readdir + statSync up to 2.000 files + sha1) plus a read
+ * + JSON.parse of the whole cached map. The TTL memo collapses bursts of
+ * rebuilds within one step to a single walk; expiry (2 s) keeps a map that
+ * is never older than the disk cache would have been by more than a step,
+ * and invalidateRepoMap clears it eagerly. `repoMapKey` itself stays exact
+ * and synchronous — tests (and fingerprint semantics) rely on it seeing
+ * every mtime change immediately.
  */
+const MEMO_TTL_MS = 2_000;
+const repoMapMemo = new Map<string, { map: string; at: number }>();
+
 export function buildRepoMap(workdir: string, budgetChars = DEFAULT_BUDGET_CHARS): string {
+  const memoKey = `${workdir}\u0000${budgetChars}`;
+  const hit = repoMapMemo.get(memoKey);
+  const now = Date.now();
+  if (hit && now - hit.at < MEMO_TTL_MS) return hit.map;
   let key = "";
+  let map: string;
   try {
     key = repoMapKey(workdir);
     const cached = JSON.parse(readFileSync(cacheFile(workdir), "utf8")) as { key?: string; map?: string };
-    if (cached.key === key && typeof cached.map === "string") return cached.map;
+    if (cached.key === key && typeof cached.map === "string") {
+      map = cached.map;
+    } else {
+      throw new Error("cache miss");
+    }
   } catch {
     // no/invalid cache — rebuild
+    map = renderRepoMap(workdir, budgetChars);
+    try {
+      mkdirSync(dirname(cacheFile(workdir)), { recursive: true });
+      writeFileSync(cacheFile(workdir), JSON.stringify({ key, generatedAt: new Date().toISOString(), map }), "utf8");
+    } catch {
+      // cache is best-effort
+    }
   }
-  const map = renderRepoMap(workdir, budgetChars);
-  try {
-    mkdirSync(dirname(cacheFile(workdir)), { recursive: true });
-    writeFileSync(cacheFile(workdir), JSON.stringify({ key, generatedAt: new Date().toISOString(), map }), "utf8");
-  } catch {
-    // cache is best-effort
-  }
+  if (repoMapMemo.size > 32) repoMapMemo.clear(); // workdir churn guard (subagents, tests)
+  repoMapMemo.set(memoKey, { map, at: now });
   return map;
 }
 
 /** Explicit invalidation (e.g. after /compact or a cache-clearing command). */
 export function invalidateRepoMap(workdir: string): void {
+  for (const k of repoMapMemo.keys()) {
+    if (k.startsWith(`${workdir}\u0000`)) repoMapMemo.delete(k);
+  }
   try {
     writeFileSync(cacheFile(workdir), "{}", "utf8");
   } catch {

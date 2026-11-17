@@ -6,7 +6,7 @@
  * progressive disclosure (index → body → references/*.md), allowed-tools
  * enforcement, auto-match scoring, and compat with Claude/OpenCode skill dirs.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { join, extname, resolve, relative, isAbsolute } from "node:path";
 
@@ -35,6 +35,31 @@ export interface SkillWarning {
 const MAX_SKILL_BODY_CHARS = 20_000;
 
 export const skillWarnings: SkillWarning[] = [];
+
+/**
+ * P-perf (item 21): skill discovery ran on EVERY prompt build (index,
+ * findSkill, matchSkillPrefix, TUI list…) and each pass re-read + re-parsed
+ * every SKILL.md plus emitted duplicate warnings into a module-level array
+ * that grew unbounded over a long session.
+ *
+ * warnOnce: (path, message) emitted at most once while it remains in the
+ * array. Tests clear `skillWarnings` in place (`length = 0`) — a shrinking
+ * array outside our pushes means "start fresh", so the dedupe set resets.
+ */
+const warnedKeys = new Set<string>();
+let warnedCount = 0;
+
+function warnOnce(path: string, message: string): void {
+  if (skillWarnings.length < warnedCount) {
+    warnedKeys.clear();
+    warnedCount = 0;
+  }
+  const k = `${path}\u0000${message}`;
+  if (warnedKeys.has(k)) return;
+  warnedKeys.add(k);
+  skillWarnings.push({ path, message });
+  warnedCount++;
+}
 
 /** Minimal YAML-lite parser supporting scalars, flow arrays, block arrays, nested. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -98,7 +123,7 @@ export function loadSkillFile(path: string, scope: Skill["scope"]): Skill | null
   if (!name) return null;
   const description = String(meta.description || "").trim();
   if (!description) {
-    skillWarnings.push({ path, message: `skill "${name}" thiếu description — bỏ qua` });
+    warnOnce(path, `skill "${name}" thiếu description — bỏ qua`);
     return null;
   }
   const allowedToolsRaw = meta["allowed-tools"] ?? meta.allowedtools ?? meta.allowed_tools;
@@ -185,19 +210,79 @@ function scanRoot(root: string, scope: Skill["scope"]): Skill[] {
   return out;
 }
 
+/**
+ * P-perf (item 21): stat-signature memo. The signature is built from the
+ * SAME file set scanRoot reads (root listing + SKILL.md/flat-.md mtime+size),
+ * so any add/remove/rewrite invalidates it — disk changes stay visible
+ * immediately (hot-reload tests rewrite files and re-discover in-process).
+ * A hit skips read+parse of every skill file (the prompt builder calls this
+ * several times per turn). Returns a fresh array copy: matchSkillPrefix
+ * sorts its result in place and must not reorder the cached list.
+ */
+interface SkillsMemo {
+  sig: string;
+  skills: Skill[];
+}
+const discoverMemo = new Map<string, SkillsMemo>();
+
+function skillsSignature(roots: ReadonlyArray<{ root: string; scope: Skill["scope"] }>): string {
+  let sig = "";
+  for (const { root, scope } of roots) {
+    sig += `${scope}\u0001${root}\u0001`;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+      sig += "\u0000"; // missing root — scanRoot would return []
+      continue;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const e of entries) {
+      try {
+        if (e.isDirectory()) {
+          const st = statSync(join(root, e.name, "SKILL.md"));
+          sig += `${e.name}/SKILL.md:${st.mtimeMs}:${st.size},`;
+        } else if (e.isFile() && e.name.toLowerCase().endsWith(".md") && e.name.toLowerCase() !== "skill.md") {
+          const st = statSync(join(root, e.name));
+          sig += `${e.name}:${st.mtimeMs}:${st.size},`;
+        }
+      } catch {
+        /* missing SKILL.md / raced delete — contributes nothing, mirrors scanRoot */
+      }
+    }
+    try {
+      const st = statSync(join(root, "SKILL.md"));
+      sig += `./SKILL.md:${st.mtimeMs}:${st.size},`;
+    } catch { /* no root-level SKILL.md */ }
+    sig += "\u0000";
+  }
+  return sig;
+}
+
 export function discoverSkills(workdir: string): Skill[] {
-  const byName = new Map<string, Skill>();
+  const roots: Array<{ root: string; scope: Skill["scope"] }> = [];
   for (const root of [...globalSkillsRoots(), ...projectSkillsRoots(workdir)]) {
     const relRoot = relative(resolve(workdir), resolve(root));
     const scope: Skill["scope"] = !relRoot.startsWith("..") && !isAbsolute(relRoot) ? "project" : "global";
+    roots.push({ root, scope });
+  }
+  const sig = skillsSignature(roots);
+  const hit = discoverMemo.get(workdir);
+  if (hit && hit.sig === sig) return [...hit.skills];
+
+  const byName = new Map<string, Skill>();
+  for (const { root, scope } of roots) {
     for (const s of scanRoot(root, scope)) {
       if (byName.has(s.name)) {
-        skillWarnings.push({ path: s.path, message: `skill "${s.name}" trùng tên (${s.scope} overrides ${byName.get(s.name)?.scope})` });
+        warnOnce(s.path, `skill "${s.name}" trùng tên (${s.scope} overrides ${byName.get(s.name)?.scope})`);
       }
       byName.set(s.name, s);
     }
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const skills = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  if (discoverMemo.size > 64) discoverMemo.clear(); // workdir churn guard (subagents, tests)
+  discoverMemo.set(workdir, { sig, skills });
+  return [...skills];
 }
 
 /**
