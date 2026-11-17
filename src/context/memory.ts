@@ -11,6 +11,7 @@
  * inject it on compaction and every N steps, never the raw accumulators.
  */
 import type { ChatMessage } from "../llm/llm.js";
+import { parseToolArgsCached } from "../llm/tool-args.js";
 import type { TodoItem } from "../tools/types.js";
 
 export interface WorkingMemory {
@@ -145,7 +146,7 @@ export function memoryFromMessages(messages: ChatMessage[], goal?: string): Work
       for (const tc of m.tool_calls) {
         toolNameById.set(tc.id, tc.name);
         try {
-          const args = JSON.parse(tc.arguments) as Record<string, unknown>;
+          const args = parseToolArgsCached(tc);
           if (tc.name === "read_file" && typeof args.path === "string") noteFileRead(mem, args.path);
           if ((tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch") && typeof args.path === "string") {
             noteFileChanged(mem, args.path);

@@ -1,6 +1,7 @@
 import type { AgentConfig } from "./config/config.js";
 import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, adaptiveToolOutputChars } from "./config/config.js";
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
+import { parseToolArgsCached } from "./llm/tool-args.js";
 import type {ToolResult} from "./tools/types.js";
 import { AnthropicClient } from "./llm/provider-anthropic.js";
 import { allToolSpecs, baseToolSpecs } from "./tools/registry.js";
@@ -638,7 +639,7 @@ export class Agent {
     this.events.append({ type: "message.added", message: msg });
     // v2: working memory — file usage + failures (cheap, best-effort).
     try {
-      const args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
+      const args = parseToolArgsCached(tc);
       if (tc.name === "read_file" && typeof args.path === "string") noteFileRead(this.memory, args.path);
       else if ((tc.name === "write_file" || tc.name === "edit_file" || tc.name === "apply_patch") && typeof args.path === "string") {
         noteFileChanged(this.memory, args.path);
@@ -1528,7 +1529,7 @@ export class Agent {
 
 
   /** Persist current agent state (v2 event log + manifest; crash-resumable). */
-  private saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null): void {
+  private saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null, force = false): void {
     this.lastBuildResult = lastBuild;
     persistSession({
       config: this.config,
@@ -1539,7 +1540,7 @@ export class Agent {
       messages: this.messages,
       usageTotals: this.usageTotals,
       sessionCreatedAt: this.sessionCreatedAt,
-    }, steps, buildCmd, lastBuild);
+    }, steps, buildCmd, lastBuild, { force });
   }
 
   // ── Frontend-facing APIs (REPL/TUI slash commands) ─────────────────────────
@@ -1584,6 +1585,7 @@ export class Agent {
         tokensAfter,
         manual: true,
         summary: summary.slice(0, 2000),
+        messages: this.messages, // replay anchor — see run-loop compaction path
       });
       this.reporter.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens)`);
       this.emit({ type: "compaction", tokensBefore, tokensAfter, manual: true });
@@ -1685,6 +1687,10 @@ export class Agent {
     chatOnly = false,
   ): AgentRunResult {
     this.events.append({ type: "finish", success, summary: summary.slice(0, 2000) });
+    // P-perf item 2: the per-step snapshot write is throttled — every terminal
+    // path must force the final projection (manifest ordering + resume both
+    // read it, and finish() is otherwise the ONLY end for the success paths).
+    this.saveSession(steps, buildCmd, this.lastBuildResult, true);
     if (success) {
       if (chatOnly) {
         this.reporter.success(`Done in ${steps} step(s).`);

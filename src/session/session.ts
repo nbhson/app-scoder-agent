@@ -165,6 +165,16 @@ export class EventSessionStore {
       case "message.added":
         this._messages.push(ev.message as ChatMessage);
         break;
+      case "compaction.ran":
+        // P-perf item 18: the log is append-only but compaction REPLACES the
+        // history. The event carries the new array → projection follows the
+        // replacement instead of growing with every summarized-away message
+        // (old logs without `messages` keep the previous semantics).
+        // COPY, never alias: the caller hands us the LIVE runtime array and
+        // later pushes the same messages through `message.added` events —
+        // aliasing would duplicate every entry.
+        if (Array.isArray(ev.messages)) this._messages = [...(ev.messages as ChatMessage[])];
+        break;
       case "build.checked":
         this._lastBuild = {
           success: Boolean(ev.success),
@@ -353,6 +363,13 @@ export function sessionFromEventLog(workdir: string, id: string): SessionFile | 
     updatedAt = ev.ts;
     if (ev.type === "run.started") task = String(ev.task ?? "");
     else if (ev.type === "message.added") messages.push(ev.message as ChatMessage);
+    else if (ev.type === "compaction.ran" && Array.isArray(ev.messages)) {
+      // Same semantics as EventSessionStore.project (item 18): the carried
+      // replacement array resets the projection to the post-compaction
+      // history. Older logs (no `messages`) keep the append-only behavior.
+      messages.length = 0;
+      messages.push(...(ev.messages as ChatMessage[]));
+    }
     else if (ev.type === "build.checked") {
       lastBuild = { success: Boolean(ev.success), command: String(ev.command ?? ""), output: String(ev.output ?? "") };
     }

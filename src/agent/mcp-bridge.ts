@@ -106,7 +106,11 @@ export function governedMcpSpecs(runtime: McpBridgeRuntime): ToolSpec[] {
   // Window THẬT (rc `contextWindow` hoặc probe P1-1) siết trần mạnh hơn trần
   // cứng khi server nhỏ — xem comment SCHEMA_SHARE_OF_WINDOW.
   const window = runtime.config.contextWindow ?? 0;
-  const builtinTokens = estimateSchemaTokens(allToolSpecs());
+  // P-perf (item 15): builtinTokens chỉ được `effectiveMcpSchemaCap` đọc khi
+  // cả declared > 0 VÀ window > 0 (đường khác trả về ngay). Đo schema builtin
+  // = dựng lại array mọi tool + serialize + encode — trước đây trả giá đó ở
+  // MỌI lần rebuild (kể cả cấu hình mặc định trần tắt).
+  const builtinTokens = declared > 0 && window > 0 ? estimateSchemaTokens(allToolSpecs()) : 0;
   const cap = effectiveMcpSchemaCap(declared, window, builtinTokens);
   if (declared > 0 && cap < declared) {
     const signature = `share:${window}:${cap}`;

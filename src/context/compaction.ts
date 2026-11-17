@@ -11,6 +11,7 @@
  * results — compaction only cuts at whole turn boundaries (user → next user).
  */
 import type { ChatMessage, ToolSpec } from "../llm/llm.js";
+import { parseToolArgsCached } from "../llm/tool-args.js";
 import { encode } from "gpt-tokenizer";
 
 export interface CompactionConfig {
@@ -47,16 +48,35 @@ export const DEFAULT_COMPACTION: CompactionConfig = {
 const SCHEMA_CACHE_MAX = 64;
 const schemaTokenCache = new Map<string, number>();
 
+// P-perf: identity memo for the (tools array → serialized text) step. The
+// per-step callers (fixedPromptTokens ×4–6/step, prompt metrics) pass the
+// SAME array reference all session long — the string cache below still keyed
+// on the serialized TEXT, which forced a full JSON.stringify of ~25 schemas
+// per call just to build the lookup key. WeakMap by array identity makes the
+// repeated calls O(1); the text cache stays for freshly-built arrays
+// (`capMcpSchemaTokens`' per-spec `[spec]` arrays, `allToolSpecs()` copies).
+const schemaTextMemo = new WeakMap<ToolSpec[] | readonly ToolSpec[], string>();
+const schemaTokenIdentityMemo = new WeakMap<ToolSpec[] | readonly ToolSpec[], number>();
+
 function schemaText(tools: readonly ToolSpec[]): string {
+  const hit = schemaTextMemo.get(tools);
+  if (hit !== undefined) return hit;
   let text = "";
   for (const t of tools) {
     text += t.function.name + "\n" + (t.function.description ?? "") + "\n" + JSON.stringify(t.function.parameters ?? {}) + "\n";
+  }
+  try {
+    schemaTextMemo.set(tools, text);
+  } catch {
+    /* frozen/non-extensible array — build the string uncached as before */
   }
   return text;
 }
 
 export function estimateSchemaTokens(tools: ToolSpec[] | readonly ToolSpec[] | undefined): number {
   if (!tools || tools.length === 0) return 0;
+  const identity = schemaTokenIdentityMemo.get(tools);
+  if (identity !== undefined) return identity;
   const key = schemaText(tools);
   const hit = schemaTokenCache.get(key);
   if (hit !== undefined) return hit;
@@ -71,25 +91,36 @@ export function estimateSchemaTokens(tools: ToolSpec[] | readonly ToolSpec[] | u
     const oldest = schemaTokenCache.keys().next().value;
     if (oldest !== undefined) schemaTokenCache.delete(oldest);
   }
+  try {
+    schemaTokenIdentityMemo.set(tools, n);
+  } catch {
+    /* non-extensible array — text cache still covers repeats */
+  }
   return n;
 }
 
 /**
- * P-perf: `estimateTokens` used to re-`encode` the WHOLE history on every
- * call — 3–4 calls per agent step (chatWithStream, emitContextEvent,
- * shouldCompact, compaction before/after), ~60 ms each on a 0.8 MB history.
- * History is append-only between structural changes (P0-1): appends mutate
- * `runtime.messages` in place (length changes), while trim/compaction REPLACE
- * the array. A memo keyed on (array identity + length + first/last message
- * identity + last content) is therefore exact for this codebase's update
- * patterns and turns the repeated per-step calls into O(1) sums.
- * Single-element arrays (findCutIndex's per-message loop) route to a
- * per-message memo — fresh `[m]` arrays would never hit the array memo.
+ * P-perf (round 2): the old array memo required `len === messages.length`, so
+ * ANY append between two per-step calls (chatWithStream → emitContextEvent →
+ * shouldCompact all bracket appends) missed and re-`encode`d the WHOLE joined
+ * history — 2–3 full encodes per step, quadratic over a run. History is
+ * append-only between structural changes (P0-1): appends mutate
+ * `runtime.messages` in place (length grows), while trim/compaction REPLACE
+ * the array. An INCREMENTAL prefix sum — per-message tokens from the per-
+ * message memo, extended from a checkpoint keyed on (array identity + head +
+ * last-computed message) — is exact for this codebase's update patterns:
+ * appends cost O(new messages), structural changes fall back to a per-message
+ * re-sum (memo hits keep it allocation-free — no giant encode at all).
+ * Array value = Σ singleMessageTokens(m) + (n − 1) "\n" join boundaries,
+ * i.e. the same per-message unit findCutIndex already uses.
  */
-const joinMemo = new WeakMap<
-  ChatMessage[],
-  { len: number; first?: ChatMessage; last?: ChatMessage; lastContent?: string | null; value: number }
->();
+interface PrefixMemo {
+  first?: ChatMessage;
+  boundary?: ChatMessage;
+  len: number;
+  total: number;
+}
+const prefixMemo = new WeakMap<ChatMessage[], PrefixMemo>();
 const singleMemo = new WeakMap<
   object,
   { content?: string | null; calls?: ChatMessage["tool_calls"]; nCalls: number; value: number }
@@ -135,27 +166,44 @@ function singleMessageTokens(m: ChatMessage): number {
  * Token-accurate count (I-10): gpt-tokenizer (offline, MIT) thay heuristic
  * ~4 chars/token. Fallback char/4 nếu encode lỗi (never throw).
  * `extraTokens` (P1-1): phần chi phí cố định ngoài messages — tool schemas.
+ *
+ * Incremental prefix sum — see PrefixMemo above. Σ singleMessageTokens(m) +
+ * one "\n" boundary token per message transition; single-message arrays
+ * (findCutIndex) return exactly singleMessageTokens, so the cut-index budget
+ * math and the total stay on the same unit.
  */
 export function estimateTokens(messages: ChatMessage[], extraTokens = 0): number {
-  if (messages.length === 1) return singleMessageTokens(messages[0]) + extraTokens;
-  const last = messages[messages.length - 1];
-  const hit = joinMemo.get(messages);
-  if (
-    hit &&
-    hit.len === messages.length &&
-    hit.first === messages[0] &&
-    hit.last === last &&
-    hit.lastContent === last?.content
-  ) {
-    return hit.value + extraTokens;
+  const n = messages.length;
+  if (n === 0) return extraTokens;
+  if (n === 1) return singleMessageTokens(messages[0]) + extraTokens;
+  let hit = prefixMemo.get(messages);
+  if (!hit) {
+    hit = { len: 0, total: 0 };
+    try {
+      prefixMemo.set(messages, hit);
+    } catch {
+      /* non-extensible array — fall through, computed fresh each call */
+    }
   }
-  const value = joinEncodedLength(textsOf(messages));
-  try {
-    joinMemo.set(messages, { len: messages.length, first: messages[0], last, lastContent: last?.content, value });
-  } catch {
-    /* frozen array — skip the cache */
+  // Stale checkpoint: array replaced at the head, shrank past the boundary,
+  // or the boundary slot was overwritten in place → re-sum from zero. The
+  // per-message memo keeps the re-sum allocation-free (no giant encode).
+  if (hit.len > 0 && (hit.first !== messages[0] || hit.len > n || messages[hit.len - 1] !== hit.boundary)) {
+    hit.len = 0;
+    hit.total = 0;
   }
-  return value + extraTokens;
+  if (hit.len === 0) {
+    hit.first = messages[0];
+    hit.boundary = messages[0];
+    hit.len = 1;
+    hit.total = singleMessageTokens(messages[0]);
+  }
+  for (let i = hit.len; i < n; i++) {
+    hit.total += singleMessageTokens(messages[i]) + 1; // +1 ≈ "\n" join boundary
+    hit.len = i + 1;
+    hit.boundary = messages[i];
+  }
+  return hit.total + extraTokens;
 }
 
 /** True when the history should be compacted now. */
@@ -190,7 +238,7 @@ export function extractSummaryInput(task: string, messages: ChatMessage[]): stri
     if (m.tool_calls) {
       for (const tc of m.tool_calls) {
         try {
-          const args = JSON.parse(tc.arguments) as Record<string, unknown>;
+          const args = parseToolArgsCached(tc);
           const p = args.path ?? args.file_path ?? args.file;
           if (typeof p === "string") files.add(p);
           if (tc.name === "run_command" && typeof args.command === "string") {

@@ -17,13 +17,35 @@ export interface PersistSessionRuntime {
   sessionCreatedAt?: string;
 }
 
+/** Minimum gap between full snapshot/manifest writes during a run (P-perf item 2).
+ *  Crash durability comes from the append-only event log (every message/tool
+ *  event is fsync'd per line); the snapshot + manifest are READ-optimized
+ *  projections, so re-writing the whole history mid-run more than every few
+ *  seconds is pure I/O. Terminal paths pass `force: true`. */
+const SNAPSHOT_MIN_MS = 5_000;
+const lastSnapshotWrite = new WeakMap<object, number>();
+
+function snapshotDue(store: object, force: boolean | undefined, now: number): boolean {
+  if (force) return true;
+  const last = lastSnapshotWrite.get(store) ?? 0;
+  return now - last >= SNAPSHOT_MIN_MS;
+}
+
 /** Persist the v2 manifest and the legacy snapshot with their existing shapes. */
 export function persistSession(
   runtime: PersistSessionRuntime,
   steps: number,
   buildCmd: string,
   lastBuild: BuildResult | null,
+  opts: { force?: boolean } = {},
 ): void {
+  // P-perf: one gate decision for BOTH projection writes (manifest + v1
+  // snapshot) — skipped writes keep the event log authoritative; the next
+  // due tick or any terminal path (finish/abort/max-steps) force-writes.
+  const now = Date.now();
+  if (!snapshotDue(runtime.session, opts.force, now) && !snapshotDue(runtime.events, opts.force, now)) return;
+  lastSnapshotWrite.set(runtime.session, now);
+  lastSnapshotWrite.set(runtime.events, now);
   const usage = {
     llmCalls: runtime.usageTotals.calls,
     inputTokens: runtime.usageTotals.inputTokens,

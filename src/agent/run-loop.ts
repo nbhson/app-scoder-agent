@@ -5,6 +5,7 @@ import { CHAT_DONE_MARKER } from "./guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
 import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
 import { redactSecrets, type ChatMessage, type ChatResult, type ToolSpec } from "../llm/llm.js";
+import { parseToolArgsCached } from "../llm/tool-args.js";
 import type { ProviderRuntimeContract } from "../llm/provider-registry.js";
 import type { PermissionChecker } from "../security/permissions.js";
 import type { EventSessionStore } from "../session/session.js";
@@ -59,7 +60,7 @@ export interface RunLoopRuntime {
   compactionSettings(): CompactionConfig;
   memoryBlock(): { instruction: string; suffix: string };
   snapshotMemory(trigger: string): void;
-  saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null): void;
+  saveSession(steps: number, buildCmd: string, lastBuild: BuildResult | null, force?: boolean): void;
   finish(success: boolean, steps: number, buildCmd: string, summary: string, chatOnly?: boolean): AgentRunResult;
 }
 
@@ -242,7 +243,7 @@ export async function runAgentLoop(
       const needsAsk = calls.some((tc) => {
         if (tc.name !== "run_command") return false;
         try {
-          const a = JSON.parse(tc.arguments || "{}") as { command?: unknown };
+          const a = parseToolArgsCached(tc) as { command?: unknown };
           if (typeof a.command !== "string") return false;
           const d = runtime.permissions.classifyShell(a.command);
           return d.decision === "ask" || d.decision === "deny";
@@ -282,7 +283,7 @@ export async function runAgentLoop(
               tc.name === "run_command" &&
               (() => {
                 try {
-                  const a = JSON.parse(tc.arguments || "{}") as { command?: unknown };
+                  const a = parseToolArgsCached(tc) as { command?: unknown };
                   return typeof a.command === "string" && a.command.includes(buildCmd);
                 } catch {
                   return false;
@@ -411,6 +412,12 @@ export async function runAgentLoop(
             tokensBefore,
             tokensAfter,
             summary: summary.slice(0, 2000),
+            // P-perf item 18: structural replace + replay anchor. Without the
+            // replacement array the projection (and `scoder resume`) would
+            // keep every trimmed message forever. Compaction is rare (fires
+            // at 80% of the window), so one full-history line here is cheap
+            // against unbounded per-run growth of the projection.
+            messages: runtime.messages,
           });
           runtime.snapshotMemory("compaction");
           runtime.reporter.info(`compaction: done (${tokensBefore} → ${tokensAfter} tokens, history now ${runtime.messages.length} messages)`);
@@ -435,6 +442,6 @@ export async function runAgentLoop(
 
     // Max steps reached or aborted
     const reason = runtime.aborted ? "interrupted by user (SIGINT)" : `reached max steps (${runtime.config.maxSteps})`;
-    runtime.saveSession(steps, buildCmd, lastBuild);
+    runtime.saveSession(steps, buildCmd, lastBuild, true); // terminal → force projection write
     return runtime.finish(false, steps, buildCmd, `Agent stopped: ${reason}`);
   }

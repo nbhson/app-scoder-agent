@@ -1,5 +1,6 @@
 import type { AgentConfig } from "../config/config.js";
 import { redactSecrets, type ToolCall, type ToolSpec } from "../llm/llm.js";
+import { parseToolArgsCached } from "../llm/tool-args.js";
 import { getTool } from "../tools/registry.js";
 import { type ToolContext, type ToolResult } from "../tools/types.js";
 import { invalidateFileIndex } from "../workspace/file-index.js";
@@ -71,7 +72,7 @@ export class ToolExecutor {
     const tool = getTool(tc.name);
     let args: Record<string, unknown>;
     try {
-      args = tc.arguments ? (JSON.parse(tc.arguments) as Record<string, unknown>) : {};
+      args = parseToolArgsCached(tc);
     } catch {
       const output = `ERROR: invalid JSON arguments: ${tc.arguments.slice(0, 200)}`;
       this.rejectToolCall(steps, tc, output, { error: "invalid json" });
@@ -173,7 +174,7 @@ export class ToolExecutor {
       post: () => {
         if (filesModified) {
           this.runtime.markFilesModified();
-          invalidateFileIndex();
+          invalidateFileIndex(this.runtime.ctx.workdir); // P-perf item 10: only this workspace's index
         }
         if (result.diff?.text) this.runtime.addRunDiff(result.diff.text);
         this.runtime.endToolStream();
