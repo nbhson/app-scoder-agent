@@ -1,6 +1,6 @@
 import { type ChildProcess } from "node:child_process";
 import { CLIENT_NAME, getVersion } from "../shared/version.js";
-import { redactSecrets } from "../llm/llm.js";
+import { mayContainSecrets, redactSecrets } from "../llm/llm.js";
 import type { McpConnState, McpPrompt, McpPromptMessage, McpResource, McpResourceContents, McpResourceTemplate, McpServerConfig, McpTool, McpTransport } from "./types.js";
 import { HttpTransport } from "./transport-http.js";
 import { StdioTransport } from "./transport-stdio.js";
@@ -9,6 +9,22 @@ import { StdioTransport } from "./transport-stdio.js";
 
 const RECONNECT_MAX = 5;
 const RECONNECT_BASE_MS = 500; // backoff: 0.5s, 1s, 2s, 4s, 8s
+
+/**
+ * P-perf (item 17): redact structuredContent WITHOUT the parse round-trip in
+ * the common case. Redaction must stay TEXT-LEVEL — secret patterns can span
+ * key/value boundaries in the serialized JSON (e.g. "api_key":"..." matches
+ * only after stringification), so the stringify→redact→parse pipeline is
+ * preserved verbatim for gate hits. The gate lives on the serialized text;
+ * when no secret literal appears anywhere we hand back the original object
+ * (rpc() parsed it fresh per call — nothing else retains a reference, and
+ * consumers only read).
+ */
+function redactStructured<T>(value: T): T {
+  const text = JSON.stringify(value);
+  if (!mayContainSecrets(text)) return value;
+  return JSON.parse(redactSecrets(text)) as T;
+}
 
 export class McpConnection {
   private transport: McpTransport;
@@ -124,7 +140,10 @@ export class McpConnection {
     this.reconnectAttempt++;
     const delay = RECONNECT_BASE_MS * 2 ** (this.reconnectAttempt - 1);
     this.setState("reconnecting", `attempt ${this.reconnectAttempt}/${RECONNECT_MAX} in ${delay}ms`);
-    await new Promise((r) => setTimeout(r, delay));
+    // P-perf (item 23): interruptible sleep — the handle is kept so kill()
+    // can cancel a pending backoff (up to 8s) instead of the timer running
+    // (and keeping the event loop alive) after the connection is closed.
+    await this.sleepBackoff(delay);
     if (this.manuallyClosed) return;
     try {
       await this.startAndHandshake(15_000);
@@ -134,6 +153,31 @@ export class McpConnection {
       this.drain(e as Error);
       await this.scheduleReconnect();
     }
+  }
+
+  private backoffTimer: ReturnType<typeof setTimeout> | null = null;
+  private backoffWake: (() => void) | null = null;
+
+  private sleepBackoff(ms: number): Promise<void> {
+    return new Promise<void>((res) => {
+      this.backoffWake = res;
+      this.backoffTimer = setTimeout(() => {
+        this.backoffTimer = null;
+        this.backoffWake = null;
+        res();
+      }, ms);
+    });
+  }
+
+  /** Cancel a pending backoff sleep (called from kill()). */
+  private cancelBackoff(): void {
+    if (this.backoffTimer !== null) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    const wake = this.backoffWake;
+    this.backoffWake = null;
+    if (wake) wake(); // resolves the sleeper; its `manuallyClosed` guard stops it
   }
 
   /** MCP A: liveness probe — prefer ping (official MCP spec), fallback tools/list. */
@@ -216,14 +260,13 @@ export class McpConnection {
     const parts = (res.content ?? []).map((c) => c.text ?? "").filter(Boolean);
     // H-13: MCP servers are third-party — redact secret shapes from output
     // before it enters the conversation or logs.
-    const structured = res.structuredContent
-      ? JSON.parse(redactSecrets(JSON.stringify(res.structuredContent))) as Record<string, unknown>
-      : undefined;
+    const structured = res.structuredContent ? redactStructured(res.structuredContent) : undefined;
     return { ok: !isErr, output: redactSecrets(parts.join("\n")) || "(empty result)", structured };
   }
 
   kill(): void {
     this.manuallyClosed = true;
+    this.cancelBackoff(); // P-perf item 23: no orphaned backoff timer after close
     this.setState("dead", "closed by client");
     this.drain(new Error("disconnected"));
     this.transport.close();
