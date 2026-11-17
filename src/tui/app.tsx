@@ -17,7 +17,7 @@ import type { AgentConfig } from "../config/config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../io/terminal.js";
 import { discoverSkills } from "../context/skills.js";
-import { discoverAgents } from "../context/agents.js";
+import { discoverAgents, subagentDefs } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";
 import { transcriptWindow, estimateTotalRows } from "./selectors.js";
 import { SLASH_COMMANDS, formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE } from "../commands/definitions.js";
@@ -139,7 +139,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const atSources = useMemo(
     () => ({
       skills: skillNames,
-      agents: discoverAgents(cfg.workdir).filter((a) => a.mode !== "subagent" || a.name === "explore").map((a) => a.name),
+      agents: subagentDefs(discoverAgents(cfg.workdir)).map((a) => a.name),
       files: fileIndex(cfg.workdir),
     }),
     [cfg.workdir, skillNames],

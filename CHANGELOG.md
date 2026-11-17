@@ -3,6 +3,41 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Subagents no longer freeze mid-run** — the task relay dropped the child's
+  `permission_request` event while the child's broker waited for an answer
+  that could never arrive: any subagent action needing approval stalled the
+  full 60–120s timeout with no modal shown (batch mode: up to 4 children
+  frozen at once). `permission_request` now streams to the parent's UI sink
+  tagged `<childId>:perm-N` and `Agent.resolvePermission()` routes the answer
+  back to the child's broker (TUI needs no changes) (`src/agent.ts`)
+- **Subagent progress is visible in the chat transcript** — relayed child
+  activity was emitted as `tool_output` under a `subagent:<name>` tool name,
+  which the TUI reducer could not correlate to the running `task` card, so
+  the card streamed nothing for the whole sub-run. Chunks now attach to the
+  `task` card, with `→ <agent>: <tool>` marker lines (`src/agent.ts`,
+  `test/eval/subagent-task.mjs`)
+- **Spawnable-subagent filter corrected** — the advertised task list used
+  `mode !== "subagent" || name === "explore"`, hiding user-defined
+  `mode: subagent` agents (the mode's documented purpose) while advertising
+  primary-only ones. Shared `subagentDefs()` predicate (mode `subagent|all`,
+  non-hidden) is now used by the prompt block, the error hint and the TUI
+  completion, and the task tool refuses to spawn non-subagent defs
+  (`src/context/agents.ts`, `src/context/prompt-builder.ts`, `src/agent.ts`)
+- **`task` tool is no longer advertised to depth-1 children** (and any agent
+  with `allowSubagents: false`) — doomed calls burned a step on "tool not
+  wired"; the error now reads as the depth limit it is
+  (`src/tools/registry.ts`, `src/tools/task-tool.ts`)
+- **No more `⚠ agent "explore" is a subagent` warning spam** every time the
+  task tool spawned a child — the warning targets user selections (which the
+  CLI/TUI already block), children now pass `programmaticSubagent`
+  (`src/agent/types.ts`, `src/config/config.ts`)
+- **Abort-listener leak per spawn** removed (listener + child references are
+  released in `finally`); a throwing batch task no longer discards its
+  siblings' results (`src/agent.ts`)
+
 ## [0.9.18] — 2026-11-16
 
 ### Fixed

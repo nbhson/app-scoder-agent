@@ -3,7 +3,7 @@ import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, adaptiveToolO
 import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
 import type {ToolResult} from "./tools/types.js";
 import { AnthropicClient } from "./llm/provider-anthropic.js";
-import {allToolSpecs} from "./tools/registry.js";
+import { allToolSpecs, baseToolSpecs } from "./tools/registry.js";
 import {setMaxOutputChars, setMaxToolOutputChars} from "./tools/path-safety.js";
 import { type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools/types.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
@@ -24,7 +24,7 @@ import { loadRcFile, isLocalBaseUrl } from "./config/config.js";
 import {McpManager} from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./context/skills.js";
-import { discoverAgents, findAgent, type AgentDef } from "./context/agents.js";
+import { discoverAgents, subagentDefs, type AgentDef } from "./context/agents.js";
 import {
   emptyWorkingMemory,
   noteFileRead,
@@ -72,7 +72,6 @@ import {
   type AgentRunResult,
   type UsageTotals,
   type VerificationInfo,
-  applyToolFilter,
   resolvePrimaryConfig,
 } from "./agent/types.js";
 
@@ -121,6 +120,8 @@ export class Agent {
   private runSignal = new AbortController();
   /** Optional structured-event sink (used by the HTTP/SSE server frontend). */
   onEvent: ((ev: AgentEvent) => void) | null = null;
+  /** Live subagent children by id — routes tagged permission answers back (task relay, T-03). */
+  private spawnedChildren = new Map<string, Agent>();
   /** Set while a tool call is executing, for tool_output event correlation. */
   private currentToolCall: { step: number; id: string; name: string } | null = null;
   /** True once any file-writing tool succeeded during the current run. */
@@ -317,7 +318,7 @@ export class Agent {
     this.primaryDef = resolved.def;
     config = this.config;
     this.reporter = reporter;
-    this.tools = applyToolFilter(allToolSpecs(), resolved.def, reporter);
+    this.tools = baseToolSpecs(resolved.def, reporter, config.allowSubagents);
     this.guardrails = createGuardrailEngine(config.guardrails ?? {}, (d) => this.logGuardrailDecision(d));
     const commonOpts = {
       baseUrl: config.baseUrl,
@@ -328,7 +329,7 @@ export class Agent {
       requestTimeoutMs: config.limits?.requestTimeoutMs, // G7
     };
     // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
-    // I-05: thinking budget = 10% maxTokens khi reasoning on (Anthropic only).
+    // I-05: thinking budget = 25% maxTokens khi reasoning on (Anthropic only).
     // I-12: eval harness — scripted client override thay vì construct.
     const thinkingBudget = config.reasoning === "on" ? Math.max(1024, Math.floor(config.maxTokens * 0.25)) : 0;
     this.client = config.clientFactory?.() ??
@@ -378,20 +379,19 @@ export class Agent {
     // registration alone allowed grandchildren through). Runner lives on the
     // per-instance ctx — concurrent Agents (server multi-run) stay isolated.
     if (config.allowSubagents !== false) {
-      const availableNames = () => discoverAgents(config.workdir)
-        .filter((a) => a.mode !== "subagent" || a.name === "explore")
-        .map((a) => a.name)
-        .join(", ");
-
       /** Run one subtask in its own child Agent. */
       const runOne = async (args: { description?: string; prompt?: string; agent?: string }): Promise<ToolResult> => {
-        const def = args.agent ? findAgent(config.workdir, args.agent) : findAgent(config.workdir, "explore");
+        // Spawnable set = mode subagent|all, non-hidden — user-defined
+        // subagents are visible here (they were the whole point of the mode).
+        const usable = subagentDefs(discoverAgents(config.workdir));
+        const def = args.agent ? usable.find((a) => a.name === args.agent) ?? null : usable.find((a) => a.name === "explore") ?? null;
         if (args.agent && !def) {
-          return { ok: false, output: `ERROR: agent "${args.agent}" not found — available: ${availableNames()}` };
+          return { ok: false, output: `ERROR: agent "${args.agent}" not found or not a subagent — available: ${usable.map((a) => a.name).join(", ")}` };
         }
         const child = new Agent({
           ...config,
           allowSubagents: false,
+          programmaticSubagent: true, // def-mode warning is for user selections only
           // v2: the child resolves this def itself (tools filter, permission,
           // model via routing + def.model, prompt) — no manual overrides here.
           agent: def?.name ?? "build",
@@ -399,8 +399,12 @@ export class Agent {
           noSave: true, // subagent runs are ephemeral — no session pollution
         });
         // Abort cascade: parent abort kills child's in-flight LLM calls.
-        this.runSignal.signal.addEventListener("abort", () => child.abort(), { once: true });
+        // Removed in `finally` — long runs spawn many children and each
+        // closure pins its (disposed) child Agent until the run ends.
         const childId = child.id;
+        const onParentAbort = () => child.abort();
+        this.runSignal.signal.addEventListener("abort", onParentAbort, { once: true });
+        this.spawnedChildren.set(childId, child);
         const description = typeof args.description === "string" && args.description.trim()
           ? args.description.trim()
           : `subagent ${def?.name ?? "task"}`;
@@ -413,10 +417,24 @@ export class Agent {
           model: def?.model ?? this.config.model,
         });
         // Event relay: child activity appears as subagent-tagged tool output.
-        const tag = `subagent:${def?.name ?? "task"}`;
+        // permission_request MUST be forwarded (T-03): the child's broker
+        // awaits that promise — dropping it here freezes the subagent for the
+        // full 60–120s permission timeout with no modal ever shown. Ids are
+        // tagged `<childId>:perm-N` so resolvePermission() routes the answer
+        // back to the right child's broker.
+        const childName = def?.name ?? "task";
+        const tag = `subagent:${childName}`;
+        // Emitted under the parent tool name "task": the TUI reducer
+        // correlates tool_output to the running card BY NAME — a custom
+        // "subagent:*" tag left the task card streaming nothing.
+        let relayTextOpen = false; // streamed prose not yet terminated by a newline
         child.onEvent = (ev) => {
-          if (ev.type === "tool_call") this.emit({ type: "tool_output", name: tag, stream: "stdout", delta: `→ ${ev.name}\n` });
-          else if (ev.type === "llm_delta") this.emit({ type: "tool_output", name: tag, stream: "stdout", delta: ev.delta });
+          if (ev.type === "tool_call") {
+            this.emit({ type: "tool_output", name: "task", stream: "stdout", delta: `${relayTextOpen ? "\n" : ""}→ ${childName}: ${ev.name}\n` });
+            relayTextOpen = false;
+          }
+          else if (ev.type === "llm_delta") { this.emit({ type: "tool_output", name: "task", stream: "stdout", delta: ev.delta }); relayTextOpen = ev.delta.length > 0; }
+          else if (ev.type === "permission_request") this.emit({ ...ev, id: `${childId}:${ev.id}`, label: `[${tag}] ${ev.label}` });
         };
         try {
           const res = await child.run(args.prompt ?? "");
@@ -432,6 +450,9 @@ export class Agent {
           this.emit({ type: "agent_end", id: childId, ok: false, steps: 0, summary: msg.slice(0, 500) });
           return { ok: false, output: `ERROR: subagent failed: ${msg}` };
         } finally {
+          this.spawnedChildren.delete(childId);
+          this.runSignal.signal.removeEventListener("abort", onParentAbort);
+          child.onEvent = null; // break child→parent relay reference
           // Child agents are ephemeral: close their MCP connections (if any).
           child.dispose();
         }
@@ -451,7 +472,12 @@ export class Agent {
             for (;;) {
               const i = cursor++;
               if (i >= tasks.length) return;
-              results[i] = await runOne(tasks[i]);
+              // Per-task catch: one bad task (e.g. child construction throw)
+              // must not reject Promise.all and discard sibling results.
+              results[i] = await runOne(tasks[i]).catch((err: unknown) => ({
+                ok: false,
+                output: `ERROR: task ${i + 1} failed: ${(err as Error).message ?? String(err)}`,
+              }));
             }
           };
           await Promise.all(Array.from({ length: concurrency }, () => worker()));
@@ -467,7 +493,10 @@ export class Agent {
         if (typeof args.prompt !== "string" || !args.prompt.trim()) {
           return { ok: false, output: "ERROR: task requires a non-empty `prompt`." };
         }
-        return runOne(args);
+        return runOne(args).catch((err: unknown) => ({
+          ok: false,
+          output: `ERROR: subagent failed: ${(err as Error).message ?? String(err)}`,
+        }));
       };
       this.ctx.taskRunner = runner;
     }
@@ -565,8 +594,15 @@ export class Agent {
   /**
    * T-03: answer a pending permission_request (called from the TUI modal /
    * HTTP API). Unknown id → silently ignored (already timed out).
+   * Subagent prompts arrive tagged `<childId>:perm-N` (task relay) — the
+   * answer is routed back to that child's broker, not the parent's.
    */
   resolvePermission(id: string, answer: PermissionAnswer): void {
+    const sep = id.indexOf(":");
+    if (sep > 0) {
+      this.spawnedChildren.get(id.slice(0, sep))?.resolvePermission(id.slice(sep + 1), answer);
+      return;
+    }
     this.interaction.resolvePermission(id, answer);
   }
 
@@ -1058,7 +1094,7 @@ export class Agent {
       const allow = pendingAllowedTools?.length
         ? new Set(pendingAllowedTools.map((t) => t.toLowerCase()))
         : null;
-      let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef, this.reporter);
+      let baseTools = baseToolSpecs(this.primaryDef, this.reporter, this.config.allowSubagents);
       if (allow) baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));
       const mcpSpecs = governedMcpSpecs(this.mcpBridgeRuntime());
       const tools = allow
@@ -1248,7 +1284,7 @@ export class Agent {
     this.lastVerifySignature = "";
     // Skills 2.0: rebuild tool list honouring a staged skill's allowed-tools.
     const pendingAllowedTools = this.promptContext.pendingTools();
-    let baseTools = applyToolFilter(allToolSpecs(), this.primaryDef, this.reporter);
+    let baseTools = baseToolSpecs(this.primaryDef, this.reporter, this.config.allowSubagents);
     if (pendingAllowedTools && pendingAllowedTools.length > 0) {
       const allow = new Set(pendingAllowedTools.map((t) => t.toLowerCase()));
       baseTools = baseTools.filter((s) => allow.has(s.function.name.toLowerCase()));

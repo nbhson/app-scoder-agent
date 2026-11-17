@@ -1,8 +1,7 @@
 import { saveApproval } from "../config/config.js";
 import { redactSecrets, type ToolSpec } from "../llm/llm.js";
 import { clamp } from "../tools/path-safety.js";
-import {allToolSpecs} from "../tools/registry.js";
-import { applyToolFilter } from "./types.js";
+import { allToolSpecs, baseToolSpecs } from "../tools/registry.js";
 import { filterToolNames } from "../mcp/tool-filter.js";
 import { estimateSchemaTokens } from "../context/compaction.js";
 import {McpManager} from "../mcp/manager.js";
@@ -129,7 +128,7 @@ export function governedMcpSpecs(runtime: McpBridgeRuntime): ToolSpec[] {
 
 export function rebuildToolList(runtime: McpBridgeRuntime): void {
   const governed = governedMcpSpecs(runtime);
-  let base = applyToolFilter(allToolSpecs(), runtime.primaryDef, runtime.reporter);
+  let base = baseToolSpecs(runtime.primaryDef, runtime.reporter, runtime.config.allowSubagents);
   if (runtime.pendingAllowedTools && runtime.pendingAllowedTools.length > 0) {
     const allow = new Set(runtime.pendingAllowedTools.map((tool) => tool.toLowerCase()));
     base = base.filter((spec) => allow.has(spec.function.name.toLowerCase()));

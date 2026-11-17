@@ -5,7 +5,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { formatSkillIndex, type Skill } from "./skills.js";
-import type { AgentDef } from "./agents.js";
+import { subagentDefs, type AgentDef } from "./agents.js";
 import type { AgentConfig } from "../config/config.js";
 
 // P2: memoize per (workdir, date, platform, node version) — the git probe is a
@@ -42,7 +42,7 @@ export function buildSkillsBlock(skills: Skill[]): string {
 
 /** Subagents khả dụng (task tool) — chỉ khi agent được phép spawn. */
 export function buildAgentsBlock(agents: AgentDef[], allowSubagents: boolean): string {
-  const usable = agents.filter((a) => a.mode !== "subagent" || a.name === "explore");
+  const usable = subagentDefs(agents);
   if (!allowSubagents || usable.length === 0) return "";
   return (
     `\n\nSUBAGENTS (via the task tool — delegate focused sub-work):\n` +

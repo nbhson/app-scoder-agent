@@ -161,6 +161,16 @@ export function selectableAgents(workdir: string): AgentDef[] {
 }
 
 /**
+ * Agents the task tool may spawn: mode subagent|all, non-hidden.
+ * (primary-only agents are user-facing mains, not sub-work delegates.)
+ * Shared predicate — three call sites previously re-implemented an
+ * inverted version that advertised primary and HID custom subagents.
+ */
+export function subagentDefs(agents: AgentDef[]): AgentDef[] {
+  return agents.filter((a) => (a.mode === "subagent" || a.mode === "all") && !a.hidden);
+}
+
+/**
  * v2: filter a tool list for an agent def.
  *  - def.tools set → whitelist (unknown names dropped, reported by caller);
  *  - def.permission "readonly" → drop mutating specs (defense in depth);

@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../config/config.js";
 import { redactSecrets, type ToolCall, type ToolSpec } from "../llm/llm.js";
-import {getTool, allToolSpecs} from "../tools/registry.js";
+import { getTool } from "../tools/registry.js";
 import { type ToolContext, type ToolResult } from "../tools/types.js";
 import { invalidateFileIndex } from "../workspace/file-index.js";
 import { PermissionChecker } from "../security/permissions.js";
@@ -85,7 +85,7 @@ export class ToolExecutor {
 
     const mcp = this.runtime.getMcp();
     if (!tool && !mcp?.hasTool(tc.name) && !mcp?.isResourceTool(tc.name)) {
-      this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${allToolSpecs().map((t) => t.function.name).join(", ")}${mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
+      this.rejectToolCall(steps, tc, `ERROR: unknown tool "${tc.name}". Available: ${this.runtime.getTools().map((t) => t.function.name).join(", ")}${mcp ? " + MCP tools (mcp__<server>__<tool>)" : ""}`, { error: "unknown tool" });
       return {};
     }
 

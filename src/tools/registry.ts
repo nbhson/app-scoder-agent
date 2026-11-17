@@ -10,6 +10,9 @@ import { toolGrep, toolGlob } from "./search.js";
 import { toolRunCommand } from "./run-command.js";
 import { taskTool } from "./task-tool.js";
 import { obj, str, num } from "./schemas.js";
+import { applyToolFilter } from "../agent/types.js";
+import type { AgentDef } from "../context/agents.js";
+import type { Reporter } from "../io/reporter.js";
 import type { AgentTool, TodoItem } from "./types.js";
 import type { ToolSpec } from "../llm/llm.js";
 
@@ -349,7 +352,15 @@ export function getTool(name: string): AgentTool | undefined {
   return AGENT_TOOLS.find((t) => t.spec.function.name === name) ?? (name === "task" ? taskTool : undefined);
 }
 
-/** All tool specs incl. task (agent adds MCP specs on top). */
-export function allToolSpecs(): ToolSpec[] {
-  return [...AGENT_TOOLS.map((t) => t.spec), taskTool.spec];
+/** All tool specs (agent adds MCP specs on top). includeTask=false hides
+ *  the `task` spec for agents that cannot spawn subagents (depth-1 children,
+ *  allowSubagents:false) — advertising it only invites doomed tool calls. */
+export function allToolSpecs(includeTask = true): ToolSpec[] {
+  return includeTask ? [...AGENT_TOOLS.map((t) => t.spec), taskTool.spec] : AGENT_TOOLS.map((t) => t.spec);
+}
+
+/** Def-filtered base tool list — `task` is advertised only when the agent
+ *  may actually spawn subagents (depth-1 children set allowSubagents:false). */
+export function baseToolSpecs(def: AgentDef | null, reporter: Reporter, allowSubagents?: boolean): ToolSpec[] {
+  return applyToolFilter(allToolSpecs(allowSubagents !== false), def, reporter);
 }

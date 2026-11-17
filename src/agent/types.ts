@@ -155,8 +155,9 @@ export function resolvePrimaryConfig(config: AgentConfig, reporter: Reporter = c
     def = findAgent(config.workdir, "build");
     if (!def) return { config, def: null };
   }
-  if (def.mode === "subagent") {
-    // Programmatic subagents are fine; warn only when this came from user selection.
+  if (def.mode === "subagent" && !config.programmaticSubagent) {
+    // Programmatic subagents (task runner) set programmaticSubagent — they
+    // are the intended users of this mode; warn only on user selections.
     reporter.warn(`agent "${def.name}" is a subagent — it runs via the task tool; using it as primary anyway (scoder --agent).`);
   }
   const out: AgentConfig = { ...config, agent: def.name };

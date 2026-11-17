@@ -37,7 +37,13 @@ export const taskTool: AgentTool = {
     },
   },
   run: (ctx, args) => {
-    if (!ctx.taskRunner) return { ok: false, output: "ERROR: task tool not wired (no runner in context)." };
+    if (!ctx.taskRunner) {
+      // Depth-1 children reach here when their def whitelist keeps "task" —
+      // say why, not just "not wired".
+      return ctx.allowSubagents === false
+        ? { ok: false, output: "ERROR: task tool not available — subagents cannot spawn further subagents (depth limit)." }
+        : { ok: false, output: "ERROR: task tool not wired (no runner in context)." };
+    }
     const a = args as { description?: string; prompt?: string; agent?: string; tasks?: TaskSpec[] };
     if (Array.isArray(a.tasks) && a.tasks.length > 0) {
       if (a.tasks.length > 8) {

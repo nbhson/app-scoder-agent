@@ -20,8 +20,8 @@ export default {
     { content: "explore done" },
   ],
   check({ events }) {
-    const relay = events.filter((e) => e.type === "tool_output" && e.name?.startsWith("subagent:"));
-    if (relay.length === 0) throw new Error("no subagent:<name> relay events");
+    const relay = events.filter((e) => e.type === "tool_output" && e.name === "task");
+    if (relay.length === 0) throw new Error("no tool_output relayed onto the task card");
     const r = events.find((e) => e.type === "tool_result" && e.name === "task");
     if (!r || r.ok !== true) throw new Error(`task tool should succeed: ${r?.output}`);
     if (!/subagent explore done/.test(r.output)) throw new Error(`missing subagent summary: ${r.output.slice(0, 200)}`);

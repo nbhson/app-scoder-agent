@@ -68,6 +68,9 @@ export interface AgentConfig {
   reasoning?: "off" | "on";
   /** I-06: false = this agent cannot spawn subagents (depth guard for children). */
   allowSubagents?: boolean;
+  /** I-06: task-runner spawn marker — a subagent def used programmatically
+   *  must not trigger the "used as primary anyway" warning. */
+  programmaticSubagent?: boolean;
   /** I-11: post-edit formatter (rc `formatter`). */
   formatter?: boolean | string;
   /** G4: sandbox profile for run_command (rc `sandbox`). */

@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverAgents, findAgent } from "../dist/context/agents.js";
-import {getTool, allToolSpecs} from "../dist/tools/registry.js";
+import { discoverAgents, findAgent, subagentDefs } from "../dist/context/agents.js";
+import {getTool, allToolSpecs, baseToolSpecs} from "../dist/tools/registry.js";
 
 let workdir;
 
@@ -46,11 +46,28 @@ describe("discoverAgents (I-06)", () => {
     writeFileSync(join(workdir, ".scoder", "agents", "explore.md"), "---\ndisabled: true\n---\nx");
     assert.equal(findAgent(workdir, "explore"), null);
   });
+
+  it("subagentDefs: mode subagent|all non-hidden; custom subagent phải xuất hiện", () => {
+    mkdirSync(join(workdir, ".scoder", "agents"), { recursive: true });
+    writeFileSync(join(workdir, ".scoder", "agents", "researcher.md"), "---\ndescription: researcher\nmode: subagent\n---\nbody");
+    writeFileSync(join(workdir, ".scoder", "agents", "ghost.md"), "---\ndescription: ghost\nmode: subagent\nhidden: true\n---\nbody");
+    const names = subagentDefs(discoverAgents(workdir)).map((a) => a.name);
+    assert.ok(names.includes("researcher"), "user-defined mode:subagent spawnable được liệt kê");
+    assert.ok(names.includes("explore") && names.includes("build") && names.includes("review"));
+    assert.ok(!names.includes("plan"), "plan (primary-only) không phải subagent");
+    assert.ok(!names.includes("ghost"), "hidden bị loại");
+  });
 });
 
 describe("task tool (I-06)", () => {
   it("spec nằm trong allToolSpecs", () => {
     assert.ok(allToolSpecs().some((t) => t.function.name === "task"));
+  });
+
+  it("agent không được spawn → tool 'task' không được advertise", () => {
+    assert.ok(allToolSpecs(false).every((t) => t.function.name !== "task"));
+    assert.ok(baseToolSpecs(null, { warn() {} }, false).every((t) => t.function.name !== "task"));
+    assert.ok(baseToolSpecs(null, { warn() {} }, true).some((t) => t.function.name === "task"));
   });
 
   it("chưa wire → lỗi rõ ràng", async () => {
@@ -59,6 +76,13 @@ describe("task tool (I-06)", () => {
     const r = await tool.run({ workdir }, { description: "d", prompt: "p" });
     assert.equal(r.ok, false);
     assert.match(r.output, /not wired/);
+  });
+
+  it("child (allowSubagents:false) → message depth-limit, không phải 'not wired'", async () => {
+    const tool = getTool("task");
+    const r = await tool.run({ workdir, allowSubagents: false }, { description: "d", prompt: "p" });
+    assert.equal(r.ok, false);
+    assert.match(r.output, /depth limit/);
   });
 
   it("wire runner qua ctx → chạy và trả summary", async () => {

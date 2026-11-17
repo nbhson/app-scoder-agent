@@ -65,6 +65,17 @@ describe("resolvePrimaryConfig — routing & def application", () => {
     assert.equal(def.name, "build");
   });
 
+  it("def mode subagent: warn khi user chọn, im lặng khi task runner spawn", () => {
+    const wd = mkWorkdir();
+    const warns = [];
+    const rep = { warn: (l) => warns.push(l) };
+    resolvePrimaryConfig({ workdir: wd, agent: "explore", model: "m", provider: "openai" }, rep);
+    assert.equal(warns.length, 1, "user selection của subagent phải warn");
+    warns.length = 0;
+    resolvePrimaryConfig({ workdir: wd, agent: "explore", model: "m", provider: "openai", programmaticSubagent: true }, rep);
+    assert.equal(warns.length, 0, "programmatic spawn (task tool) không được pollute UI");
+  });
+
   it("builtin review agent exists and is readonly", () => {
     const wd = mkWorkdir();
     const review = discoverAgents(wd).find((a) => a.name === "review");
