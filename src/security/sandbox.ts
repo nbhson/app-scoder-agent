@@ -46,8 +46,10 @@ export function buildSandboxArgv(
     // macOS Seatbelt: một profile string param, readonly chặn file-write-*.
     // Seatbelt đánh giá theo resolved path — /var/folders là symlink của
     // /private/var/folders, nên subpath phải phủ cả hai dạng.
+    // P-perf (item 24): workdir realpath qua memo dùng chung với safePath —
+    // lệnh sandboxed thứ N từng tự trả một syscall chain cho cùng workdir.
     let realWs = workdir;
-    try { realWs = realpathSync(workdir); } catch { /* nonexistent — raw path đủ */ }
+    try { realWs = realWorkdirOf(workdir); } catch { /* nonexistent — raw path đủ */ }
     const escapeSbp = (p: string) => p.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
     const wsSubpaths = [...new Set([workdir, realWs])]
       .map((p) => `(subpath "${escapeSbp(p)}/")`)
@@ -103,6 +105,11 @@ export function planSandbox(cfg: SandboxConfig, workdir: string, command: string
  * Spawn argv qua sandbox khi có plan; nếu wrapper binary thiếu trên máy →
  * null (fallback chạy trực tiếp). Async để dùng which-like check nhẹ.
  */
+// P-perf (item 24): wrapper presence is a machine property, not a command
+// property — `spawnSync which` used to launch a child process (5–20 ms) on
+// EVERY sandboxed run_command. Probe once per wrapper for the process life.
+const wrapperPresent = new Map<SandboxWrapper, boolean>();
+
 export async function resolveSandbox(
   cfg: SandboxConfig,
   workdir: string,
@@ -110,13 +117,18 @@ export async function resolveSandbox(
 ): Promise<{ argv: string[]; wrapper: SandboxWrapper } | { argv: null; wrapper: null; reason: string }> {
   const plan = planSandbox(cfg, workdir, command);
   if (!plan) return { argv: null, wrapper: null, reason: "sandbox off" };
-  // `which` không có trên Windows — dùng `where`.
-  const check = spawnSync(process.platform === "win32" ? "where" : "which", [plan.wrapper], { encoding: "utf8" });
-  if (check.status !== 0) {
+  let present = wrapperPresent.get(plan.wrapper);
+  if (present === undefined) {
+    // `which` không có trên Windows — dùng `where`.
+    const check = spawnSync(process.platform === "win32" ? "where" : "which", [plan.wrapper], { encoding: "utf8" });
+    present = check.status === 0;
+    wrapperPresent.set(plan.wrapper, present);
+  }
+  if (!present) {
     return { argv: null, wrapper: null, reason: `${plan.wrapper} not found — running unsandboxed` };
   }
   return { argv: plan.argv.map(String), wrapper: plan.wrapper };
 }
 
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realWorkdirOf } from "../tools/path-safety.js";

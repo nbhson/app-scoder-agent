@@ -214,6 +214,9 @@ export function isDangerousCommand(command: string): boolean {
 
 export class SessionAllowlist {
   private prefixes = new Set<string>();
+  /** P-perf item 16: change counter so memoized decisions can detect when the
+   *  runtime allowlist grew (an "always allow" answer) and must be re-run. */
+  version = 0;
 
   addPrefix(prefix: string): void {
     // Normalize to a word-bounded prefix: "git" -> "git " so that allowing
@@ -221,14 +224,21 @@ export class SessionAllowlist {
     const t = prefix.trim().replace(/\s+$/, "");
     if (t.length === 0) return;
     this.prefixes.add(`${t} `);
+    this.version++;
   }
 
   hasMatch(command: string): boolean {
-    return [...this.prefixes].some((p) => command.startsWith(p));
+    // P-perf: iterate the Set directly — `[...prefixes].some(...)` allocated a
+    // full array per command per check (this runs on EVERY tool call).
+    for (const p of this.prefixes) {
+      if (command.startsWith(p)) return true;
+    }
+    return false;
   }
 
   clear(): void {
     this.prefixes.clear();
+    this.version++;
   }
 }
 
@@ -425,6 +435,14 @@ export class PermissionChecker {
   private allowAllEdits = false;
   /** P-perf: activeRules() memo — invalidated by source-array reference change. */
   private activeRulesMemo: { src: unknown[]; rules: PermissionRule[] } | null = null;
+  /** P-perf (item 16): full classifyShell result memo keyed on the command
+   *  string, valid while the decision INPUTS are unchanged: mode, the rule
+   *  set (stable array identity via activeRulesMemo), the policy array
+   *  reference, and the session-allowlist version. The same command strings
+   *  recur constantly (guardrail pre-scan + executor classify + confirm for
+   *  every repeated `npm run …`); without this each repeat re-ran the tree-
+   *  sitter scanner + regex matchRule over every rule. */
+  private shellMemo = new Map<string, { sig: readonly unknown[]; result: PermissionResult }>();
 
   /**
    * T-03: programmatic prompt hook (TUI). When set, confirm/confirmEdit/
@@ -551,10 +569,12 @@ export class PermissionChecker {
       return { decision: "allow", reason: "allowed by policy" };
     }
     if (policy === "ask") {
-      const deny = matchRule(this.activeRules(), "shell", command);
-      if (deny === "deny") return { decision: "deny", reason: "denied by permission rule" };
-      const allow = matchRule(this.activeRules(), "shell", command);
-      if (allow === "allow") return { decision: "allow", reason: "allowed by permission rule" };
+      // P-perf: ONE matchRule pass — the old code called the identical
+      // matchRule twice (deny check, then allow check); the engine returns
+      // the last-match effect, so both calls always agreed.
+      const e = matchRule(this.activeRules(), "shell", command);
+      if (e === "deny") return { decision: "deny", reason: "denied by permission rule" };
+      if (e === "allow") return { decision: "allow", reason: "allowed by permission rule" };
       return { decision: "ask", reason: "requires approval by policy", alwaysAllowPrefix: extractFirstWord(command) + " " };
     }
     // G2: một đường duy nhất — rules (bao gồm builtin từ allow/deny lists,
@@ -585,6 +605,18 @@ export class PermissionChecker {
    * unavailable (e.g. native module failed to load).
    */
   classifyShell(command: string): PermissionResult {
+    // P-perf (item 16): result memo (see shellMemo). Signature comparison is
+    // 4 identity checks; a miss pays the full classification exactly once.
+    const sig = [this.config.mode, this.activeRules(), this.config.policyRules, this.sessionAllow.version] as const;
+    const hit = this.shellMemo.get(command);
+    if (hit && hit.sig.length === sig.length && hit.sig.every((s, i) => s === sig[i])) return hit.result;
+    const result = this.classifyShellCore(command);
+    if (this.shellMemo.size >= 2000) this.shellMemo.clear(); // command churn guard (paste-bomb loops)
+    this.shellMemo.set(command, { sig, result });
+    return result;
+  }
+
+  private classifyShellCore(command: string): PermissionResult {
     // Catastrophic deny is the absolute floor — before scanner/splitting.
     if (isCatastrophic(command)) {
       return { decision: "deny", reason: "matches catastrophic command pattern" };
