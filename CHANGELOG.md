@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Subagents are step-unlimited** — the task tool no longer caps child runs at
+  `min(parent maxSteps, 20)`; a subagent ends on completion, guardrail stop, or
+  parent abort. Agent defs that declare `steps:` keep their explicit budget.
+  CLI step counter and startup banner render the unlimited budget as `∞`.
+
 ## [0.9.19] — 2026-11-18
 
 ### Performance

@@ -33,7 +33,9 @@ export function info(msg: string): void {
 
 export function step(stepNum: number, total: number, msg: string): void {
   if (QUIET) return;
-  console.log(`${BLUE}[${String(stepNum).padStart(2)}/${total}]${RESET} ${BOLD}▸ ${msg}${RESET}`);
+  // Unlimited budget (subagents run step-free) renders as ∞ instead of "Infinity".
+  const t = Number.isFinite(total) ? String(total) : "∞";
+  console.log(`${BLUE}[${String(stepNum).padStart(2)}/${t}]${RESET} ${BOLD}▸ ${msg}${RESET}`);
 }
 
 export function success(msg: string): void {

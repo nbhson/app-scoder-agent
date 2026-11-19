@@ -396,7 +396,10 @@ export class Agent {
           // v2: the child resolves this def itself (tools filter, permission,
           // model via routing + def.model, prompt) — no manual overrides here.
           agent: def?.name ?? "build",
-          maxSteps: def?.steps ?? Math.min(config.maxSteps, 20),
+          // Subagents are step-unlimited: the run ends on completion, guardrail
+          // stop, or parent abort — no artificial 20-step cap. A def that
+          // declares `steps:` keeps its explicit budget.
+          maxSteps: def?.steps ?? Number.POSITIVE_INFINITY,
           noSave: true, // subagent runs are ephemeral — no session pollution
         });
         // Abort cascade: parent abort kills child's in-flight LLM calls.
@@ -1269,7 +1272,7 @@ export class Agent {
       ["model", `${this.client.model} (${this.config.provider}${this.config.stream ? ", stream" : ""})`],
       ["workdir", this.config.workdir],
       ["build", buildCmd],
-      ["steps", `max ${this.config.maxSteps}  ·  permission ${this.config.permissionMode}`],
+      ["steps", `max ${Number.isFinite(this.config.maxSteps) ? this.config.maxSteps : "∞"}  ·  permission ${this.config.permissionMode}`],
     ]);
 
     this.currentTask = task;
