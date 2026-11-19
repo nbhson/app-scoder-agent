@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.9.20] — 2026-11-19
 
 ### Changed
 - **Subagents are step-unlimited** — the task tool no longer caps child runs at
