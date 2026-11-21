@@ -8,7 +8,7 @@
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,7 +62,7 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
    * — chính tín hiệu đó đã vạch trần Ink CI-gate (xem env bên dưới).
    * --timeout 60 + it() 90s chống contention runner chia sẻ.
    */
-  async function runPty(tag, sendAfter) {
+  async function runPty(tag, sendAfter, dir = tmp) {
     const outFile = join(tmpdir(), `scoder-tui-${tag}-${Date.now()}.txt`);
     const proc = spawn(
       "python3",
@@ -73,7 +73,7 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
         "--out", outFile,
         "--",
         "node", "dist/index.js",
-        "-d", tmp,
+        "-d", dir,
         "tui",
         "fix the bug in lib.js",
       ],
@@ -166,6 +166,30 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
     assert.ok(/MARK-A/.test(clean) && /MARK-B/.test(clean), `cả 2 dòng phải hiện trong input (${where()})`);
     assert.ok(!/MARK-AMARK-B/.test(clean), "⇧⏎ phải ngắt thành 2 dòng, không nối một dòng");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
+  }, 90_000);
+
+  it("git repo thật → ⎇ branch xuất hiện trên rail sau khi run xong (P7)", async () => {
+    // Project riêng, có git init, để probe thật chạy (branch + dirty).
+    const repo = mkdtempSync(join(tmpdir(), "scoder-tui-git-"));
+    writeFileSync(join(repo, "build.js"), "console.log('PASS');\n");
+    writeFileSync(join(repo, "lib.js"), "module.exports.add = (a, b) => a - b; // BUG\n");
+    execFileSync("git", ["init", "-b", "main", "--quiet"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repo });
+    execFileSync("git", ["add", "-A"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "init"], { cwd: repo });
+
+    const { clean, raw, exitCode, ptyErr } = await runPty("gitchip", [
+      "--send-after", "All done|build passed:exit\\r",
+    ], repo);
+    const where = () => ctx(clean, raw.length, ptyErr, exitCode);
+    try {
+      assert.ok(/All done/i.test(clean), `run phải xong (${where()})`);
+      assert.match(clean, /⎇ main/, `UI phải có git chip — rail hoặc status bar (${clean.slice(-200)})`);
+      assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }, 90_000);
 
   it("focus-out + finish → OSC 777 notify frame trên stdout (P6)", async () => {

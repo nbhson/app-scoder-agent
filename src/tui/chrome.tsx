@@ -8,6 +8,8 @@ import type { AgentConfig } from "../config/config.js";
 import type { TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
 import { compactMetrics, queueBadge } from "./metrics.js";
+import { measure, clipCells } from "./text-width.js";
+import { gitChip, type GitContext } from "../workspace/git-status.js";
 import { Spinner } from "./chat-views.js";
 import { getVersion } from "../shared/version.js";
 import { dividerBorderStyle } from "./charset.js";
@@ -41,7 +43,7 @@ export function gaugeColor(step: number, maxSteps: number): string {
  * Terminal ≥ SIDEBAR_MIN_COLS: sidebar handles METRICS + PHASES.
  * Terminal < SIDEBAR_MIN_COLS: phase breadcrumb + metrics move into this row.
  */
-export function BuildRail({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
+export function BuildRail({ state, config, git = null }: { state: TuiState; config: AgentConfig; git?: GitContext | null }): React.JSX.Element {
   const { columns } = useWindowSize();
   const wide = (columns ?? 100) >= SIDEBAR_MIN_COLS;
   const perm = state.permission || config.permissionMode;
@@ -93,7 +95,17 @@ export function BuildRail({ state, config }: { state: TuiState; config: AgentCon
             <Text dimColor>plan › explore › edit › build › verify</Text>
           )
         ) : (
-          <Text dimColor>ready</Text>
+          <Box gap={2}>
+            <Text dimColor>ready</Text>
+            {/* P7: branch + dirty count, idle only — the running rail keeps
+                guardrail/breadcrumb priority (git lives in the StatusBar). */}
+            {git != null && (
+              <Text>
+                <Text dimColor>⎇ {clipCells(git.branch, 24)}</Text>
+                {git.dirty > 0 && <Text color={theme.warn}> · ±{git.dirty}</Text>}
+              </Text>
+            )}
+          </Box>
         )}
       </Box>
 
@@ -152,7 +164,7 @@ export function osc52Copy(text: string): boolean {
   }
 }
 
-export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "overview" }: { state: TuiState; scroll?: string | null; selectMode?: boolean; sidebarTab?: "overview" | "log" }): React.JSX.Element {
+export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "overview", git = null }: { state: TuiState; scroll?: string | null; selectMode?: boolean; sidebarTab?: "overview" | "log"; git?: GitContext | null }): React.JSX.Element {
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
   // Sidebar hidden → the metrics it would show must not vanish from the UI.
@@ -201,6 +213,12 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
     if (left.length + part.length <= leftBudget) left += part;
     else left = fit(left, leftBudget);
   }
+  // P7: while running (or when a guardrail owns the BuildRail center) the
+  // git chip relocates here as its own dim node — the status color/bold
+  // must not bleed into it. Dropped entirely when the left budget is gone.
+  const railShowsGit = git != null && state.status !== "running" && !state.lastGuardrail;
+  let gitText = git && !railShowsGit ? gitChip(git) : null;
+  if (gitText && measure(left) + measure(` · ⎇ ${gitText}`) > leftBudget) gitText = null;
 
   return (
     // App-bar style: chỉ 1 divider mảnh trên đỉnh, đối xứng với BuildRail.
@@ -220,6 +238,7 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
         {state.status === "running" && <Spinner active />}
         {state.status === "running" ? "  " : statusIcon ? `${statusIcon} ` : "   "}
         <Text color={statusColor} bold>{left}</Text>
+        {gitText && <Text dimColor> · ⎇ {gitText}</Text>}
         {badge && <Text color={theme.accent}> {badge}</Text>}
       </Text>
       {/* Right: hints — cap 0.62: dòng hint đầy đủ (⇧⏎/⇧⇥/⇧P, ~75 cell) vượt

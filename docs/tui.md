@@ -64,6 +64,13 @@ scoder tui "fix the bug"       # auto-submit initial task
 - **Guardrail notice** — spans the full available header width inline when a
   guardrail fires (e.g. `⚠ trả lời text chưa dùng tool — nhắc tiếp tục`);
   otherwise the phase breadcrumb (`plan › explore › edit › build › verify`)
+- **Git context** — `⎇ main · ±3` (branch + dirty entry count) sits in the rail
+  center while idle. It comes from an async, time-boxed `git status --porcelain -b`
+  probe (never `spawnSync`, never blocks a frame): refreshed on mount, every 5 s
+  while idle and right after a run finishes. Hidden entirely outside a git repo
+  or when the probe fails; while a run is active (or a guardrail owns the
+  center) the chip relocates to the left of the Status Bar, and it is dropped
+  rather than overflowing when there is no room (P7).
 - **Note:** step count (`x/40`) and elapsed time are NOT in the header/footer —
   they live in the sidebar METRICS section only (avoiding duplication)
 

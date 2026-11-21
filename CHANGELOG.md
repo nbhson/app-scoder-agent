@@ -35,6 +35,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   count, duration and a sanitized summary. Focus tracking uses DEC 1004; on
   terminals that never report it the fallback is "run longer than 45 s".
   Opt out with `SCODER_NOTIFY=0` or rc `"notify": false` (P6).
+- **Git context in the Build Rail** — `⎇ <branch> · ±N` (branch + dirty entry
+  count) while idle; while running or when a guardrail holds the rail center
+  the chip moves to the Status Bar left. Probed asynchronously
+  (`workspace/git-status.ts` parses `git status --porcelain -b`, renames and
+  unmerged paths counted once) with a 5 s idle cadence plus a refresh on
+  finish; hidden outside a repo, on probe failure, or when the budget is gone
+  — never a blocking call on the render path (P7).
 
 ### Changed
 - The sidebar's first row is now the OVERVIEW/HARNESS LOG tab bar — section

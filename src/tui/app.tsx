@@ -54,6 +54,7 @@ import { PermissionModal } from "./permission-modal.js"; // T2
 import { Sidebar } from "./sidebar.js"; // sidebar opencode
 import { getVersion } from "../shared/version.js";
 import { useScrollMetrics } from "./hooks/use-scroll.js";
+import { useGitStatus } from "./hooks/use-git-status.js";
 
 /**
  * Logo lớn cho màn hình welcome (block letters, ~49 cols) — chỉ vẽ khi pane
@@ -230,6 +231,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // abort handler — kept in sync synchronously by update(), so it is
   // exact even between renders (event bursts land between them).
   const { stateRef, update, queueEvent, eventQueue } = useEventQueue(state, setState, setPermPrompt, runningRef);
+  // P7: branch + dirty count for the BuildRail — async probe, never blocks.
+  const gitStatus = useGitStatus(cfg.workdir ?? process.cwd(), state.status === "running");
   const pushNotice = useCallback(
     (text: string, level: "info" | "warn" | "error" = "info") =>
       update((s) => ({ ...s, items: [...s.items, { kind: "notice", text, level }] })),
@@ -478,7 +481,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     // content overflows — Ink defaults every box to flexShrink:1, which
     // shrank the input bar to zero rows once the log outgrew the terminal.
     <Box flexDirection="column" height={rows || 24} flexShrink={0}>
-      <BuildRail state={state} config={cfg} />
+      <BuildRail state={state} config={cfg} git={gitStatus} />
       {/* Hàng chính: chat bên trái (flexGrow) + Sidebar phải (cố định rộng).
           Clip overflow để BuildRail trên và Input + StatusBar dưới luôn pinned. */}
       <Box flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0}>
@@ -673,7 +676,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           modalRef={overlayRef}
         />
       </Box>
-      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} />
+      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />
     </Box>
   );
 }
