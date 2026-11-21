@@ -17,15 +17,16 @@ import type { AgentConfig } from "../config/config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../io/terminal.js";
 import { discoverSkills } from "../context/skills.js";
-import { discoverAgents, subagentDefs } from "../context/agents.js";
+import { discoverAgents, selectableAgents, subagentDefs } from "../context/agents.js";
 import { initialState, type TuiState } from "./state.js";
 import { transcriptWindow, estimateTotalRows } from "./selectors.js";
-import { SLASH_COMMANDS, formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE } from "../commands/definitions.js";
+import { formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE, discoverCustomCommands } from "../commands/definitions.js";
 import { dispatchCommand } from "../commands/registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
 import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "./chrome.js"; // T2
 import { Input } from "./input.js"; // T2
 import { SessionPicker } from "./session-picker.js"; // session picker modal
+import { Palette } from "./palette.js"; // command palette (Ctrl+P)
 import { fileIndex } from "./at-complete.js";
 import { getTheme, setActiveTheme, theme } from "./theme.js";
 import { boxBorderStyle, isAsciiMode } from "./charset.js";
@@ -144,6 +145,13 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     }),
     [cfg.workdir, skillNames],
   );
+  // P2: palette catalog sources + keyboard ownership. While ANY overlay is
+  // open the overlay owns the keyboard — Input and the global keybinds are
+  // gated off through overlayRef (the picker used to leak keystrokes into
+  // the input field underneath it).
+  const customCmds = useMemo(() => discoverCustomCommands(cfg.workdir), [cfg.workdir]);
+  const agentNames = useMemo(() => selectableAgents(cfg.workdir).map((a) => a.name), [cfg.workdir]);
+  const overlayRef = useRef<unknown>(null);
 
   // Mirror of state for the submit path (isFirst, /cost, /model) and the
   // abort handler — kept in sync synchronously by update(), so it is
@@ -196,6 +204,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
     setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef,
     setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, exit,
+    paletteOpen, helpOpen,
   });
 
   // WARMUP (plan/WARMUP-PLAN.md): tạo agent + prefill prefix system+tools nền
@@ -246,6 +255,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // cửa sổ (scrollTop - startRow[item_start]).
   const { rows, columns } = useWindowSize();
   const showSidebar = (columns ?? 100) >= SIDEBAR_MIN_COLS;
+  // Keyboard ownership: while any overlay (permission modal, session picker,
+  // palette, help) is open, Input stops consuming keys — the overlay's own
+  // useInput answers. (Regression this fixes: keys leaked through the
+  // session picker into the input field underneath.)
+  overlayRef.current = permPrompt ?? (sessionPickerOpen || paletteOpen || helpOpen ? true : null);
 
   return (
     // flexShrink={0}: pinned chrome must never be squeezed when the chat
@@ -346,20 +360,24 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         {showSidebar && <Sidebar state={state} config={cfg} rows={viewport.clientHeight || undefined} />}
       </Box>
       {/* Session picker modal — Ctrl+S or bare "/" opens it. */}
-      {sessionPickerOpen && (
+      {sessionPickerOpen && !permPrompt && (
         <SessionPicker
           workdir={cfg.workdir}
           onSelect={handleSessionSelect}
           onClose={() => setSessionPickerOpen(false)}
         />
       )}
-      {paletteOpen && (
-        <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.accent} paddingX={1} paddingY={1}>
-          <Text color={theme.accent} bold>Command palette (Ctrl+P to close)</Text>
-          {SLASH_COMMANDS.slice(0, 40).map((c) => (
-            <Text key={c.cmd}>{c.cmd.padEnd(12)} {c.desc}</Text>
-          ))}
-        </Box>
+      {paletteOpen && !permPrompt && (
+        <Palette
+          agents={agentNames}
+          custom={customCmds}
+          onInvoke={(inv) => {
+            setPaletteOpen(false);
+            if (inv.kind === "action") setSessionPickerOpen(true);
+            else void submit(inv.text);
+          }}
+          onClose={() => setPaletteOpen(false)}
+        />
       )}
       {helpOpen && (
         <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.dim} paddingX={1} paddingY={1}>
@@ -384,7 +402,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           agentRef={agentRef}
           config={cfg}
           atSources={atSources}
-          modalRef={permPromptRef}
+          modalRef={overlayRef}
         />
       </Box>
       <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} />
