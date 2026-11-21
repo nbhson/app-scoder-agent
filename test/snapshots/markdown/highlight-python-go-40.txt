@@ -1,0 +1,69 @@
+Python
+
+╭──────────────────────────────────────╮
+│ python                               │
+│  1 │ # count matching lines          │
+│  2 │ import re                       │
+│  3 │ from typing import Iterable     │
+│  4 │                                 │
+│  5 │                                 │
+│  6 │ def lines(text: str, pattern:   │
+│    ↪ str) -> list[str]:              │
+│  7 │     """Return all matching      │
+│    ↪ lines."""                       │
+│  8 │     rx = re.compile(pattern)    │
+│  9 │     return [ln for ln in        │
+│    ↪ text.splitlines() if            │
+│    ↪ rx.search(ln)]  # list          │
+│    ↪ comprehension                   │
+│ 10 │                                 │
+│ 11 │                                 │
+│ 12 │ class Index:                    │
+│ 13 │     def __init__(self):         │
+│ 14 │         self.entries = {}       │
+│ 15 │                                 │
+│ 16 │     def add(self, key: str,     │
+│    ↪ value=None) -> bool:            │
+│ 17 │         if key in self.entries: │
+│ 18 │             return False        │
+│ 19 │         self.entries[key] =     │
+│    ↪ value                           │
+│ 20 │         return True             │
+╰──────────────────────────────────────╯
+
+Go
+
+╭──────────────────────────────────────╮
+│ go                                   │
+│  1 │ package store                   │
+│  2 │                                 │
+│  3 │ import (                        │
+│  4 │    "errors"                     │
+│  5 │    "sync"                       │
+│  6 │ )                               │
+│  7 │                                 │
+│  8 │ // Store is safe for concurrent │
+│    ↪ use.                            │
+│  9 │ type Store struct {             │
+│ 10 │    mu   sync.RWMutex            │
+│ 11 │    data map[string][]byte       │
+│ 12 │ }                               │
+│ 13 │                                 │
+│ 14 │ func New() *Store {             │
+│ 15 │    return &Store{data:          │
+│    ↪ make(map[string][]byte)}        │
+│ 16 │ }                               │
+│ 17 │                                 │
+│ 18 │ func (s *Store) Get(key string) │
+│    ↪ ([]byte, error) {               │
+│ 19 │    s.mu.RLock()                 │
+│ 20 │    defer s.mu.RUnlock()         │
+│ 21 │    v, ok := s.data[key]         │
+│ 22 │    if !ok {                     │
+│ 23 │            return nil,          │
+│ errors.New("miss: "                  │
+│    ↪ + key)                          │
+│ 24 │    }                            │
+│ 25 │    return v, nil                │
+│ 26 │ }                               │
+╰──────────────────────────────────────╯

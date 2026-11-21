@@ -87,6 +87,11 @@ scoder tui "fix the bug"       # auto-submit initial task
   - ` ```timeline ` (also ` ```events `) renders a vertical event rail. Data
     accepts JSON arrays/`{"events": [...]}` or `time | title | detail | status`
     rows. Status values are `done`, `active`, `pending`, or `error`.
+  - Code fences get language-aware syntax highlighting from a table-driven
+    tokenizer (`js/ts/tsx`, `python`, `go`, `rust`, `java`, `c/cpp`, `sql`,
+    `bash/sh`, `json`, `yaml`, `toml` + common aliases like `py`, `rs`, `yml`,
+    `mysql`). Unknown languages keep the JS rules — never a crash, never
+    plain-text regression. No tree-sitter/native deps on the render hot path.
   - Empty/invalid rich blocks show a compact fallback instead of crashing the
     transcript. All rich content is capped and clipped to the current pane.
 

@@ -1,0 +1,66 @@
+SQL & Bash & YAML & JSON
+
+╭──────────────────────────────────────╮
+│ sql                                  │
+│ 1 │ /* find the top spenders */      │
+│ 2 │ SELECT u.name, SUM(o.total) AS   │
+│   ↪ spend                            │
+│ 3 │ FROM users u                     │
+│ 4 │   INNER JOIN orders o ON         │
+│   ↪ o.user_id = u.id                 │
+│ 5 │ WHERE o.created_at >=            │
+│   ↪ '2026-01-01'                     │
+│ 6 │ GROUP BY u.name                  │
+│ 7 │ HAVING SUM(o.total) > 1000       │
+│ 8 │ ORDER BY spend DESC              │
+│ 9 │ LIMIT 10;                        │
+╰──────────────────────────────────────╯
+
+╭──────────────────────────────────────╮
+│ bash                                 │
+│ 1 │ #!/usr/bin/env bash              │
+│ 2 │ # deploy when tests pass         │
+│ 3 │ set -euo pipefail                │
+│ 4 │ if npm test --silent; then       │
+│ 5 │   echo "deploying ${ENV:-prod}"  │
+│   ↪ # parameter expansion            │
+│ 6 │   kubectl rollout status         │
+│   ↪ deploy/api || exit 1             │
+│ 7 │ fi                               │
+╰──────────────────────────────────────╯
+
+╭──────────────────────────────────────╮
+│ yaml                                 │
+│ 1 │ service:                         │
+│ 2 │   name: api        # the public  │
+│   ↪ name                             │
+│ 3 │   replicas: 3                    │
+│ 4 │   enabled: true                  │
+│ 5 │   env:                           │
+│ 6 │     - KEY: "value with           │
+│   ↪ #not-a-comment"                  │
+│ 7 │     - OTHER: 'single'            │
+│ 8 │   tags: [a, b, null]             │
+╰──────────────────────────────────────╯
+
+╭──────────────────────────────────────╮
+│ json                                 │
+│ 1 │ { "ok": true, "count": 42,       │
+│   ↪ "name": "scoder", "nested": {    │
+│   ↪ "v": null } }                    │
+╰──────────────────────────────────────╯
+
+╭──────────────────────────────────────╮
+│ rust                                 │
+│ 1 │ fn main() {                      │
+│ 2 │     let v: Vec<i32> =            │
+│   ↪ (1..=5).map(|x| x *              │
+│ x).collect();                        │
+│ 3 │     match v.first() {            │
+│ 4 │         Some(n) =>               │
+│   ↪ println!("{n}"),                 │
+│ 5 │         None =>                  │
+│   ↪ println!("empty"),               │
+│ 6 │     }                            │
+│ 7 │ }                                │
+╰──────────────────────────────────────╯

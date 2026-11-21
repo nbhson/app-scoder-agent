@@ -16,6 +16,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   full text to `.scoder/views/` (P3).
 - **Scroll affordances** — `▼ +N new lines` pill while scrolled up during a
   run, plus a 1-column proportional scrollbar on the chat pane edge (P4).
+- **Multi-language code highlighting** — fenced blocks in the transcript are
+  tokenized per language from a small rules table (`js/ts/tsx`, `python`,
+  `go`, `rust`, `java`, `c/cpp`, `sql`, `bash/sh`, `json`, `yaml`, `toml` +
+  aliases); unknown languages keep the JS rules. No native parsers, no hot
+  path cost — same stance as `repo-map.ts` (P5).
 - Status bar shows the steering-queue badge (`⇢ N`) and, when the sidebar is
   hidden on narrow terminals, compact `ctx % · $cost` metrics (P1).
 - **Tabbed sidebar + Harness Log (`Ctrl+B`)** — the sidebar now has two tabs:
