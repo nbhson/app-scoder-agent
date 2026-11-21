@@ -17,3 +17,16 @@ export function parseWheel(chunk: string): "up" | "down" | null {
 /** Bật/tắt mouse tracking (SGR 1000 + 1006) — chỉ khi alt-screen TTY. */
 export const MOUSE_ENABLE = "\x1b[?1000h\x1b[?1006h";
 export const MOUSE_DISABLE = "\x1b[?1000l\x1b[?1006l";
+
+/** P6: focus reporting (DEC 1004) — terminal sends `\x1b[I` on focus-in and
+ *  `\x1b[O` on focus-out. Ink's parser consumes these sequences silently (no
+ *  keystroke reaches useInput), so a raw listener only OBSERVES them. */
+export const FOCUS_ENABLE = "\x1b[?1004h";
+export const FOCUS_DISABLE = "\x1b[?1004l";
+
+/** Detect a focus change inside a raw stdin chunk ("in" | "out" | null). */
+export function parseFocus(chunk: string): "in" | "out" | null {
+  if (chunk.includes("\x1b[I")) return "in";
+  if (chunk.includes("\x1b[O")) return "out";
+  return null;
+}

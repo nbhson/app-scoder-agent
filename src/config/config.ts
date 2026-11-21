@@ -135,6 +135,12 @@ export interface AgentConfig {
    * solarized). Priority: --theme flag > SCODER_THEME env > rc "theme".
    */
   theme?: string;
+  /**
+   * P6: desktop notification when a run finishes while the terminal is not
+   * focused (or after a long run). Priority: SCODER_NOTIFY env > rc "notify"
+   * > default true. `undefined` also means ON (TUI checks `!== false`).
+   */
+  notify?: boolean;
 }
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -207,6 +213,8 @@ interface RcFile {
   reasoning?: "off" | "on";
   /** TUI palette name — mission | paper | mono | light | high-contrast | solarized. */
   theme?: string;
+  /** P6: notify when a run finishes unfocused (default true; SCODER_NOTIFY env wins). */
+  notify?: boolean;
 }
 
 /**
@@ -587,6 +595,9 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     localProfile: rc.localProfile,
     modelPricing: parsePricing(rc.modelPricing),
     theme: overrides.theme ?? process.env.SCODER_THEME ?? rc.theme,
+    notify: process.env.SCODER_NOTIFY != null
+      ? /^(1|true)$/.test(process.env.SCODER_NOTIFY)
+      : rc.notify ?? true,
   };
 
   // P2: local engine → mặc định rẻ hơn (maxSteps, timeout, output cap, MCP

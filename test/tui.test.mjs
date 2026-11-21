@@ -168,8 +168,26 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
   }, 90_000);
 
-  it("⌃B chuyển sidebar sang tab HARNESS LOG — rows thật, time column, hints (P8)", async () => {
-    const { clean, raw, exitCode, ptyErr } = await runPty("logtab", [
+  it("focus-out + finish → OSC 777 notify frame trên stdout (P6)", async () => {
+    // Terminal gửi \x1b[O (focus out) qua stdin khi người dùng rời cửa sổ —
+    // app phải quan sát ở raw level và phát OSC 777 khi run kết thúc.
+    // Inject ngay khi header xuất hiện: chắc chắn BEFORE finish (else the
+    // focused-fallback wouldn't have time to flip) và app đã mount listener.
+    const { clean, raw, exitCode, ptyErr } = await runPty("notify", [
+      "--send-after", "scoder:\x1b[O",
+      "--send-after", "All done|FAILED:exit\r",
+    ]);
+    const where = () => ctx(clean, raw.length, ptyErr, exitCode);
+    assert.ok(/All done|build passed/i.test(clean), `run phải kết thúc (${where()})`);
+    assert.ok(
+      /\x1b]777;notify;SCoder;/.test(raw),
+      `stdout phải chứa OSC 777 notify (${where()})`,
+    );
+    assert.match(raw, /\x1b\]777;notify;SCoder;(done|FAILED)[^\x07]*\x07/, "frame đủ status + counters");
+    assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
+  }, 90_000);
+
+  it("⌃B chuyển sidebar sang tab HARNESS LOG — rows thật, time column, hints (P8)", async () => {    const { clean, raw, exitCode, ptyErr } = await runPty("logtab", [
       // Run xong → toggles tab; đóng bằng Ctrl+C (idle → quit ngay).
       "--send-after", "All done:\x02",
       "--send-after", "HARNESS LOG:\x03",

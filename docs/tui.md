@@ -175,6 +175,22 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 - Scroll position
 - Keybind hints
 
+### Desktop Notification (`notify`)
+- When a run finishes (`success` / `failed`, never `aborted`) **while the
+  terminal is not focused**, scoder emits an OSC 777 notification
+  (`SCoder · done · 4 steps · 1m05s · <summary>`) — iTerm2, kitty and
+  VTE-family terminals show it; others ignore the escape harmlessly
+  (`src/tui/notify.ts`).
+- Focus state comes from DEC 1004 focus reporting (`CSI ?1004h`), enabled
+  only when stdin is in raw mode on a real TTY. The sequences are observed at
+  the raw-stdin layer and never reach the input line.
+- Terminals that never report focus fall back to a duration rule: notify when
+  the run took **> 45 s**, so long builds page you even on plain consoles.
+- Control characters are stripped from the LLM summary before it goes into
+  the escape — notification text can never inject further sequences.
+- Off switches: `"notify": false` in `.scoderrc.json`, or `SCODER_NOTIFY=0`
+  (env wins over rc). Nothing is emitted on non-TTY / `TERM=dumb` output.
+
 ## Keybinds
 
 | Key | Action |

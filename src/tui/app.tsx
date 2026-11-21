@@ -12,7 +12,7 @@
  * Driven entirely by AgentEvents (the same stream the HTTP/SSE server uses).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp, useWindowSize } from "ink";
+import { Box, Text, useApp, useStdin, useWindowSize } from "ink";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentConfig } from "../config/config.js";
@@ -75,6 +75,8 @@ const BANNER_ASCII = [
   "#####   ####   ####  #####  ###### #    #",
 ];
 import { useEventQueue } from "./hooks/use-event-queue.js";
+import { FOCUS_ENABLE, FOCUS_DISABLE, parseFocus } from "./mouse.js";
+import { buildNotify, emitNotify, notifyBody, shouldNotify } from "./notify.js";
 import { useSessionResume } from "./hooks/use-session-resume.js";
 import { useCommandHost } from "./hooks/use-command-host.js";
 import { useTuiKeybinds } from "./hooks/use-keybinds.js";
@@ -125,6 +127,37 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const [logView, setLogView] = useState<LogView>(DEFAULT_LOG_VIEW);
   // P8: viewer opened from the log (entry payload) instead of a transcript item.
   const [pagerLog, setPagerLog] = useState<{ entryId: number; text: string } | null>(null);
+  // P6: desktop notify on finish. `focused` starts true — terminals without
+  // DEC 1004 never report, and the >45s fallback covers long runs there.
+  const { stdin: focusStdin, isRawModeSupported: focusSupported } = useStdin();
+  const focusedRef = useRef(true);
+  const sawFocusRef = useRef(false);
+  useEffect(() => {
+    if (process.stdout.isTTY !== true || !focusSupported || cfg.notify === false) return;
+    process.stdout.write(FOCUS_ENABLE);
+    const onData = (chunk: Buffer | string) => {
+      const f = parseFocus(String(chunk));
+      if (!f) return;
+      sawFocusRef.current = true;
+      focusedRef.current = f === "in";
+    };
+    focusStdin.on("data", onData);
+    return () => {
+      focusStdin.off("data", onData);
+      process.stdout.write(FOCUS_DISABLE);
+    };
+  }, [cfg.notify, focusStdin, focusSupported]);
+  // Fire when the reducer moves running → success/failed (abort excluded).
+  const notifyPrevStatusRef = useRef<TuiState["status"]>("idle");
+  useEffect(() => {
+    const prev = notifyPrevStatusRef.current;
+    notifyPrevStatusRef.current = state.status;
+    if (prev !== "running") return;
+    if (state.status !== "success" && state.status !== "failed") return;
+    const durMs = state.startedAt != null ? (state.endedAt ?? Date.now()) - state.startedAt : 0;
+    if (!shouldNotify({ enabled: cfg.notify !== false, focused: focusedRef.current, sawFocusEvents: sawFocusRef.current, durationMs: durMs })) return;
+    emitNotify(buildNotify("SCoder", notifyBody(state.status, state.summary ?? "", state.step, durMs)));
+  }, [state.status, state.summary, state.step, state.startedAt, state.endedAt, cfg.notify]);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {

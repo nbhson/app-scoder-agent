@@ -30,6 +30,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   select, `f` filter, `d` detail, `⏎` opens the full payload in the viewer
   (transcript item → `.scoder/logs/<session>.jsonl` fallback), `y` copies,
   `/log [cat]` dumps the log for narrow terminals (P8).
+- **Desktop notification on finish** — when a run ends (success/failed) while
+  the terminal is unfocused, scoder emits an OSC 777 notify with status, step
+  count, duration and a sanitized summary. Focus tracking uses DEC 1004; on
+  terminals that never report it the fallback is "run longer than 45 s".
+  Opt out with `SCODER_NOTIFY=0` or rc `"notify": false` (P6).
 
 ### Changed
 - The sidebar's first row is now the OVERVIEW/HARNESS LOG tab bar — section
