@@ -7,6 +7,7 @@ import { Box, Text, useWindowSize } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import type { TuiState } from "./state.js";
 import { fit, theme } from "./theme.js";
+import { compactMetrics, queueBadge } from "./metrics.js";
 import { Spinner } from "./chat-views.js";
 import { getVersion } from "../shared/version.js";
 import { dividerBorderStyle } from "./charset.js";
@@ -143,6 +144,8 @@ function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
 export function StatusBar({ state, scroll, selectMode = false }: { state: TuiState; scroll?: string | null; selectMode?: boolean }): React.JSX.Element {
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
+  // Sidebar hidden → the metrics it would show must not vanish from the UI.
+  const narrow = (columns ?? 100) < SIDEBAR_MIN_COLS;
 
   const statusColor =
     state.status === "running" ? theme.accent :
@@ -165,13 +168,20 @@ export function StatusBar({ state, scroll, selectMode = false }: { state: TuiSta
   const model = state.model || "—";
 
   // Right side: select-mode reminder OR scroll position OR keybind hints
+  const metrics = narrow ? compactMetrics(state) : null;
   const rightText = selectMode
     ? "⊝ select · drag to highlight · ⌘C/ctrl+c copy · ctrl+o back"
     : scroll
       ? `scroll ${scroll} · esc→tail`
-      : `⏎ send · ⇧⏎ line · ⇧⇥ agent · ⇧P perm · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
+      : metrics
+        // sidebar hidden (<SIDEBAR_MIN_COLS): surface ctx/cost here instead.
+        ? `${metrics} · ctrl+s sessions · esc abort`
+        : `⏎ send · ⇧⏎ line · ⇧⇥ agent · ⇧P perm · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
 
-  const leftBudget = Math.max(24, width - rightText.length - 3);
+  // A3: steering/queue depth — data was already in state, nothing rendered it.
+  const badge = queueBadge(state);
+
+  const leftBudget = Math.max(24, width - rightText.length - (badge ? badge.length + 3 : 3));
   let left = statusLabel;
   if (model && model !== "—") {
     const part = ` · ${model}`;
@@ -192,11 +202,12 @@ export function StatusBar({ state, scroll, selectMode = false }: { state: TuiSta
       alignItems="center"
       flexShrink={0}
     >
-      {/* Left: status icon (spinner when running) + status label */}
+      {/* Left: status icon (spinner when running) + status label (+ queue badge) */}
       <Text>
         {state.status === "running" && <Spinner active />}
         {state.status === "running" ? "  " : statusIcon ? `${statusIcon} ` : "   "}
         <Text color={statusColor} bold>{left}</Text>
+        {badge && <Text color={theme.accent}> {badge}</Text>}
       </Text>
       {/* Right: hints — cap 0.62: dòng hint đầy đủ (⇧⏎/⇧⇥/⇧P, ~75 cell) vượt
           nửa ngang; left (status+model) đã có leftBudget riêng co theo right. */}

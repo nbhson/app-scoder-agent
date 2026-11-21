@@ -301,11 +301,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               </Text>
               <Text>
                 <Text bold color={theme.accent}>ctrl+o</Text>
-                <Text dimColor> select/copy (tắt mouse tracking để tô đen kéo chuột)</Text>
+                <Text dimColor> select/copy — releases the mouse for drag-highlight + native copy</Text>
               </Text>
                            {state.warmup?.active && (
                  <Box flexDirection="column" alignItems="center" marginTop={1}>
-                   <Text dimColor>{state.warmup.message ?? "đang warm-up…"}</Text>
+                   <Text dimColor>{state.warmup.message ?? "warming up…"}</Text>
                    <Box>
                      <Text color={theme.accent}>
                        {"█".repeat(Math.round((state.warmup.percent / 100) * 32))}

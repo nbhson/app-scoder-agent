@@ -112,6 +112,14 @@ function ToolItemView({ item, width }: { item: Extract<ChatItem, { kind: "tool" 
         <Text color={item.ok === false ? theme.error : theme.accent} bold>{item.name}</Text>
         {keyArg && <Text dimColor> {keyArg}</Text>}
         {running && <Text dimColor> · running</Text>}
+        {!running && (
+          // A2: explicit status glyph — name color alone was too subtle to scan.
+          item.ok ? (
+            <Text color={theme.success}> {charset.ok}</Text>
+          ) : (
+            <Text color={theme.error}> {charset.fail}</Text>
+          )
+        )}
         {!running && elapsed && <Text dimColor> · {elapsed}</Text>}
       </Text>
 

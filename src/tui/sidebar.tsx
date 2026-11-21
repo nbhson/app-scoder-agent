@@ -18,8 +18,8 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import { contextWindowFor } from "../llm/model-catalog.js";
-import { resolveModelPricing } from "../shared/constants.js";
 import { type ChatItem, type TuiState } from "./state.js";
+import { ctxPctOf, runCostUsd } from "./metrics.js";
 import { fit, theme } from "./theme.js";
 import { charset } from "./charset.js";
 import { fuelGauge, gaugeColor, SIDEBAR_WIDTH } from "./chrome.js";
@@ -129,9 +129,7 @@ function buildMetricsRows(state: TuiState): React.ReactNode[] {
   const elapsedMs = state.startedAt ? (state.endedAt ?? Date.now()) - state.startedAt : null;
   const elapsedSec = elapsedMs != null ? Math.floor(elapsedMs / 1000) : null;
   const gauge = fuelGauge(state.step, state.maxSteps);
-  const cost =
-    (state.usage.inputTokens / 1_000_000) * resolveModelPricing(state.model).input +
-    (state.usage.outputTokens / 1_000_000) * resolveModelPricing(state.model).output;
+  const cost = runCostUsd(state);
   // tok/s of the most recently completed LLM call (output tokens / call duration).
   // This is NOT averaged over the whole run (which includes tool/build time and
   // dilutes the number); it reflects the model's actual generation speed.
@@ -152,9 +150,7 @@ function buildMetricsRows(state: TuiState): React.ReactNode[] {
   // cumulative counter only before the first turn has reported.
   const ctxTokens = state.context?.tokens ?? (hasUsage ? state.usage.inputTokens : null);
   const ctxWindow = state.context?.window ?? win;
-  const ctxPct =
-    state.context?.pct ??
-    (ctxTokens != null && ctxWindow > 0 ? Math.min(100, Math.round((ctxTokens / ctxWindow) * 100)) : null);
+  const ctxPct = ctxPctOf(state);
   // ctx giờ hiển thị đủ số: `current/ctxWin (pct%)`.
   const ctxFmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
   const ctxDisplay =
