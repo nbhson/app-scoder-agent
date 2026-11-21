@@ -171,6 +171,11 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | `?` | Show help modal |
 | Mouse wheel | Scroll chat pane (or the open viewer) |
 
+**Reading while the agent works.** Scrolled up from the bottom, the chat pane
+gains two affordances: a `▼ +N new lines` pill above the input while the run
+keeps producing below the fold, and a thin proportional scrollbar on the
+right edge of the pane (hidden in select mode so it can't be copied as text).
+
 **Modified-Enter terminal support.** `Shift+Enter` is only distinguishable from
 `Enter` when the terminal reports modifiers. The TUI negotiates the
 [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)

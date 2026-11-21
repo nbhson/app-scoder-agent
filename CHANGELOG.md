@@ -14,6 +14,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   and diffs with vim-style keys, wheel, and `Tab` cycling; diffs render
   word-level highlighting (git `--word-diff` style pre-pass); `y` saves the
   full text to `.scoder/views/` (P3).
+- **Scroll affordances** — `▼ +N new lines` pill while scrolled up during a
+  run, plus a 1-column proportional scrollbar on the chat pane edge (P4).
 - Status bar shows the steering-queue badge (`⇢ N`) and, when the sidebar is
   hidden on narrow terminals, compact `ctx % · $cost` metrics (P1).
 

@@ -31,8 +31,9 @@ import { SessionPicker } from "./session-picker.js"; // session picker modal
 import { Palette } from "./palette.js"; // command palette (Ctrl+P)
 import { Pager, pagerSources, type PagerSource } from "./pager.js"; // full-screen viewer (A4)
 import { fileIndex } from "./at-complete.js";
+import { newContentPill, scrollThumb } from "./scrollbar.js"; // A5 scroll affordances
 import { getTheme, setActiveTheme, theme } from "./theme.js";
-import { boxBorderStyle, isAsciiMode } from "./charset.js";
+import { boxBorderStyle, charset, isAsciiMode } from "./charset.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
 import { Sidebar } from "./sidebar.js"; // sidebar opencode
 import { getVersion } from "../shared/version.js";
@@ -136,6 +137,15 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     return { ...transcriptWindow(state.items, top, viewportRows), maxScroll: max };
   }, [state.items, scrollOffset, viewportRows]);
   const maxScroll = win.maxScroll;
+  // A5 pill: baseline = row count captured the moment the user scrolled up;
+  // growth after that is "new content behind you". Cleared at the bottom.
+  const scrollBaseRowsRef = useRef<number | null>(null);
+  if (scrollOffset === 0) scrollBaseRowsRef.current = null;
+  else if (scrollBaseRowsRef.current == null) scrollBaseRowsRef.current = win.totalRows;
+  const newRowsPill = newContentPill(scrollBaseRowsRef.current ?? win.totalRows, win.totalRows, scrollOffset);
+  // A5 thumb: a 1-column proportional scrollbar on the chat pane's right
+  // edge; off in select mode (the rail would be copied as text).
+  const thumb = selectMode ? null : scrollThumb(viewport.clientHeight || 0, win.totalRows, scrollOffset);
   // Follow-bottom (scrollOffset = 0): offset chính xác theo số đo thật.
   const contentOffset =
     scrollOffset === 0 && content.hasMeasured
@@ -394,6 +404,15 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           )}
         </Box>
         </Box>
+        {thumb && (
+          <Box flexDirection="column" width={1} flexShrink={0}>
+            {thumb.cells.map((on, i) => (
+              <Text key={i} color={on ? theme.accent : undefined} dimColor={!on}>
+                {on ? charset.blockFull : "·"}
+              </Text>
+            ))}
+          </Box>
+        )}
         {/* Sidebar phải: session · MCP · metrics · phases · plan · build
             (narrow → ẩn). rows = chiều cao đo được của khung chính — sidebar
             greedy-fit theo budget, section không vừa trọn vẹn thì bỏ qua. */}
@@ -441,6 +460,15 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}
+      {/* A5: new-content pill — only while scrolled up; tells you the run
+          kept producing below the fold and how much. */}
+      {newRowsPill > 0 && !pagerAt && (
+        <Box paddingX={2} flexShrink={0}>
+          <Text color={theme.accent}>
+            {`${charset.arrowDown} +${newRowsPill} new lines · End jumps to tail`}
+          </Text>
+        </Box>
+      )}
       <Box paddingX={1} paddingTop={0} paddingBottom={0} flexShrink={0} alignSelf="stretch">
         <Input
           valueRef={inputRef}
