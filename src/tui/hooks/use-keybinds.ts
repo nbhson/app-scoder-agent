@@ -28,9 +28,13 @@ export function useTuiKeybinds(deps: {
   /** P2: palette/help overlay open — overlay owns the keyboard while shown. */
   paletteOpen: boolean;
   helpOpen: boolean;
+  /** A4: full-screen viewer open — it owns keys + wheel entirely. */
+  pagerOpen: boolean;
+  /** `v` (input empty) — open the newest tool output / diff in the viewer. */
+  openViewer: () => void;
   exit: () => void;
 }) {
-  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, paletteOpen, helpOpen, exit } = deps;
+  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, paletteOpen, helpOpen, pagerOpen, openViewer, exit } = deps;
   // Esc aborts the running task (like SIGINT in the CLI); when scrolled up,
   // the first Esc returns to the bottom instead.
   const scrollOffsetRef = useRef(0);
@@ -68,9 +72,15 @@ export function useTuiKeybinds(deps: {
       if (_input === "?" || key.escape) setHelpOpen(false);
       return;
     }
-    // ── Session picker / palette open: the overlay's own useInput answers.
-    // Global keys (cycle, scroll, abort, ?) must NOT leak through. ──
-    if (paletteOpen || sessionPickerOpen) return;
+    // ── Session picker / palette / viewer open: the overlay's own useInput
+    // answers. Global keys (cycle, scroll, abort, ?) must NOT leak through. ──
+    if (paletteOpen || sessionPickerOpen || pagerOpen) return;
+
+    // ── v (input empty): full-screen viewer for the newest output/diff ──
+    if (_input === "v" && !inputRef.current.trim()) {
+      openViewer();
+      return;
+    }
 
     // ── Ctrl+S: open session picker (when not running) ──
     if (key.ctrl && _input === "s") {

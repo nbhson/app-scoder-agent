@@ -3,6 +3,29 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **TUI command palette (`Ctrl+P`)** — fuzzy-searchable, grouped actions
+  (builtin + custom commands, agents, themes, permission modes, session
+  picker) replacing the static key/value dump; Enter dispatches through the
+  command registry like a typed command (plan/TUI-UX-UPGRADE-PLAN.md P2).
+- **TUI full-screen viewer (`v`)** — page through the newest 30 tool outputs
+  and diffs with vim-style keys, wheel, and `Tab` cycling; diffs render
+  word-level highlighting (git `--word-diff` style pre-pass); `y` saves the
+  full text to `.scoder/views/` (P3).
+- Status bar shows the steering-queue badge (`⇢ N`) and, when the sidebar is
+  hidden on narrow terminals, compact `ctx % · $cost` metrics (P1).
+
+### Changed
+- Tool transcript rows carry an explicit `✓`/`✗` status glyph once finished
+  (previously color-only) (P1).
+- Overlay keyboard ownership unified: palette, session picker, help and the
+  viewer each own the keyboard while open — keys no longer leak into the
+  input field (P2/P3).
+- Interface microcopy consolidated to English across welcome, hints and
+  notices (P1).
+
 ## [0.9.20] — 2026-11-19
 
 ### Changed

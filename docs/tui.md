@@ -71,10 +71,13 @@ scoder tui "fix the bug"       # auto-submit initial task
 - User messages with a left accent border (`│`, theme `user` color) + `you ▸`
   label (bold) — clean and scannable, no full-width background block
 - Streaming assistant text (live cursor ▋)
-- Tool calls with status (`✔`/`✘`, spinner while running)
+- Tool calls with status (`✓`/`✗` marker when done, spinner while running)
 - Diff cards (`✎`) for file writes/edits
 - Flight-recorder step prefix (`03 ▸`)
 - Live command output (dimmed block)
+- Queue badge (`⇢ N`) in the status bar while steering messages await delivery;
+  when the sidebar is hidden (narrow terminals) the status bar shows compact
+  `ctx % · $cost` metrics instead of the key hints
 - Rich assistant display is terminal-native and dependency-free:
   - GFM tables use measured pane width, bounded cells, Unicode borders, and
     remain readable on narrow terminals instead of forcing horizontal overflow.
@@ -126,6 +129,22 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 - On narrow terminals (< 100 cols) the sidebar is hidden and the BuildRail falls back
   to showing the phase breadcrumb + metrics inline
 
+### Full-screen Viewer (`v`)
+- Every "… truncated" in the transcript has an escape hatch: `v` opens the
+  newest tool output or diff in a full-height pane (the newest 30 documents
+  are stacked — `Tab`/`Shift+Tab` cycles through them)
+- Diffs render with **word-level highlighting** (common prefix/suffix dimmed,
+  only the changed words on a background — `w` toggles raw unified mode)
+- `y` saves the full text to `.scoder/views/<timestamp>.txt`
+- Wheel, `↑↓`/`jk`, `PgUp/PgDn`, `Home/End` (`g`/`G`) scroll; `q`/`Esc` closes.
+  While open, the viewer owns the keyboard — transcript keybinds don't leak in.
+
+### Command Palette (`Ctrl+P`)
+- One search line over grouped actions: builtin + custom slash commands,
+  agents, themes, permission modes, and the session picker
+- Fuzzy ranking (label weighted above description), `↑↓` select, `⏎` invokes
+  through the same registry path as typing the command (all gates apply)
+
 ### Status Bar
 - Status icon + status (running / success / failed / aborted / idle) — no step count or elapsed time (those live in the sidebar)
 - Model name
@@ -146,10 +165,11 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | `Home/End` | Jump to top/bottom |
 | `Esc` | Return to live tail / Abort / enter vim normal mode in input |
 | `Ctrl+C` | Quit |
-| `Ctrl+P` | Open command palette |
+| `Ctrl+P` | Open command palette (fuzzy search over commands, agents, themes, permission modes) |
 | `Ctrl+S` | Open session picker |
+| `v` | Full-screen viewer for the newest tool output / diff (only when the input is empty) |
 | `?` | Show help modal |
-| Mouse wheel | Scroll chat pane |
+| Mouse wheel | Scroll chat pane (or the open viewer) |
 
 **Modified-Enter terminal support.** `Shift+Enter` is only distinguishable from
 `Enter` when the terminal reports modifiers. The TUI negotiates the

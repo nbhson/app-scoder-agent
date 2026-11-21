@@ -11,6 +11,8 @@ import { parseWheel, MOUSE_ENABLE, MOUSE_DISABLE } from "../mouse.js";
 export function useScrollMetrics(
   setScrollOffset: Dispatch<SetStateAction<number>>,
   mouseEnabled = true,
+  /** Full-screen viewer open: wheel belongs to the overlay, not the transcript. */
+  wheelOverrideRef?: { current: ((dir: "up" | "down") => void) | null },
 ) {
   const viewportRef = useRef<DOMElement | null>(null);
   const contentRef = useRef<DOMElement | null>(null);
@@ -39,7 +41,9 @@ export function useScrollMetrics(
     setRawMode(true);
     const onData = (chunk: Buffer | string) => {
       const dir = parseWheel(String(chunk));
-      if (dir) wheelScroll(dir);
+      if (!dir) return;
+      if (wheelOverrideRef?.current) wheelOverrideRef.current(dir);
+      else wheelScroll(dir);
     };
     stdin.on("data", onData);
     return () => {
@@ -47,6 +51,6 @@ export function useScrollMetrics(
       process.stdout.write(MOUSE_DISABLE);
       setRawMode(false);
     };
-  }, [stdin, setRawMode, isRawModeSupported, wheelScroll, mouseEnabled]);
+  }, [stdin, setRawMode, isRawModeSupported, wheelScroll, mouseEnabled, wheelOverrideRef]);
   return { viewportRef, viewport, contentRef, content, viewportRowsRef };
 }

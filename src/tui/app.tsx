@@ -13,6 +13,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useWindowSize } from "ink";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentConfig } from "../config/config.js";
 import { Agent, type AgentEvent } from "../agent.js";
 import { setQuiet } from "../io/terminal.js";
@@ -27,6 +29,7 @@ import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "./chrome.
 import { Input } from "./input.js"; // T2
 import { SessionPicker } from "./session-picker.js"; // session picker modal
 import { Palette } from "./palette.js"; // command palette (Ctrl+P)
+import { Pager, pagerSources, type PagerSource } from "./pager.js"; // full-screen viewer (A4)
 import { fileIndex } from "./at-complete.js";
 import { getTheme, setActiveTheme, theme } from "./theme.js";
 import { boxBorderStyle, isAsciiMode } from "./charset.js";
@@ -94,6 +97,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // A4: full-screen viewer open — index into state.items of the source row,
+  // or null. Wheel routing goes through pagerWheelRef (useScrollMetrics
+  // override) so scrolling the transcript never fights the pager.
+  const [pagerAt, setPagerAt] = useState<number | null>(null);
+  const pagerWheelRef = useRef<((dir: "up" | "down") => void) | null>(null);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {
@@ -119,7 +127,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // Scroll offset khi đọc lại dùng rows ước lượng; khi BÁM ĐÁY dùng chiều
   // cao THẬT của cửa sổ đã mount (đo rẻ vì cửa sổ ~viewport+overscan) —
   // estimate sai lệch bao nhiêu thì dòng cuối vẫn luôn thấy.
-  const { viewportRef, viewport, contentRef, content, viewportRowsRef } = useScrollMetrics(setScrollOffset, !selectMode);
+  const { viewportRef, viewport, contentRef, content, viewportRowsRef } = useScrollMetrics(setScrollOffset, !selectMode, pagerWheelRef);
   const viewportRows = viewport.clientHeight || 24;
   const win = useMemo(() => {
     const total = estimateTotalRows(state.items);
@@ -163,6 +171,38 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     [update],
   );
 
+  // ── A4 full-screen viewer ────────────────────────────────────────────────
+  /** Stack of viewable documents (tool outputs + diffs), rebuilt from items. */
+  const pagerItems = useMemo(() => pagerSources(state.items), [state.items]);
+  /** `v` (input empty) — open the newest tool output / diff full-screen. */
+  const openViewer = useCallback(() => {
+    const items = stateRef.current.items;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const k = items[i].kind;
+      if (k === "tool" || k === "diff") {
+        setPagerAt(i);
+        return;
+      }
+    }
+    pushNotice("nothing to view yet — no tool output or diff in this session");
+  }, [stateRef, pushNotice]);
+  /** `y` in the pager — dump the full text to .scoder/views/ and say where. */
+  const handlePagerSave = useCallback(
+    (src: PagerSource) => {
+      try {
+        const dir = join(cfg.workdir, ".scoder", "views");
+        mkdirSync(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const file = join(dir, `${stamp}.txt`);
+        writeFileSync(file, src.text.endsWith("\n") ? src.text : `${src.text}\n`);
+        pushNotice(`saved → ${file}`);
+      } catch (err) {
+        pushNotice(`save failed: ${String(err instanceof Error ? err.message : err)}`, "error");
+      }
+    },
+    [cfg.workdir, pushNotice],
+  );
+
   const handleSessionSelect = useSessionResume({
     cfg, createAgent, pushNotice, update, runningRef, setScrollOffset, setSessionPickerOpen,
   });
@@ -204,7 +244,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
     setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef,
     setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, exit,
-    paletteOpen, helpOpen,
+    paletteOpen, helpOpen, pagerOpen: pagerAt != null, openViewer,
   });
 
   // WARMUP (plan/WARMUP-PLAN.md): tạo agent + prefill prefix system+tools nền
@@ -259,7 +299,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // palette, help) is open, Input stops consuming keys — the overlay's own
   // useInput answers. (Regression this fixes: keys leaked through the
   // session picker into the input field underneath.)
-  overlayRef.current = permPrompt ?? (sessionPickerOpen || paletteOpen || helpOpen ? true : null);
+  overlayRef.current = permPrompt ?? (sessionPickerOpen || paletteOpen || helpOpen || pagerAt != null ? true : null);
 
   return (
     // flexShrink={0}: pinned chrome must never be squeezed when the chat
@@ -383,11 +423,21 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.dim} paddingX={1} paddingY={1}>
           <Text color={theme.brand} bold>Help (?)</Text>
           <Text dimColor>
-            keys: ⇧⏎ newline · ⇧⇥ agent build/plan/review · ⇧P permission auto/ask/readonly (input trống) · ⌃P palette
-            · ⌃S sessions · ⌃T thinking · ⌃O select · ? help · esc abort · ⌃C quit
+            keys: ⇧⏎ newline · ⇧⇥ agent build/plan/review · ⇧P permission auto/ask/readonly (empty input) · ⌃P palette
+            · ⌃S sessions · ⌃T thinking · ⌃O select · v view output/diff · ? help · esc abort · ⌃C quit
           </Text>
           <Text>{formatSlashHelp("scoder tui")}</Text>
         </Box>
+      )}
+      {/* A4: full-screen viewer — owns the keyboard + wheel while mounted. */}
+      {pagerAt != null && !permPrompt && (
+        <Pager
+          sources={pagerItems}
+          startIndex={Math.max(0, pagerItems.findIndex((s) => s.itemId === pagerAt))}
+          wheelRef={pagerWheelRef}
+          onSave={handlePagerSave}
+          onClose={() => setPagerAt(null)}
+        />
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
       {permPrompt && <PermissionModal prompt={permPrompt} />}
