@@ -30,8 +30,10 @@ export function useSubmit(deps: {
   setScrollOffset: Dispatch<SetStateAction<number>>;
   createAgent: () => Agent;
   bumpFrame: () => void;
+  /** `/log [cat]` (tui-only) — render the harness log into the full-screen viewer. */
+  openLogPager: (arg: string) => void;
 }) {
-  const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame } = deps;
+  const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager } = deps;
   // Close any lingering streaming messages when the user sends a new query —
   // prevents green/dim text from the previous response appearing stale.
   // P-perf: immutable rewrite. Mutating `it.streaming = false` in place left
@@ -87,6 +89,13 @@ export function useSubmit(deps: {
           }
           pushNotice(useNamedTheme(slash.arg.trim()), "info");
           bumpFrame();
+          return;
+        }
+        if (slash.cmd === "/log") {
+          // P8 (tui-only): harness log in the full-screen viewer — works on
+          // narrow terminals where the sidebar tab is not reachable.
+          writeInput("");
+          openLogPager(slash.arg.trim());
           return;
         }
         // T1: phần còn lại qua registry dùng chung với REPL.

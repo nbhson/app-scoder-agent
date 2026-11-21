@@ -20,6 +20,19 @@ import type { AgentConfig } from "../config/config.js";
 import { contextWindowFor } from "../llm/model-catalog.js";
 import { type ChatItem, type TuiState } from "./state.js";
 import { ctxPctOf, runCostUsd } from "./metrics.js";
+import {
+  DEFAULT_LOG_VIEW,
+  filterLog,
+  fmtLogTs,
+  logColor,
+  logDetailLines,
+  logGlyph,
+  logSuffix,
+  logWindow,
+  type LogFilter,
+  type LogView,
+} from "./log.js";
+import { clipCells } from "./text-width.js";
 import { fit, theme } from "./theme.js";
 import { charset } from "./charset.js";
 import { fuelGauge, gaugeColor, SIDEBAR_WIDTH } from "./chrome.js";
@@ -339,8 +352,9 @@ const PHASES_IDLE_ROWS = 3; // title + "— idle"
  * `rows` = chiều cao ngoài của sidebar (= chiều cao chat viewport cùng hàng).
  * undefined/0 (chưa đo xong) → không giới hạn (behavior cũ, dùng trong tests).
  */
-export function Sidebar({ state, config, rows }: { state: TuiState; config: AgentConfig; rows?: number }): React.JSX.Element {
-  const avail = rows != null && rows > 0 ? Math.max(8, rows - 2 /* border trên/dưới */) : Number.POSITIVE_INFINITY;
+export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_LOG_VIEW }: { state: TuiState; config: AgentConfig; rows?: number; tab?: "overview" | "log"; view?: LogView }): React.JSX.Element {
+  // Border top/bottom + the P8 tab-bar row all sit inside the box: reserve 3.
+  const avail = rows != null && rows > 0 ? Math.max(8, rows - 3) : Number.POSITIVE_INFINITY;
 
   let used = SESSION_ROWS;
   const fits = (h: number) => used + h <= avail;
@@ -402,6 +416,27 @@ export function Sidebar({ state, config, rows }: { state: TuiState; config: Agen
     body.push(<BuildSection key="build" state={state} config={config} />);
   }
 
+  // ── P8: tabbed sidebar ── OVERVIEW is the pre-tab panel; HARNESS LOG
+  // renders the reducer's ring buffer (helpers in log.ts).
+  if (tab === "log") {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor={theme.border}
+        width={SIDEBAR_WIDTH}
+        paddingX={1}
+        flexShrink={0}
+        overflow="hidden"
+      >
+        <TabBar active="log" count={state.log.length} dropped={state.logDropped} filter={view.filter} />
+        <LogTab state={state} view={view} rows={avail} />
+      </Box>
+    );
+  }
+
+  // Tab-bar row is already reserved in `avail` above — sections and their
+  // greedy-fit order are exactly as before, just 1 row tighter.
   return (
     <Box
       flexDirection="column"
@@ -412,8 +447,74 @@ export function Sidebar({ state, config, rows }: { state: TuiState; config: Agen
       flexShrink={0}
       overflow="hidden"
     >
+      <TabBar active="overview" count={state.log.length} dropped={state.logDropped} filter={view.filter} />
       <SessionSection state={state} config={config} />
       {body}
+    </Box>
+  );
+}
+
+// ── P8: tab bar ──────────────────────────────────────────────────────────────
+
+function TabBar({ active, count, dropped, filter }: { active: "overview" | "log"; count: number; dropped: number; filter: LogFilter }): React.JSX.Element {
+  const on = (t: "overview" | "log") => (active === t
+    ? <Text bold backgroundColor={theme.accent} color="black">{` ${t === "overview" ? "OVERVIEW" : "HARNESS LOG"} `}</Text>
+    : <Text dimColor>{` ${t === "overview" ? "overview" : "log"} `}</Text>);
+  return (
+    <Text wrap="truncate">
+      {on("overview")}
+      <Text dimColor> │ </Text>
+      {on("log")}
+      <Text dimColor>{`  ${count}${dropped > 0 ? ` +${dropped}` : ""}`}{filter !== "ALL" ? ` · ${filter}` : ""}</Text>
+    </Text>
+  );
+}
+
+// ── P8: harness log tab ───────────────────────────────────────────────────────
+
+function LogTab({ state, view, rows }: { state: TuiState; view: LogView; rows: number }): React.JSX.Element {
+  const filtered = filterLog(state.log, view.filter);
+  const detailOn = view.detail && view.selId != null;
+  const sel = detailOn ? state.log.find((e) => e.id === view.selId) : undefined;
+  // DETAIL block = rule + lines + its own footer; the list also reserves the
+  // "─ LOG ─" rule row and the bottom key-hint row, so the tab never overflows.
+  const detailLines = sel ? logDetailLines(sel, INNER, clipCells) : [];
+  const detailRows = sel ? detailLines.length + 2 : 0;
+  const avail = Math.max(1, rows - 2 - detailRows);
+  const win = logWindow(filtered, avail, view.offset);
+
+  const lines: React.ReactNode[] = [];
+  win.rows.forEach((e) => {
+    const selected = e.id === view.selId;
+    lines.push(
+      <Text key={e.id} wrap="truncate">
+        <Text dimColor>{selected ? "❱" : " "}</Text>
+        <Text color={theme.dim}>{` ${fmtLogTs(e.ts)}`}</Text>
+        <Text color={logColor(e)}>{` ${logGlyph(e.cat)} `}</Text>
+        <Text bold={selected}>{clipCells(e.text + logSuffix(e), INNER - 15)}</Text>
+      </Text>,
+    );
+  });
+
+  return (
+    <Box flexDirection="column" flexShrink={0}>
+      <Text wrap="truncate">
+        <Text dimColor>{`${charset.h} `}</Text>
+        <Text bold>{`LOG${view.filter !== "ALL" ? ` · ${view.filter}` : ""}`}</Text>
+        <Text dimColor>{` ${win.maxOffset > 0 ? `${Math.min(filtered.length, win.first + 1)}–${win.first + win.rows.length}/${filtered.length}` : `${filtered.length}`}`}</Text>
+      </Text>
+      {lines.length === 0 && <Text dimColor>  nothing yet — events land here as they happen</Text>}
+      {lines}
+      {sel && (
+        <Box flexDirection="column" flexShrink={0}>
+          <Text dimColor>{`${charset.h} DETAIL ${charset.h.repeat(Math.max(0, INNER - 8))}`}</Text>
+          {detailLines.map((l, i) => (
+            <Text key={i} dimColor wrap="truncate">  {l}</Text>
+          ))}
+          <Text dimColor>  ⏎ full · y copy · esc close</Text>
+        </Box>
+      )}
+      <Text dimColor>↑↓ select · Pg scroll · f {view.filter.toLowerCase()} · d detail · ⏎ full</Text>
     </Box>
   );
 }

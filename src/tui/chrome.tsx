@@ -141,7 +141,18 @@ function PhaseBreadcrumb({ phases }: { phases: string[] }): React.JSX.Element {
  * Right: scroll position OR keyboard hints. In select mode (Ctrl+O) the hints
  * swap to the copy reminder — the mouse belongs to the terminal there.
  */
-export function StatusBar({ state, scroll, selectMode = false }: { state: TuiState; scroll?: string | null; selectMode?: boolean }): React.JSX.Element {
+/** OSC 52 clipboard copy — best-effort (many terminals gate it; harmless). */
+export function osc52Copy(text: string): boolean {
+  if (process.stdout.isTTY !== true) return false;
+  try {
+    process.stdout.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "overview" }: { state: TuiState; scroll?: string | null; selectMode?: boolean; sidebarTab?: "overview" | "log" }): React.JSX.Element {
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
   // Sidebar hidden → the metrics it would show must not vanish from the UI.
@@ -176,7 +187,9 @@ export function StatusBar({ state, scroll, selectMode = false }: { state: TuiSta
       : metrics
         // sidebar hidden (<SIDEBAR_MIN_COLS): surface ctx/cost here instead.
         ? `${metrics} · ctrl+s sessions · esc abort`
-        : `⏎ send · ⇧⏎ line · ⇧⇥ agent · ⇧P perm · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
+        // ⇧⏎ (newline) lives in the help panel; the footer stays short enough
+        // that ctrl+c quit never gets truncated at 100 cols.
+        : `⏎ send · ⇧⇥ agent · ⇧P perm · ⌃B ${sidebarTab === "log" ? "overview" : "log"} · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
 
   // A3: steering/queue depth — data was already in state, nothing rendered it.
   const badge = queueBadge(state);

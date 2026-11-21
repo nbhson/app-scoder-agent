@@ -213,8 +213,9 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
     }
   });
 
-  it("terminal thấp (~22 dòng): section dưới không vừa bị BỎ QUA trọn vẹn (không clip nửa chừng)", async () => {
-    const out = await renderSidebar(busyState(), cfg, 22);
+  it("terminal thấp (~23 dòng): section dưới không vừa bị BỎ QUA trọn vẹn (không clip nửa chừng)", async () => {
+    // 23 = 22 hàng nội dung như cũ + 1 hàng tab bar P8 (avail = rows − 3).
+    const out = await renderSidebar(busyState(), cfg, 23);
     // Vừa: SESSION + MCP + METRICS. Hết chỗ: PHASES + PLAN + BUILD.
     assert.match(out, /─ SESSION/);
     assert.match(out, /─ MCP/);
@@ -225,8 +226,8 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
     assert.match(out, /└─/, "border dưới vẽ gọn");
   });
 
-  it("terminal vừa (~31 dòng): PHASES hiện, PLAN co giãn theo chỗ còn lại", async () => {
-    const out = await renderSidebar(busyState(), cfg, 31);
+  it("terminal vừa (~32 dòng): PHASES hiện, PLAN co giãn theo chỗ còn lại", async () => {
+    const out = await renderSidebar(busyState(), cfg, 32);
     assert.match(out, /─ PHASES/);
     assert.match(out, /─ PLAN/);
     assert.match(out, /1\/3 steps/);
@@ -246,7 +247,7 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
       type: "todo",
       items: Array.from({ length: 14 }, (_, i) => ({ content: `step ${i + 1}`, status: i === 0 ? "in_progress" : "pending" })),
     });
-    const out = await renderSidebar(s, cfg, 31);
+    const out = await renderSidebar(s, cfg, 32);
     assert.match(out, /─ METRICS/, "METRICS vẫn hiện dù plan dài");
     assert.match(out, /steps ▰/, "fuel gauge của METRICS vẫn vẽ");
     assert.match(out, /─ PLAN/);

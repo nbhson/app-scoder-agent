@@ -25,11 +25,27 @@ import { transcriptWindow, estimateTotalRows } from "./selectors.js";
 import { formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE, discoverCustomCommands } from "../commands/definitions.js";
 import { dispatchCommand } from "../commands/registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
-import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "./chrome.js"; // T2
+import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH, osc52Copy } from "./chrome.js"; // T2
+import { clipCells } from "./text-width.js";
 import { Input } from "./input.js"; // T2
 import { SessionPicker } from "./session-picker.js"; // session picker modal
 import { Palette } from "./palette.js"; // command palette (Ctrl+P)
 import { Pager, pagerSources, type PagerSource } from "./pager.js"; // full-screen viewer (A4)
+import {
+  DEFAULT_LOG_VIEW,
+  LOG_FILTER_CYCLE,
+  detailMeta,
+  filterLog,
+  fmtLogTs,
+  followOffset,
+  logDetailLines,
+  logGlyph,
+  logSuffix,
+  moveSelection,
+  resolveLogPayload,
+  type LogFilter,
+  type LogView,
+} from "./log.js"; // harness log (P8)
 import { fileIndex } from "./at-complete.js";
 import { newContentPill, scrollThumb } from "./scrollbar.js"; // A5 scroll affordances
 import { getTheme, setActiveTheme, theme } from "./theme.js";
@@ -103,6 +119,12 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // override) so scrolling the transcript never fights the pager.
   const [pagerAt, setPagerAt] = useState<number | null>(null);
   const pagerWheelRef = useRef<((dir: "up" | "down") => void) | null>(null);
+  // P8: sidebar tab + harness-log view (UI prefs — deliberately NOT in
+  // TuiState, which is the transcript/reducer model).
+  const [sidebarTab, setSidebarTab] = useState<"overview" | "log">("overview");
+  const [logView, setLogView] = useState<LogView>(DEFAULT_LOG_VIEW);
+  // P8: viewer opened from the log (entry payload) instead of a transcript item.
+  const [pagerLog, setPagerLog] = useState<{ entryId: number; text: string } | null>(null);
   const inputRef = useRef(initialTask ?? "");
   const writeInput = useCallback(
     (v: string) => {
@@ -213,6 +235,71 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     [cfg.workdir, pushNotice],
   );
 
+  // ── P8: harness log handlers (sidebar tab + `/log`) ───────────────────────
+  /** View mirror for handlers wired once per session — read at key time. */
+  const logViewRef = useRef(logView);
+  logViewRef.current = logView;
+  /** Full payload for the viewer entry-point (item → jsonl fallback). */
+  const logPayload = useCallback(
+    (entry: (typeof stateRef.current.log)[number]) =>
+      resolveLogPayload(entry, stateRef.current.items, {
+        workdir: cfg.workdir,
+        sessionId: agentRef.current?.sessionId ?? "",
+      }),
+    [cfg.workdir],
+  );
+  /** ⏎ on a selected log row → open the viewer with its full payload. */
+  const openLogEntry = useCallback(() => {
+    const s = stateRef.current;
+    const entry = s.log.find((e) => e.id === logViewRef.current.selId);
+    if (!entry) {
+      pushNotice("no log row selected — ↑/↓ first");
+      return;
+    }
+    const p = logPayload(entry);
+    if (!p) {
+      pushNotice("payload not available (evicted and not in the session log)");
+      return;
+    }
+    setPagerLog({ entryId: entry.id, text: `${p.text}${detailMeta(entry)}` });
+  }, [logPayload, pushNotice]);
+  /** `y` — copy the selected entry (JSON) to the clipboard via OSC 52. */
+  const copyLogEntry = useCallback(() => {
+    const s = stateRef.current;
+    const entry = s.log.find((e) => e.id === logViewRef.current.selId);
+    if (!entry) {
+      pushNotice("no log row selected — ↑/↓ first");
+      return;
+    }
+    const json = JSON.stringify({ ...entry, payload: logPayload(entry)?.text ?? null }, null, 1);
+    if (osc52Copy(json)) pushNotice(`copied log entry #${entry.id} (OSC 52)`);
+    else handlePagerSave({ title: `log ${entry.id}`, kind: "output", text: json, meta: entry.cat, itemId: -1 });
+  }, [logPayload, pushNotice, handlePagerSave]);
+  /** `/log [cat]` — render the (filtered) harness log into the full-screen viewer. */
+  const openLogPager = useCallback(
+    (arg: string) => {
+      const s = stateRef.current;
+      const f = arg.toUpperCase();
+      const filter = (["ALL", "LLM", "TOOL", "MCP", "SUB", "SYS"] as const).includes(f as never)
+        ? (f as LogFilter)
+        : arg ? null : "ALL" as LogFilter;
+      if (filter === null) {
+        pushNotice(`unknown category "${arg}" — ALL|LLM|TOOL|MCP|SUB|SYS`, "warn");
+        return;
+      }
+      const entries = filterLog(s.log, filter);
+      if (entries.length === 0) {
+        pushNotice("harness log is empty — events land here as the agent works");
+        return;
+      }
+      const text = entries
+        .map((e) => `${fmtLogTs(e.ts)} ${logGlyph(e.cat)} ${e.text}${logSuffix(e)}${detailMeta(e).replace("\n", "   ")}`)
+        .join("\n");
+      setPagerLog({ entryId: -1, text: `# HARNESS LOG · ${filter} · ${entries.length} entries\n${text}` });
+    },
+    [pushNotice],
+  );
+
   const handleSessionSelect = useSessionResume({
     cfg, createAgent, pushNotice, update, runningRef, setScrollOffset, setSessionPickerOpen,
   });
@@ -235,7 +322,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const { submit } = useSubmit({
     cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode,
     tuiHost, agentRef, runningRef, stateRef,
-    historyRef, setScrollOffset, createAgent, bumpFrame,
+    historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager,
   });
 
   /** Create (or return) the session agent — permission mode always current. */
@@ -250,11 +337,53 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     return agent;
   }
 
+  // P8: keyboard routing for the harness-log tab. The view lives in app state;
+  // these callbacks are stable (they read logViewRef/stateRef at key time).
+  // Mirror of Sidebar's LogTab budget so the window follows the cursor.
+  const logListRows = useCallback(() => {
+    const total = viewportRowsRef.current ?? 24;
+    const avail = Math.max(8, total - 3);
+    const v = logViewRef.current;
+    const sel = v.detail && v.selId != null ? stateRef.current.log.find((e) => e.id === v.selId) : undefined;
+    const detailRows = sel ? logDetailLines(sel, SIDEBAR_WIDTH - 4, clipCells).length + 2 : 0;
+    return Math.max(1, avail - 2 - detailRows);
+  }, [viewportRowsRef, stateRef]);
+  const logHandlers = useMemo(() => ({
+    toggleTab: () => setSidebarTab((t) => (t === "overview" ? "log" : "overview")),
+    move: (d: number) => {
+      const s = stateRef.current;
+      setLogView((v) => {
+        const visible = filterLog(s.log, v.filter);
+        const selId = moveSelection(visible.map((e) => e.id), v.selId, d);
+        return { ...v, selId, offset: followOffset(visible, logListRows(), v.offset, selId) };
+      });
+    },
+    scroll: (d: number) => setLogView((v) => ({ ...v, offset: Math.max(0, v.offset + d), selId: null })),
+    top: () => setLogView((v) => ({ ...v, offset: 999_999, selId: null })),
+    tail: () => setLogView((v) => ({ ...v, offset: 0, selId: null })),
+    cycleFilter: () => setLogView((v) => {
+      const i = LOG_FILTER_CYCLE.indexOf(v.filter);
+      return { ...v, filter: LOG_FILTER_CYCLE[(i + 1) % LOG_FILTER_CYCLE.length], selId: null, offset: 0 };
+    }),
+    toggleDetail: () => setLogView((v) => ({ ...v, detail: !v.detail })),
+    openEntry: openLogEntry,
+    copyEntry: copyLogEntry,
+    escChain: () => {
+      const v = logViewRef.current;
+      if (v.detail) { setLogView({ ...v, detail: false }); return "handled" as const; }
+      if (v.selId != null) { setLogView({ ...v, selId: null }); return "handled" as const; }
+      if (v.offset > 0) { setLogView({ ...v, offset: 0 }); return "handled" as const; }
+      setSidebarTab("overview");
+      return "handled" as const;
+    },
+  }), [stateRef, openLogEntry, copyLogEntry]);
+
   useTuiKeybinds({
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
     setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef,
     setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, exit,
-    paletteOpen, helpOpen, pagerOpen: pagerAt != null, openViewer,
+    paletteOpen, helpOpen, pagerOpen: pagerAt != null || pagerLog != null, openViewer,
+    sidebarTab, logHandlers,
   });
 
   // WARMUP (plan/WARMUP-PLAN.md): tạo agent + prefill prefix system+tools nền
@@ -309,7 +438,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // palette, help) is open, Input stops consuming keys — the overlay's own
   // useInput answers. (Regression this fixes: keys leaked through the
   // session picker into the input field underneath.)
-  overlayRef.current = permPrompt ?? (sessionPickerOpen || paletteOpen || helpOpen || pagerAt != null ? true : null);
+  overlayRef.current = permPrompt ?? (sessionPickerOpen || paletteOpen || helpOpen || pagerAt != null || pagerLog != null ? true : null);
 
   return (
     // flexShrink={0}: pinned chrome must never be squeezed when the chat
@@ -404,19 +533,27 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           )}
         </Box>
         </Box>
-        {thumb && (
-          <Box flexDirection="column" width={1} flexShrink={0}>
-            {thumb.cells.map((on, i) => (
-              <Text key={i} color={on ? theme.accent : undefined} dimColor={!on}>
-                {on ? charset.blockFull : "·"}
-              </Text>
-            ))}
-          </Box>
-        )}
+      {thumb !== null && (
+        <Box flexDirection="column" width={1} flexShrink={0}>
+          {thumb.cells.map((on, i) => (
+            <Text key={i} color={on ? theme.accent : undefined} dimColor={!on}>
+              {on ? charset.blockFull : "·"}
+            </Text>
+          ))}
+        </Box>
+      )}
         {/* Sidebar phải: session · MCP · metrics · phases · plan · build
             (narrow → ẩn). rows = chiều cao đo được của khung chính — sidebar
             greedy-fit theo budget, section không vừa trọn vẹn thì bỏ qua. */}
-        {showSidebar && <Sidebar state={state} config={cfg} rows={viewport.clientHeight || undefined} />}
+        {showSidebar && (
+          <Sidebar
+            state={state}
+            config={cfg}
+            rows={viewport.clientHeight || undefined}
+            tab={sidebarTab}
+            view={logView}
+          />
+        )}
       </Box>
       {/* Session picker modal — Ctrl+S or bare "/" opens it. */}
       {sessionPickerOpen && !permPrompt && (
@@ -445,17 +582,37 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
             keys: ⇧⏎ newline · ⇧⇥ agent build/plan/review · ⇧P permission auto/ask/readonly (empty input) · ⌃P palette
             · ⌃S sessions · ⌃T thinking · ⌃O select · v view output/diff · ? help · esc abort · ⌃C quit
           </Text>
+          <Text dimColor>
+            sidebar: ⌃B harness log tab · ↑↓ select row · f filter ALL/LLM/TOOL/MCP/SUB/SYS · d detail · ⏎ full payload
+            · y copy · PgUp/PgDn scroll · g head · G tail · /log [cat] prints the log in the viewer
+          </Text>
           <Text>{formatSlashHelp("scoder tui")}</Text>
         </Box>
       )}
       {/* A4: full-screen viewer — owns the keyboard + wheel while mounted. */}
-      {pagerAt != null && !permPrompt && (
+      {pagerAt != null && !permPrompt && !pagerLog && (
         <Pager
           sources={pagerItems}
           startIndex={Math.max(0, pagerItems.findIndex((s) => s.itemId === pagerAt))}
           wheelRef={pagerWheelRef}
           onSave={handlePagerSave}
           onClose={() => setPagerAt(null)}
+        />
+      )}
+      {/* P8: viewer opened from a harness-log row (full payload). */}
+      {pagerLog && !permPrompt && (
+        <Pager
+          sources={[{
+            title: `harness log entry ${pagerLog.entryId >= 0 ? `#${pagerLog.entryId}` : "(filtered dump)"}`,
+            kind: "output",
+            text: pagerLog.text,
+            meta: "from state.log",
+            itemId: -1,
+          }]}
+          startIndex={0}
+          wheelRef={pagerWheelRef}
+          onSave={handlePagerSave}
+          onClose={() => setPagerLog(null)}
         />
       )}
       {/* T-03: permission modal — blocks the run until answered. */}
@@ -483,7 +640,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           modalRef={overlayRef}
         />
       </Box>
-      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} />
+      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} />
     </Box>
   );
 }

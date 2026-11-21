@@ -2,7 +2,7 @@
 import { useInput } from "ink";
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type { Agent, AgentEvent } from "../../agent.js";
-import { markAborted, type TuiState } from "../state.js";
+import { logNote, markAborted, type TuiState } from "../state.js";
 
 export function useTuiKeybinds(deps: {
   scrollOffset: number;
@@ -32,9 +32,23 @@ export function useTuiKeybinds(deps: {
   pagerOpen: boolean;
   /** `v` (input empty) — open the newest tool output / diff in the viewer. */
   openViewer: () => void;
+  /** P8: sidebar tab + harness-log keyboard routing (see app.tsx logHandlers). */
+  sidebarTab: "overview" | "log";
+  logHandlers: {
+    toggleTab: () => void;
+    move: (d: number) => void;
+    scroll: (d: number) => void;
+    top: () => void;
+    tail: () => void;
+    cycleFilter: () => void;
+    toggleDetail: () => void;
+    openEntry: () => void;
+    copyEntry: () => void;
+    escChain: () => "handled";
+  };
   exit: () => void;
 }) {
-  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, paletteOpen, helpOpen, pagerOpen, openViewer, exit } = deps;
+  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, paletteOpen, helpOpen, pagerOpen, openViewer, sidebarTab, logHandlers, exit } = deps;
   // Esc aborts the running task (like SIGINT in the CLI); when scrolled up,
   // the first Esc returns to the bottom instead.
   const scrollOffsetRef = useRef(0);
@@ -53,6 +67,9 @@ export function useTuiKeybinds(deps: {
     const answer = key.return ? "yes" : input.toLowerCase() === "y" ? "yes" : input.toLowerCase() === "a" ? "always" : input.toLowerCase() === "n" ? "no" : input.toLowerCase() === "q" ? "quit" : key.escape ? "no" : null;
     if (!answer) return;
     setPermPrompt(null);
+    // P8: the answer lives in the UI, not the event stream — record it in the
+    // harness log so the log shows ask → answer pairs.
+    update((s) => logNote(s, "perm", `answer ${answer}: ${p.command ?? p.label}`));
     agentRef.current?.resolvePermission(p.id, answer);
   });
 
@@ -75,6 +92,31 @@ export function useTuiKeybinds(deps: {
     // ── Session picker / palette / viewer open: the overlay's own useInput
     // answers. Global keys (cycle, scroll, abort, ?) must NOT leak through. ──
     if (paletteOpen || sessionPickerOpen || pagerOpen) return;
+
+    // ── Ctrl+B: toggle sidebar tab OVERVIEW ⇄ HARNESS LOG ──
+    if (key.ctrl && _input === "b") {
+      logHandlers.toggleTab();
+      return;
+    }
+    // ── P8: log-tab keys — active only while the LOG tab is shown AND the
+    // input is empty (same convention as ⇧P / ?); typing returns focus. ──
+    if (sidebarTab === "log" && !inputRef.current.trim()) {
+      if (key.upArrow) return logHandlers.move(-1);
+      if (key.downArrow) return logHandlers.move(1);
+      if (_input === "k") return logHandlers.move(-1);
+      if (_input === "j") return logHandlers.move(1);
+      if (key.pageUp) return logHandlers.scroll(10);
+      if (key.pageDown) return logHandlers.scroll(-10);
+      if (key.home || _input === "g") return logHandlers.top();
+      if (key.end || _input === "G") return logHandlers.tail();
+      if (_input === "f") return logHandlers.cycleFilter();
+      if (_input === "d") return logHandlers.toggleDetail();
+      if (key.return) return logHandlers.openEntry();
+      if (_input === "y") return logHandlers.copyEntry();
+      if (key.escape) return logHandlers.escChain();
+      // Anything else (⌃S/⌃T/⌃O/?/v/typing…) falls THROUGH to the global
+      // handlers below — the log keys must not swallow the rest of the app.
+    }
 
     // ── v (input empty): full-screen viewer for the newest output/diff ──
     if (_input === "v" && !inputRef.current.trim()) {

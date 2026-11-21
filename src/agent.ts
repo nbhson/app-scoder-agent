@@ -977,6 +977,12 @@ export class Agent {
     return this.config.buildCmd ?? detectBuildCommand(this.config.workdir) ?? "echo BUILD";
   }
 
+  /** P8: current session id — the harness log resolves evicted payloads
+   *  from `.scoder/logs/<sessionId>.jsonl` through this. */
+  get sessionId(): string {
+    return this.session.id;
+  }
+
   private mcpBridgeRuntime(): McpBridgeRuntime {
     return {
       config: this.config,

@@ -18,8 +18,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   run, plus a 1-column proportional scrollbar on the chat pane edge (P4).
 - Status bar shows the steering-queue badge (`⇢ N`) and, when the sidebar is
   hidden on narrow terminals, compact `ctx % · $cost` metrics (P1).
+- **Tabbed sidebar + Harness Log (`Ctrl+B`)** — the sidebar now has two tabs:
+  OVERVIEW (unchanged sections) and HARNESS LOG, a live 800-row ring of every
+  harness activity (llm/tool/shell/file/build/mcp/subagent/guardrail/permission/
+  context). Streaming events merge into one row with chunk/byte counters; `↑↓`
+  select, `f` filter, `d` detail, `⏎` opens the full payload in the viewer
+  (transcript item → `.scoder/logs/<session>.jsonl` fallback), `y` copies,
+  `/log [cat]` dumps the log for narrow terminals (P8).
 
 ### Changed
+- The sidebar's first row is now the OVERVIEW/HARNESS LOG tab bar — section
+  content is unchanged, one row of the height budget goes to tabs (P8).
 - Tool transcript rows carry an explicit `✓`/`✗` status glyph once finished
   (previously color-only) (P1).
 - Overlay keyboard ownership unified: palette, session picker, help and the

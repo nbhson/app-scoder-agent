@@ -50,6 +50,43 @@ export type RunStatus = "idle" | "running" | "success" | "failed" | "aborted";
 /** State of the last build event — drives the Build Rail lamp. */
 export type BuildLamp = "none" | "ok" | "fail";
 
+// ── Harness Log (P8) ─────────────────────────────────────────────────────────
+// One ring-buffered line per meaningful harness activity, built INSIDE the
+// reducer (single source of truth — CLI/serve don't change, UI just renders).
+// Entries never carry big payloads: `ref` points back at state.items (or the
+// session jsonl after MAX_ITEMS eviction), `meta` carries merge counters.
+
+export type LogCat =
+  | "run" | "llm" | "tool" | "shell" | "file" | "build" | "mcp"
+  | "sub" | "guard" | "perm" | "sys";
+
+export interface LogEntry {
+  /** Monotonic id — selection anchors on this so the cursor survives growth. */
+  id: number;
+  /** Unix ms when the event reached the reducer. */
+  ts: number;
+  cat: LogCat;
+  /** One-line summary; stored ≤200 chars, clipped to the pane at render. */
+  text: string;
+  /** Pointer to the full payload (resolved lazily by the viewer). */
+  ref?: { kind: "item"; step: number; callId?: string; name?: string };
+  meta?: {
+    ms?: number;
+    tokensIn?: number;
+    tokensOut?: number;
+    cached?: number;
+    exit?: boolean | null;
+    /** llm_delta/reasoning/tool_output merge counters (anti-spam). */
+    chunks?: number;
+    bytes?: number;
+    /** tool_progress ticks. */
+    count?: number;
+    pct?: number;
+    /** true = stream still open; later events MERGE into this row, never add. */
+    live?: boolean;
+  };
+}
+
 export interface TuiState {
   items: ChatItem[];
   status: RunStatus;
@@ -103,6 +140,12 @@ export interface TuiState {
    * (run_start, hoặc trực tiếp ở submit/steer path) — cùng ngữ nghĩa latestPlan.
    */
   plan: Array<{ content: string; status: "pending" | "in_progress" | "completed" }> | null;
+  /** P8: harness log ring buffer (newest last). Immutable-append like items. */
+  log: LogEntry[];
+  /** Monotonic id source for LogEntry (never reused across resets). */
+  logSeq: number;
+  /** Entries evicted from the ring — the header shows `+N`. */
+  logDropped: number;
 }
 
 export function initialState(): TuiState {
@@ -137,12 +180,17 @@ export function initialState(): TuiState {
     subagents: [],
     plan: null,
     warmup: null,
+    log: [],
+    logSeq: 0,
+    logDropped: 0,
   };
 }
 
 const MAX_ITEMS = 400;
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_TEXT_CHARS = 40_000;
+export const MAX_LOG_ENTRIES = 800;
+const LOG_TEXT_CAP = 200;
 
 function appendItem(state: TuiState, item: ChatItem): void {
   state.items.push(item);
@@ -169,13 +217,96 @@ function capTail(text: string, max = MAX_OUTPUT_CHARS): string {
   return `…[truncated ${text.length - max} chars]\n${text.slice(text.length - max)}`;
 }
 
+// ── Harness Log plumbing (P8) ────────────────────────────────────────────────
+
+/** Append a log entry (immutable, ring-buffered — never mutate in place). */
+function pushLog(
+  state: TuiState,
+  cat: LogCat,
+  text: string,
+  opts?: { ref?: LogEntry["ref"]; meta?: LogEntry["meta"] },
+): LogEntry {
+  const clipped = clipLog(text);  const entry: LogEntry = { id: state.logSeq, ts: Date.now(), cat, text: clipped, ...opts };
+  state.logSeq += 1;
+  state.log = [...state.log, entry];
+  if (state.log.length > MAX_LOG_ENTRIES) {
+    const cut = state.log.length - MAX_LOG_ENTRIES;
+    state.log = state.log.slice(cut);
+    state.logDropped += cut;
+  }
+  return entry;
+}
+
+/** UI-side note (permission answers, abort) — same ring, exported for hooks. */
+export function logNote(state: TuiState, cat: LogCat, text: string): TuiState {
+  pushLog(state, cat, text);
+  return state;
+}
+
+/** Find the newest still-live entry of one of `cats` (optionally matching id/name). */
+function findLive(state: TuiState, cats: LogCat[], match?: { callId?: string; name?: string }): number {
+  for (let i = state.log.length - 1; i >= 0; i--) {
+    const e = state.log[i];
+    if (!e.meta?.live || !cats.includes(e.cat)) continue;
+    if (match?.callId != null && e.ref?.callId != null && e.ref.callId !== match.callId) continue;
+    if (match?.name != null && e.ref?.name != null && e.ref.name !== match.name) continue;
+    return i;
+  }
+  return -1;
+}
+
+/** Ring-buffer text cap — same rule whether appending or patching a row. */
+function clipLog(text: string): string {
+  return text.length > LOG_TEXT_CAP ? `${text.slice(0, LOG_TEXT_CAP - 1)}…` : text;
+}
+
+/** Merge patch into the entry at `i` — new object + new array, never in place. */
+function patchLog(state: TuiState, i: number, patch: Partial<LogEntry> & { meta?: LogEntry["meta"] }): void {
+  const prev = state.log[i];
+  if (!prev) return;
+  const next: LogEntry = { ...prev, ...patch, meta: { ...prev.meta, ...patch.meta } };
+  if (next.text.length > LOG_TEXT_CAP) next.text = clipLog(next.text);
+  state.log = [...state.log.slice(0, i), next, ...state.log.slice(i + 1)];
+}
+
+/** Compact token count: 18.2k / 940. */
+function fmtK(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/** Short one-arg hint for a tool line (command/path first, like the transcript). */
+function toolArgHint(args: Record<string, unknown>): string {
+  for (const key of ["command", "path", "pattern", "query", "url", "id"]) {
+    const v = args[key];
+    if (typeof v === "string" && v.length > 0) return v.split("\n")[0];
+  }
+  return "";
+}
+
+/**
+ * Anti-spam (P8): llm_delta / llm_reasoning NEVER create a row — they merge
+ * chunks/bytes counters into the single open `llm` entry (rendered with a `…`
+ * suffix while live). The row is created on the first delta of a call.
+ */
+function mergeLlmActivity(state: TuiState, bytes: number): void {
+  const i = findLive(state, ["llm"]);
+  if (i >= 0) {
+    const m = state.log[i].meta;
+    patchLog(state, i, { meta: { ...m, live: true, chunks: (m?.chunks ?? 0) + 1, bytes: (m?.bytes ?? 0) + bytes } });
+    return;
+  }
+  pushLog(state, "llm", `llm #${state.usage.calls + 1} streaming`, {
+    ref: { kind: "item", step: state.step },
+    meta: { live: true, chunks: 1, bytes },
+  });
+}
+
 /** Guardrail event: đếm + giữ decision gần nhất (ngắn, tự giải thích cho header). */
 function applyGuardrail(state: TuiState, ev: { rule: string; action: string; reason: string }): void {
   // history-trim là routine context management — đếm làm gì, hiện làm gì:
   // header chỉ hiển thị những can thiệp THẬT sự đáng chú ý (inject/finish/verify).
   if (ev.action === "trim") return;
-  state.guardrailCount += 1;
-  // Thông điệp thân thiện theo rule — không dump raw "rule · reason" lên UI.
+  state.guardrailCount += 1;  // Thông điệp thân thiện theo rule — không dump raw "rule · reason" lên UI.
   const HUMAN: Record<string, string> = {
     "wrap-up": "sắp hết bước — yêu cầu agent chốt việc và chạy build",
     "chat-done": "lượt chat thuần — kết thúc không cần build",
@@ -186,6 +317,7 @@ function applyGuardrail(state: TuiState, ev: { rule: string; action: string; rea
     "build-stop": "build pass — kết thúc run",
   };
   state.lastGuardrail = HUMAN[ev.rule] ?? `${ev.rule}: ${ev.reason}`;
+  pushLog(state, "guard", `${ev.rule} → ${ev.action}`);
 }
 
 // Pure selectors live in ./selectors.js (Phase 5.4) — re-exported so existing
@@ -201,6 +333,9 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     case "permission_request": {
       // T-03: surfaced via a dedicated React state hook in TuiApp (not the
       // chat items — the modal is modal, not transcript).
+      pushLog(state, "perm", `ask ▸ ${ev.kind}: ${ev.command ?? ev.label}`, {
+        ref: { kind: "item", step: state.step },
+      });
       break;
     }
     case "run_start": {
@@ -239,9 +374,13 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       // Plan của task trước không được lọt sang task mới.
       state.plan = null;
       state.warmup = null;
+      pushLog(state, "run", `run ▸ ${ev.agent ?? "build"}: ${ev.task}`);
       break;
     }
     case "llm_reasoning": {
+      // P8: merge into the open llm row (never its own entry) even when the
+      // transcript hides thinking — the harness log shows all activity.
+      mergeLlmActivity(state, ev.delta.length);
       // T-10: thinking stream — chỉ append khi thinkingVisible; vẫn giữ trong
       // reasoning buffer riêng để toggle bật lại thấy (đơn giản: drop khi off).
       if (!state.thinkingVisible) break;
@@ -262,6 +401,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.streamingOutputChars = 0;
       state.streamStartedAt = null;
       state.llmCallStartedAt = Date.now();
+      pushLog(state, "run", `step ${ev.step}/${ev.maxSteps === 0 ? "∞" : ev.maxSteps}`);
       // A new step starts: close any still-"streaming" assistant message.
       const last = lastItem(state);
       if (last && (last.kind === "assistant" || last.kind === "thinking") && last.streaming) {
@@ -274,6 +414,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         state.streamStartedAt = state.llmCallStartedAt ?? Date.now();
       }
       state.streamingOutputChars += ev.delta.length;
+      mergeLlmActivity(state, ev.delta.length);
       const last = lastItem(state);
       if (last && last.kind === "assistant" && last.streaming) {
         let text = last.text + ev.delta;
@@ -296,12 +437,32 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.usage.cachedTokens += ev.usage.cached_tokens ?? 0;
       // Per-call speed from the actual call duration, not the whole run.
       const start = state.streamStartedAt ?? state.llmCallStartedAt;
+      let callMs: number | null = null;
       if (start != null) {
-        const elapsedMs = Math.max(1, Date.now() - start);
+        callMs = Math.max(1, Date.now() - start);
         const out = ev.usage.output_tokens ?? 0;
         if (out > 0) {
-          state.lastLlmTokPerSec = Math.round(out / (elapsedMs / 1000));
+          state.lastLlmTokPerSec = Math.round(out / (callMs / 1000));
         }
+      }
+      // P8: close the open llm row with the real numbers (call #, tokens,
+      // cache hit, duration, merged chunk count). No open row → append one.
+      {
+        const inT = ev.usage.input_tokens ?? 0;
+        const outT = ev.usage.output_tokens ?? 0;
+        const cac = ev.usage.cached_tokens ?? 0;
+        const li = findLive(state, ["llm"]);
+        const chunks = li >= 0 ? state.log[li].meta?.chunks ?? 0 : 0;
+        const bits = [
+          `llm #${state.usage.calls} ${state.model || "?"}`,
+          `in ${fmtK(inT)} out ${fmtK(outT)}${cac > 0 ? ` (cache ${fmtK(cac)})` : ""}`,
+        ];
+        if (callMs != null) bits.push(`${(callMs / 1000).toFixed(1)}s`);
+        if (chunks > 0) bits.push(`${chunks} chunks`);
+        const text = bits.join(" · ");
+        const meta = { live: false, tokensIn: inT, tokensOut: outT, cached: cac, ms: callMs ?? undefined, chunks };
+        if (li >= 0) patchLog(state, li, { text, meta });
+        else pushLog(state, "llm", text, { ref: { kind: "item", step: state.step }, meta });
       }
       state.streamingOutputChars = 0;
       state.streamStartedAt = null;
@@ -321,6 +482,16 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       // Phase tracking cho breadcrumb (không trùng phase liền trước).
       const phase = toolPhase(ev.name);
       if (phase && state.phases[state.phases.length - 1] !== phase) state.phases.push(phase);
+      // P8: shell commands get their own category (⚡); the row stays open
+      // (live) until tool_result — tool_output only merges byte counters.
+      {
+        const isShell = ev.name === "run_command";
+        const arg = isShell ? String(ev.args.command ?? "") : toolArgHint(ev.args);
+        pushLog(state, isShell ? "shell" : "tool", isShell ? `▸ ${arg}` : `${ev.name} ${arg}`.trim(), {
+          ref: { kind: "item", step: ev.step, callId: ev.id, name: ev.name },
+          meta: { live: true },
+        });
+      }
       break;
     }
     case "tool_output": {
@@ -335,6 +506,15 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         }
         // Stop searching at the previous tool boundary to avoid cross-attachment.
         if (it.kind === "tool") break;
+      }
+      // P8 anti-spam: stdout/stderr NEVER append a log row — bytes merge into
+      // the open tool/shell row for the same tool name.
+      {
+        const li = findLive(state, ["tool", "shell"], { name: ev.name });
+        if (li >= 0) {
+          const m = state.log[li].meta;
+          patchLog(state, li, { meta: { ...m, live: true, bytes: (m?.bytes ?? 0) + ev.delta.length } });
+        }
       }
       break;
     }
@@ -367,6 +547,28 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
           truncated: ev.diff.truncated,
           step: ev.step,
         });
+        // P8: file edits get their own ✎ row (the tool row stays as-is).
+        pushLog(state, "file", `+${ev.diff.added} -${ev.diff.removed} ${ev.diff.path}`, {
+          ref: { kind: "item", step: ev.step, callId: ev.id, name: ev.name },
+        });
+      }
+      // P8: close the open tool/shell row with the verdict + duration.
+      {
+        const li = findLive(state, ["tool", "shell"], { callId: ev.id, name: ev.name });
+        const verdict = ` → ${ev.ok ? "ok" : "FAILED"}`;
+        if (li >= 0) {
+          const e = state.log[li];
+          const ms = e.ts != null ? Date.now() - e.ts : undefined;
+          patchLog(state, li, {
+            text: `${e.text}${verdict}${ms != null ? ` · ${(ms / 1000).toFixed(1)}s` : ""}`,
+            meta: { live: false, exit: ev.ok, ms },
+          });
+        } else {
+          pushLog(state, ev.name === "run_command" ? "shell" : "tool", `${ev.name}${verdict}`, {
+            ref: { kind: "item", step: ev.step, callId: ev.id, name: ev.name },
+            meta: { live: false, exit: ev.ok },
+          });
+        }
       }
       break;
     }
@@ -374,13 +576,21 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.buildLamp = ev.success ? "ok" : "fail";
       if (state.phases[state.phases.length - 1] !== "verify") state.phases.push("verify");
       appendItem(state, { kind: "build", success: ev.success, command: ev.command });
+      pushLog(state, "build", `${ev.command} → ${ev.success ? "PASS" : "FAIL"}`);
       break;
     }
     case "todo": {
       // Snapshot last-wins cho sidebar PLAN (field riêng, không bị MAX_ITEMS
       // eviction xoá trên run dài). Chat item vẫn append để giữ transcript.
+      const prevCount = state.plan?.length ?? -1;
       state.plan = ev.items.map((t) => ({ ...t }));
       appendItem(state, { kind: "todo", items: ev.items.map((t) => ({ ...t })) });
+      // P8 anti-spam: only when the checklist GROWS/RESETS — incremental
+      // status flips of the same list would flood the log.
+      if (ev.items.length !== prevCount) {
+        const done = ev.items.filter((t) => t.status === "completed").length;
+        pushLog(state, "sys", `plan · ${ev.items.length} todos (${done} done)`);
+      }
       break;
     }
     case "guardrail": {
@@ -392,32 +602,51 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       // onStatus riêng vẫn đẩy notice text đầy đủ cho transcript.
       if (ev.server && ev.state) {
         state.mcpServers = { ...state.mcpServers, [ev.server]: ev.state };
+        pushLog(state, "mcp", `${ev.server} ${ev.state}`);
         break;
       }
       if (state.warmup?.active) break;
       appendItem(state, { kind: "notice", text: ev.line, level: ev.line.includes("unavailable") ? "warn" : "info" });
+      pushLog(state, "mcp", ev.line);
       break;
     }
     case "steer_queued": {
       // Pending depth tracked via the absolute `queue` event; nothing else.
       state.queue = { ...state.queue, pending: state.queue.pending + 1, steering: state.queue.steering + (ev.mode === "steer" ? 1 : 0) };
+      pushLog(state, "sys", `${ev.mode} +1 · queue ${state.queue.pending}`);
       break;
     }
     case "steer_delivered": {
       state.queue = { pending: 0, steering: 0 };
       appendItem(state, { kind: "notice", text: `steer: ${ev.count} message(s) delivered`, level: "info" });
+      pushLog(state, "sys", `steer delivered ×${ev.count}`);
       break;
     }
     case "queue": {
+      const changed = state.queue.pending !== ev.pending;
       state.queue = { pending: ev.pending, steering: ev.steering };
+      if (changed) pushLog(state, "sys", `queue ${ev.pending} pending`);
       break;
     }
     case "compaction": {
       appendItem(state, { kind: "compaction", tokensBefore: ev.tokensBefore, tokensAfter: ev.tokensAfter, manual: ev.manual });
+      pushLog(state, "sys", `compact ${fmtK(ev.tokensBefore)}→${fmtK(ev.tokensAfter)}${ev.manual ? " (manual)" : ""}`);
       break;
     }
     case "context": {
       state.context = { tokens: ev.tokens, window: ev.window, pct: ev.pct };
+      // P8: only when pressure moves ≥3 points — context is reported every
+      // step and the ring is for meaningful changes.
+      let lastPct: number | undefined;
+      for (let i = state.log.length - 1; i >= 0; i--) {
+        if (state.log[i].cat === "sys" && state.log[i].meta?.pct != null) {
+          lastPct = state.log[i].meta?.pct;
+          break;
+        }
+      }
+      if (lastPct == null || Math.abs(ev.pct - lastPct) >= 3) {
+        pushLog(state, "sys", `ctx ${ev.pct}% (${fmtK(ev.tokens)}/${fmtK(ev.window)})`, { meta: { pct: ev.pct } });
+      }
       break;
     }
     case "agent_start": {
@@ -425,12 +654,23 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       const rest = state.subagents.filter((s) => s.id !== ev.id);
       rest.push({ id: ev.id, name: ev.name, description: ev.description, status: "running" });
       state.subagents = rest.slice(-20);
+      pushLog(state, "sub", `▸ ${ev.name}: ${ev.description}`, {
+        ref: { kind: "item", step: state.step, callId: ev.id },
+        meta: { live: true },
+      });
       break;
     }
     case "agent_end": {
       state.subagents = state.subagents.map((s) =>
         s.id === ev.id ? { ...s, status: ev.ok ? "ok" : "failed", steps: ev.steps, summary: ev.summary } : s,
       );
+      {
+        const li = findLive(state, ["sub"], { callId: ev.id });
+        const name = state.subagents.find((s) => s.id === ev.id)?.name ?? "subagent";
+        const text = `${name} ${ev.ok ? "done" : "FAILED"} · ${ev.steps} steps`;
+        if (li >= 0) patchLog(state, li, { text, meta: { live: false, count: ev.steps } });
+        else pushLog(state, "sub", text, { ref: { kind: "item", step: state.step, callId: ev.id }, meta: { count: ev.steps } });
+      }
       break;
     }
     case "tool_progress": {
@@ -443,12 +683,21 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         }
         if (it.kind === "tool") break;
       }
+      // P8: progress ticks merge into the open row (count), never a new line.
+      {
+        const li = findLive(state, ["tool", "shell"], { callId: ev.id, name: ev.name });
+        if (li >= 0) {
+          const m = state.log[li].meta;
+          patchLog(state, li, { meta: { ...m, live: true, count: (m?.count ?? 0) + 1 } });
+        }
+      }
       break;
     }
     case "question_request": {
       // Surfaced via the dedicated ask_user modal (Phase 3/7); queue a notice
       // so the transcript isn't silent while waiting for user input.
       appendItem(state, { kind: "notice", text: `❓ ${ev.question}`, level: "info" });
+      pushLog(state, "perm", `ask ▸ ${ev.question}`, { ref: { kind: "item", step: state.step } });
       break;
     }
     case "finish": {
@@ -472,18 +721,24 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
           s.status === "running" ? { ...s, status: "failed", summary: s.summary ?? "run ended — subagent stopped" } : s,
         );
       }
+      pushLog(state, "run", `${state.status} · ${state.step} steps · ${ev.summary.slice(0, 60)}`);
       break;
     }
     case "warmup": {
            if (ev.active) {
+             const prevStage = state.warmup?.stage;
              state.warmup = { active: true, stage: ev.stage, percent: Math.max(0, Math.min(100, ev.percent)), message: ev.message ?? null };
+             // P8: one row per STAGE change, not per progress tick.
+             if (prevStage !== ev.stage) pushLog(state, "sys", `warmup ${ev.stage} ${Math.max(0, Math.min(100, ev.percent))}%`);
            } else {
+             if (state.warmup?.active) pushLog(state, "sys", "warmup idle");
              state.warmup = null;
            }
            break;
          }
     case "error": {
       appendItem(state, { kind: "notice", text: ev.message, level: "error" });
+      pushLog(state, "sys", `error: ${ev.message}`, { meta: { exit: false } });
       break;
     }
   }
@@ -499,5 +754,6 @@ export function markAborted(state: TuiState): TuiState {
   if (last && last.kind === "assistant" && last.streaming) {
     patchItem(state, state.items.length - 1, { streaming: false });
   }
+  pushLog(state, "run", "abort requested");
   return state;
 }

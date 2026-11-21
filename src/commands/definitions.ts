@@ -51,6 +51,7 @@ export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/skill", aliases: [], description: "list skills, or load one into context: /skill <name>", usage: "/skill [name]", visibility: "public", source: "builtin" },
   { name: "/mcp", aliases: [], description: "MCP servers & tools: /mcp [server] [tool] [json|text]", usage: "/mcp [server [tool [json]]]", visibility: "public", source: "builtin" },
   { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly> (⇧P cycles)", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
+  { name: "/log", aliases: [], description: "harness log in the full-screen viewer: /log [cat] (llm|tool|shell|file|build|mcp|sub|guard|perm|sys|run)", usage: "/log [cat]", visibility: "tui-only", source: "builtin" },
 ];
 
 // ── TUI quick-switch — ⇧⇥ agent / ⇧P permission (use-keybinds.ts) ────────────

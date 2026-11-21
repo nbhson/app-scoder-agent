@@ -167,6 +167,21 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
     assert.ok(!/MARK-AMARK-B/.test(clean), "⇧⏎ phải ngắt thành 2 dòng, không nối một dòng");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
   }, 90_000);
+
+  it("⌃B chuyển sidebar sang tab HARNESS LOG — rows thật, time column, hints (P8)", async () => {
+    const { clean, raw, exitCode, ptyErr } = await runPty("logtab", [
+      // Run xong → toggles tab; đóng bằng Ctrl+C (idle → quit ngay).
+      "--send-after", "All done:\x02",
+      "--send-after", "HARNESS LOG:\x03",
+    ]);
+    const where = () => ctx(clean, raw.length, ptyErr, exitCode);
+    assert.ok(/OVERVIEW/.test(clean), `frame đầu phải có tab OVERVIEW (${where()})`);
+    assert.ok(/HARNESS LOG/.test(clean), `⌃B phải bật tab HARNESS LOG (${where()})`);
+    assert.match(clean, /\d{2}:\d{2}:\d{2}\.\d/, "log rows có cột giờ HH:MM:SS.d");
+    assert.match(clean, /→ (ok|PASS|FAIL)|llm #\d+/, "rows thật của run (llm/tool/build verdict)");
+    assert.match(clean, /↑↓ select/, "key hints của log tab");
+    assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
+  }, 90_000);
 });
 
 after(() => {
