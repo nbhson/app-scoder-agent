@@ -382,6 +382,11 @@ export class Agent {
     if (config.allowSubagents !== false) {
       /** Run one subtask in its own child Agent. */
       const runOne = async (args: { description?: string; prompt?: string; agent?: string }): Promise<ToolResult> => {
+        // Already interrupted (Esc landed while this tool call was being set
+        // up): spawning now would produce a child nobody can abort later.
+        if (this.runSignal.signal.aborted) {
+          return { ok: false, output: "ERROR: run was interrupted — subagent not spawned." };
+        }
         // Spawnable set = mode subagent|all, non-hidden — user-defined
         // subagents are visible here (they were the whole point of the mode).
         const usable = subagentDefs(discoverAgents(config.workdir));
@@ -393,6 +398,7 @@ export class Agent {
           ...config,
           allowSubagents: false,
           programmaticSubagent: true, // def-mode warning is for user selections only
+          parentSignal: this.runSignal.signal, // survives the child's resetRunSignal()
           // v2: the child resolves this def itself (tools filter, permission,
           // model via routing + def.model, prompt) — no manual overrides here.
           agent: def?.name ?? "build",
@@ -574,7 +580,13 @@ export class Agent {
   /** Reset the run-signal so a new run() can use a fresh controller. */
   private resetRunSignal(): void {
     this.runSignal = new AbortController();
-    this.aborted = false;
+    // Task-runner children carry the spawner's signal: an abort delivered while
+    // this Agent was still being constructed (between the parent's listener
+    // attach and this reset) used to be erased here, and the subagent then ran
+    // a FULL uncapped run after the user pressed Esc. Keep it aborted.
+    const inherited = this.config.parentSignal?.aborted === true;
+    this.aborted = inherited;
+    if (inherited) this.runSignal.abort(new DOMException("parent run interrupted", "AbortError"));
     // Keep the tool context in sync so run_command can observe SIGINT and
     // terminate its child process immediately (long builds must be interruptible).
     this.ctx.signal = this.runSignal.signal;
@@ -914,10 +926,17 @@ export class Agent {
         }
         return final;
       }
-      // No finish_reason seen — fall through to non-streaming
-      return this.client.chat(this.messages, this.tools);
+      // No finish_reason seen — fall through to non-streaming. Carry the run
+      // signal: a fallback WITHOUT it could not be cancelled by Esc/SIGINT and
+      // the agent kept generating invisibly after the user stopped it.
+      return this.client.chat(this.messages, this.tools, { signal });
     } catch (caught) {
       if (started) this.reporter.llmStreamEnd();
+      // An abort is a stop request, not a streaming quirk: falling back would
+      // fire a fresh full-price request the user already cancelled (and on a
+      // subagent it stalled the parent's `task` call for the whole request
+      // timeout — up to 120s, plus retries).
+      if (signal.aborted || this.aborted) throw caught as Error;
       // A timeout is a real failure, not a streaming quirk — falling back to
       // non-streaming would just wait the full timeout a second time.
       const e = caught as Error;
@@ -950,7 +969,7 @@ export class Agent {
         this.streamFallbackWarned = true;
         this.reporter.warn(`streaming unavailable (${(err as Error).message.slice(0, 120)}) — falling back to non-streaming`);
       }
-      return this.client.chat(this.messages, this.tools);
+      return this.client.chat(this.messages, this.tools, { signal });
     }
   }
 

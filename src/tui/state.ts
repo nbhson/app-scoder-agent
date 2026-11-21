@@ -463,6 +463,15 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.items = state.items.map((it) =>
         it.kind === "assistant" && it.streaming ? { ...it, streaming: false } : it,
       );
+      // A subagent row must never survive the run at ◐: `agent_end` is the
+      // authoritative close, but a child killed before its first step (abort
+      // during spawn) emits nothing — without this the sidebar shows
+      // "running" forever and the run looks stuck.
+      if (state.subagents.some((s) => s.status === "running")) {
+        state.subagents = state.subagents.map((s) =>
+          s.status === "running" ? { ...s, status: "failed", summary: s.summary ?? "run ended — subagent stopped" } : s,
+        );
+      }
       break;
     }
     case "warmup": {

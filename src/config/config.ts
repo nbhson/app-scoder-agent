@@ -71,6 +71,13 @@ export interface AgentConfig {
   /** I-06: task-runner spawn marker — a subagent def used programmatically
    *  must not trigger the "used as primary anyway" warning. */
   programmaticSubagent?: boolean;
+  /**
+   * Internal (task runner): the spawning agent's run signal. A child checks it
+   * in `resetRunSignal()` so an abort delivered BEFORE the child's loop starts
+   * cannot be erased by that reset — previously the subagent then ran a full,
+   * uncapped run after the user pressed Esc (see test/subagent-abort.test.mjs).
+   */
+  parentSignal?: AbortSignal;
   /** I-11: post-edit formatter (rc `formatter`). */
   formatter?: boolean | string;
   /** G4: sandbox profile for run_command (rc `sandbox`). */
