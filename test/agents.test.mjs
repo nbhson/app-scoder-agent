@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverAgents, findAgent, subagentDefs } from "../dist/context/agents.js";
+import { Agent } from "../dist/agent.js";
 import {getTool, allToolSpecs, baseToolSpecs} from "../dist/tools/registry.js";
 
 let workdir;
@@ -114,5 +115,146 @@ describe("task tool (I-06)", () => {
     const [ra, rb] = await Promise.all([a, b]);
     assert.equal(ra.output, "A");
     assert.equal(rb.output, "B");
+  });
+});
+
+// ── P2: per-Agent output limits + in-flight run guard ──────────────────────
+
+/** Minimal scripted provider (same shape as agent-v2 tests). */
+function scripted(turns) {
+  class ScriptedClient {
+    lastPartialToolCalls = [];
+    get model() { return "scripted/mock"; }
+    constructor() { this.idx = 0; this.turns = turns; }
+    next() {
+      const t = this.turns[this.idx++] ?? { content: "done" };
+      return {
+        message: {
+          role: "assistant",
+          content: t.content ?? null,
+          stop_reason: t.toolCalls ? "tool_calls" : "stop",
+          tool_calls: t.toolCalls?.map((x) => ({ id: x.id, name: x.function.name, arguments: x.function.arguments })),
+        },
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      };
+    }
+    async chat() {
+      if (this.beforeFirst) { await this.beforeFirst; this.beforeFirst = null; }
+      return this.next();
+    }
+    async *streamChat() { const r = this.next(); yield { contentDelta: r.message.content ?? "", done: false }; yield { final: r, done: true }; }
+  }
+  return new ScriptedClient();
+}
+
+describe("subagent summary clamp (P2-limit)", () => {
+  it("child summary over limits.maxOutputChars → parent context nhận bản cắt có marker", async () => {
+    let built = 0;
+    const factory = () => {
+      built++;
+      if (built === 1) {
+        return scripted([
+          { toolCalls: [{ id: "t1", type: "function", function: { name: "task", arguments: JSON.stringify({ description: "dig", prompt: "dig deep" }) } }] },
+          { content: "done" },
+        ]);
+      }
+      // child: chat-only run, dài vượt mọi trần (finish() cắt 2000 — vẫn trên cap 800)
+      return scripted([{ content: "S".repeat(30000) }]);
+    };
+    const agent = new Agent({
+      baseUrl: "http://localhost:0",
+      apiKey: "eval",
+      model: "scripted/mock",
+      provider: "openai",
+      workdir,
+      buildCmd: null,
+      maxSteps: 6,
+      yes: true,
+      noSave: true,
+      snapshots: false,
+      stream: false,
+      permissionMode: "auto",
+      clientFactory: factory,
+      allowSubagents: true,
+      limits: { maxOutputChars: 800 },
+    });
+    const events = [];
+    agent.onEvent = (ev) => events.push(ev);
+    await agent.run("parent task");
+    const tr = events.find((e) => e.type === "tool_result" && e.name === "task");
+    assert.ok(tr, "task tool_result present");
+    assert.match(tr.output, /subagent .* done — \d+ steps/);
+    assert.match(tr.output, /subagent summary truncated: \d+ chars/);
+    assert.ok(tr.output.length < 1_200, `output phải gọn trong ngân sách (got ${tr.output.length})`);
+  });
+});
+
+describe("in-flight run guard (P2-guard)", () => {
+  it("run() thứ hai khi run thứ nhất còn sống → reject, run thứ nhất không bị phá", async () => {
+    let releaseFirst;
+    const gate = new Promise((r) => { releaseFirst = r; });
+    let built = 0;
+    const factory = () => {
+      built++;
+      if (built === 1) {
+        const c = scripted([{ content: "first done" }]);
+        c.beforeFirst = gate; // chat đầu treo → run #1 ở trong loop
+        return c;
+      }
+      return scripted([{ content: "second should never run" }]);
+    };
+    const agent = new Agent({
+      baseUrl: "http://localhost:0",
+      apiKey: "eval",
+      model: "scripted/mock",
+      provider: "openai",
+      workdir,
+      buildCmd: null,
+      maxSteps: 4,
+      yes: true,
+      noSave: true,
+      snapshots: false,
+      stream: false,
+      permissionMode: "auto",
+      clientFactory: factory,
+    });
+    const p1 = agent.run("one");
+    await assert.rejects(
+      () => agent.run("two"),
+      /already running/,
+      "overlap phải bị từ chối ngay ở entry — trước khi setup ResetRunSignal phá run #1",
+    );
+    releaseFirst();
+    const r1 = await p1;
+    assert.equal(r1.success, true, "run #1 phải nguyên vẹn");
+    // flag đã release → lần kế tiếp chạy bình thường
+    built = 0; // cho run mới script ngắn
+    const agent2 = agent;
+    await assert.doesNotReject(() => agent2.runTurn("three"), "sau khi xong, entry mới được chấp nhận");
+  });
+
+  it("resume() khi đang chạy → reject", async () => {
+    let releaseFirst;
+    const gate = new Promise((r) => { releaseFirst = r; });
+    const factory = () => { const c = scripted([{ content: "hang" }]); c.beforeFirst = gate; return c; };
+    const agent = new Agent({
+      baseUrl: "http://localhost:0",
+      apiKey: "eval",
+      model: "scripted/mock",
+      provider: "openai",
+      workdir,
+      buildCmd: null,
+      maxSteps: 4,
+      yes: true,
+      noSave: true,
+      snapshots: false,
+      stream: false,
+      permissionMode: "auto",
+      clientFactory: factory,
+    });
+    const p1 = agent.run("busy");
+    await assert.rejects(() => agent.resume({ version: 2, id: "x", task: "t", createdAt: "", steps: 0, events: [] }), /already running/);
+    releaseFirst();
+    await p1;
   });
 });

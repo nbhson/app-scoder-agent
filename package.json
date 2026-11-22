@@ -14,7 +14,7 @@
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/",
+    "lint": "eslint src/ --max-warnings=43",
     "check:layers": "node scripts/check-layers.mjs",
     "check:layers:graph": "node scripts/check-layers.mjs --graph",
     "docs:check": "node scripts/check-docs.mjs",
@@ -54,9 +54,9 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
     "@types/react": "^19.3.0",
-    "eslint": "^10.13.0",
+    "eslint": "^10.15.0",
     "typescript": "^5.6.0",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.73.0"
   },
   "dependencies": {
     "fuzzysort": "^3.1.0",
@@ -67,5 +67,8 @@
     "string-width": "^8.3.0",
     "tree-sitter": "^0.25.1",
     "tree-sitter-bash": "^0.25.1"
+  },
+  "overrides": {
+    "minimatch": "^11.0.9"
   }
 }

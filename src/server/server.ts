@@ -56,6 +56,38 @@ export interface RunRequest {
   permission?: "auto" | "readonly";
 }
 
+/**
+ * P2-boundary: JSON.parse hands us ANY shape. Before this, a body of `null`
+ * threw a TypeError reading `.task` (→ 500), `"maxSteps": "abc"` became NaN
+ * and rode into the run loop, `"provider": {...}` / unknown `permission`
+ * silently changed agent behavior. Every RunRequest field is validated at
+ * the trust boundary with a precise 400 — nothing unvalidated reaches config.
+ */
+export function validateRunRequest(raw: unknown): { value: RunRequest } | { error: string } {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { error: "body must be a JSON object" };
+  }
+  const b = raw as Record<string, unknown>;
+  if (typeof b.task !== "string" || b.task.trim().length === 0) {
+    return { error: 'field "task" (non-empty string) is required' };
+  }
+  for (const key of ["workdir", "buildCmd", "model"] as const) {
+    if (b[key] !== undefined && typeof b[key] !== "string") {
+      return { error: `field "${key}" must be a string` };
+    }
+  }
+  if (b.provider !== undefined && b.provider !== "openai" && b.provider !== "anthropic") {
+    return { error: 'field "provider" must be "openai" or "anthropic"' };
+  }
+  if (b.maxSteps !== undefined && (!Number.isInteger(b.maxSteps) || (b.maxSteps as number) < 1)) {
+    return { error: 'field "maxSteps" must be a positive integer' };
+  }
+  if (b.permission !== undefined && !["auto", "readonly", "ask"].includes(b.permission as string)) {
+    return { error: 'field "permission" must be "auto", "readonly", or "ask"' };
+  }
+  return { value: b as unknown as RunRequest };
+}
+
 type RunStatus = "running" | "success" | "failed" | "error" | "aborted";
 
 interface RunRecord {
@@ -334,17 +366,18 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
           sendJson(res, 415, { error: "Content-Type must be application/json" });
           return;
         }
-        let body: RunRequest;
+        let parsed: { value: RunRequest } | { error: string };
         try {
-          body = JSON.parse(await readBody(req)) as RunRequest;
+          parsed = validateRunRequest(JSON.parse(await readBody(req)) as unknown);
         } catch (err) {
           sendJson(res, 400, { error: (err as Error).message });
           return;
         }
-        if (typeof body.task !== "string" || body.task.trim().length === 0) {
-          sendJson(res, 400, { error: 'field "task" (non-empty string) is required' });
+        if ("error" in parsed) {
+          sendJson(res, 400, { error: parsed.error });
           return;
         }
+        const body = parsed.value;
         const cfg = { ...baseConfig, yes: true };
         if (body.workdir) {
           const abs = resolve(body.workdir);

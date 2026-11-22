@@ -6,7 +6,7 @@ import type {ToolResult} from "./tools/types.js";
 import { createClientRuntime, createSwappedRuntime, resolveSwapConnection } from "./agent/provider-runtime.js";
 import { allToolSpecs, baseToolSpecs } from "./tools/registry.js";
 import {setMaxOutputChars, setMaxToolOutputChars} from "./tools/path-safety.js";
-import { type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools/types.js";
+import { type ToolContext, type TodoItem, type AskUserRequest } from "./tools/types.js";
 import { detectBuildCommand, type BuildResult } from "./workspace/build.js";
 import { expandMentions } from "./context/context.js";
 import { createGuardrailEngine, type GuardrailDecision } from "./agent/guardrails.js";
@@ -22,10 +22,11 @@ import { promptMetrics, type PromptMetrics } from "./llm/prompt-metrics.js";
 import { JsonlLogger } from "./session/logger.js";
 import { parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
 import { loadRcFile, isLocalBaseUrl } from "./config/config.js";
-import {McpManager} from "./mcp/manager.js";
+import type { McpManager } from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./context/skills.js";
-import { discoverAgents, subagentDefs, type AgentDef } from "./context/agents.js";
+import { type AgentDef } from "./context/agents.js";
+import { createTaskRunner, type SubagentChild } from "./agent/subagent-runner.js";
 import {
   emptyWorkingMemory,
   noteFileRead,
@@ -106,6 +107,8 @@ export class Agent {
   readonly snapshots: SnapshotManager;
   private logger: JsonlLogger;
   private aborted = false;
+  /** P2-guard: true while run()/turn()/resume() is inside runLoop (in-flight). */
+  private runActive = false;
   private streamFallbackWarned = false;
   private sessionCreatedAt: string | undefined;
   private currentTask = "";
@@ -122,7 +125,7 @@ export class Agent {
   /** Optional structured-event sink (used by the HTTP/SSE server frontend). */
   onEvent: ((ev: AgentEvent) => void) | null = null;
   /** Live subagent children by id — routes tagged permission answers back (task relay, T-03). */
-  private spawnedChildren = new Map<string, Agent>();
+  private spawnedChildren = new Map<string, SubagentChild>();
   /** Set while a tool call is executing, for tool_output event correlation. */
   private currentToolCall: { step: number; id: string; name: string } | null = null;
   /** True once any file-writing tool succeeded during the current run. */
@@ -348,142 +351,26 @@ export class Agent {
     this.session = new SessionStore(config.workdir, config.noSave !== true);
     this.events = new EventSessionStore(config.workdir, config.noSave !== true, this.session.id);
     this.snapshots = new SnapshotManager(config.workdir, config.snapshots !== false);
-    // I-06: task tool → child Agent run (same process, own session, event
-    // relay, abort cascade via parent's runSignal). Depth-1 only: the runner
-    // refuses when the calling agent was constructed with allowSubagents:false
-    // (children set this; the runner checks ctx, not a global flag — global
-    // registration alone allowed grandchildren through). Runner lives on the
-    // per-instance ctx — concurrent Agents (server multi-run) stay isolated.
+    // I-06/P2: task tool → child Agent runs (same process, own session,
+    // event relay, abort cascade via parent's runSignal, summary clamp).
+    // Extracted to agent/subagent-runner.ts (I-09): the Agent is injected
+    // through createAgent — depth-1 stays a property of ctx (children are
+    // built with allowSubagents:false and the RUNNER checks ctx, not a global
+    // flag), and the runner lives on the per-instance ctx so concurrent
+    // Agents (server multi-run) stay isolated.
     if (config.allowSubagents !== false) {
-      /** Run one subtask in its own child Agent. */
-      const runOne = async (args: { description?: string; prompt?: string; agent?: string }): Promise<ToolResult> => {
-        // Already interrupted (Esc landed while this tool call was being set
-        // up): spawning now would produce a child nobody can abort later.
-        if (this.runSignal.signal.aborted) {
-          return { ok: false, output: "ERROR: run was interrupted — subagent not spawned." };
-        }
-        // Spawnable set = mode subagent|all, non-hidden — user-defined
-        // subagents are visible here (they were the whole point of the mode).
-        const usable = subagentDefs(discoverAgents(config.workdir));
-        const def = args.agent ? usable.find((a) => a.name === args.agent) ?? null : usable.find((a) => a.name === "explore") ?? null;
-        if (args.agent && !def) {
-          return { ok: false, output: `ERROR: agent "${args.agent}" not found or not a subagent — available: ${usable.map((a) => a.name).join(", ")}` };
-        }
-        const child = new Agent({
-          ...config,
-          allowSubagents: false,
-          programmaticSubagent: true, // def-mode warning is for user selections only
-          parentSignal: this.runSignal.signal, // survives the child's resetRunSignal()
-          // v2: the child resolves this def itself (tools filter, permission,
-          // model via routing + def.model, prompt) — no manual overrides here.
-          agent: def?.name ?? "build",
-          // Subagents are step-unlimited: the run ends on completion, guardrail
-          // stop, or parent abort — no artificial 20-step cap. A def that
-          // declares `steps:` keeps its explicit budget.
-          maxSteps: def?.steps ?? Number.POSITIVE_INFINITY,
-          noSave: true, // subagent runs are ephemeral — no session pollution
-        });
-        // Abort cascade: parent abort kills child's in-flight LLM calls.
-        // Removed in `finally` — long runs spawn many children and each
-        // closure pins its (disposed) child Agent until the run ends.
-        const childId = child.id;
-        const onParentAbort = () => child.abort();
-        this.runSignal.signal.addEventListener("abort", onParentAbort, { once: true });
-        this.spawnedChildren.set(childId, child);
-        const description = typeof args.description === "string" && args.description.trim()
-          ? args.description.trim()
-          : `subagent ${def?.name ?? "task"}`;
-        this.emit({
-          type: "agent_start",
-          id: childId,
-          parentId: this.id,
-          name: def?.name ?? "task",
-          description,
-          model: def?.model ?? this.config.model,
-        });
-        // Event relay: child activity appears as subagent-tagged tool output.
-        // permission_request MUST be forwarded (T-03): the child's broker
-        // awaits that promise — dropping it here freezes the subagent for the
-        // full 60–120s permission timeout with no modal ever shown. Ids are
-        // tagged `<childId>:perm-N` so resolvePermission() routes the answer
-        // back to the right child's broker.
-        const childName = def?.name ?? "task";
-        const tag = `subagent:${childName}`;
-        // Emitted under the parent tool name "task": the TUI reducer
-        // correlates tool_output to the running card BY NAME — a custom
-        // "subagent:*" tag left the task card streaming nothing.
-        let relayTextOpen = false; // streamed prose not yet terminated by a newline
-        child.onEvent = (ev) => {
-          if (ev.type === "tool_call") {
-            this.emit({ type: "tool_output", name: "task", stream: "stdout", delta: `${relayTextOpen ? "\n" : ""}→ ${childName}: ${ev.name}\n` });
-            relayTextOpen = false;
-          }
-          else if (ev.type === "llm_delta") { this.emit({ type: "tool_output", name: "task", stream: "stdout", delta: ev.delta }); relayTextOpen = ev.delta.length > 0; }
-          else if (ev.type === "permission_request") this.emit({ ...ev, id: `${childId}:${ev.id}`, label: `[${tag}] ${ev.label}` });
-        };
-        try {
-          const res = await child.run(args.prompt ?? "");
-          this.emit({ type: "agent_end", id: childId, ok: res.success, steps: res.steps, summary: res.summary.slice(0, 500) });
-          return {
-            ok: res.success,
-            output: res.success
-              ? `[subagent ${def?.name ?? "task"} done — ${res.steps} steps]\n${res.summary}`
-              : `[subagent ${def?.name ?? "task"} FAILED — ${res.steps} steps]\n${res.summary}`,
-          };
-        } catch (err) {
-          const msg = (err as Error).message;
-          this.emit({ type: "agent_end", id: childId, ok: false, steps: 0, summary: msg.slice(0, 500) });
-          return { ok: false, output: `ERROR: subagent failed: ${msg}` };
-        } finally {
-          this.spawnedChildren.delete(childId);
-          this.runSignal.signal.removeEventListener("abort", onParentAbort);
-          child.onEvent = null; // break child→parent relay reference
-          // Child agents are ephemeral: close their MCP connections (if any).
-          child.dispose();
-        }
-      };
-
-      const runner: TaskRunner = async (ctx, args) => {
-        if (ctx.allowSubagents === false) {
-          return { ok: false, output: "ERROR: task tool not available — subagents cannot spawn further subagents (depth limit)." };
-        }
-        // Batch mode: bounded concurrency (max 4 in flight), stable result order.
-        if (Array.isArray(args.tasks) && args.tasks.length > 0) {
-          const tasks = args.tasks;
-          const results: ToolResult[] = new Array(tasks.length);
-          const concurrency = Math.min(4, tasks.length);
-          let cursor = 0;
-          const worker = async () => {
-            for (;;) {
-              const i = cursor++;
-              if (i >= tasks.length) return;
-              // Per-task catch: one bad task (e.g. child construction throw)
-              // must not reject Promise.all and discard sibling results.
-              results[i] = await runOne(tasks[i]).catch((err: unknown) => ({
-                ok: false,
-                output: `ERROR: task ${i + 1} failed: ${(err as Error).message ?? String(err)}`,
-              }));
-            }
-          };
-          await Promise.all(Array.from({ length: concurrency }, () => worker()));
-          const okCount = results.filter((r) => r.ok).length;
-          const body = results
-            .map((r, i) => `## Task ${i + 1}: ${tasks[i].description}\n${r.output}`)
-            .join("\n\n");
-          return {
-            ok: okCount === tasks.length,
-            output: `[batch ${tasks.length} task${tasks.length === 1 ? "" : "s"} — ${okCount}/${tasks.length} ok]\n\n${body}`,
-          };
-        }
-        if (typeof args.prompt !== "string" || !args.prompt.trim()) {
-          return { ok: false, output: "ERROR: task requires a non-empty `prompt`." };
-        }
-        return runOne(args).catch((err: unknown) => ({
-          ok: false,
-          output: `ERROR: subagent failed: ${(err as Error).message ?? String(err)}`,
-        }));
-      };
-      this.ctx.taskRunner = runner;
+      this.ctx.taskRunner = createTaskRunner({
+        config,
+        getRunSignal: () => this.runSignal,
+        parentId: () => this.id,
+        emit: (ev) => this.emit(ev),
+        summaryBudget: () => this.config.limits?.maxOutputChars ?? 20_000,
+        createAgent: (cfg) => new Agent(cfg),
+        registerChild: (id, child) => this.spawnedChildren.set(id, child),
+        unregisterChild: (id) => {
+          this.spawnedChildren.delete(id);
+        },
+      });
     }
     this.logger = JsonlLogger.forSession(config.workdir, this.session.id, config.logFile);
     this.promptContext = new PromptContext(config.workdir);
@@ -1297,6 +1184,18 @@ export class Agent {
         "No API key configured. Set SCODER_API_KEY or OPENAI_API_KEY (or put apiKey in .scoderrc.json).",
       );
     }
+    this.enterRun();
+    try {
+      return await this.runBody(task);
+    } catch (err) {
+      // runLoop releases on its own; this covers throws during SETUP,
+      // before the loop ever started (a stuck flag would wedge the agent).
+      this.runActive = false;
+      throw err;
+    }
+  }
+
+  private async runBody(task: string): Promise<AgentRunResult> {
     // WARMUP: lượt thật thắng request prefill đang chạy nền (xem warmup()).
     await this.settleWarmup();
 
@@ -1401,6 +1300,16 @@ export class Agent {
     if (this.messages.length === 0) {
       return this.run(task);
     }
+    this.enterRun();
+    try {
+      return await this.runTurnBody(task);
+    } catch (err) {
+      this.runActive = false;
+      throw err;
+    }
+  }
+
+  private async runTurnBody(task: string): Promise<AgentRunResult> {
     // WARMUP: thường đã settle ở run() đầu; await lại cho chắc (race /clear+
     // warm-up + runTurn ngay lập tức).
     await this.settleWarmup();
@@ -1439,6 +1348,16 @@ export class Agent {
    * An optional follow-up task is appended as a new user message.
    */
   async resume(session: SessionFile, followUp?: string): Promise<AgentRunResult> {
+    this.enterRun();
+    try {
+      return await this.resumeBody(session, followUp);
+    } catch (err) {
+      this.runActive = false;
+      throw err;
+    }
+  }
+
+  private async resumeBody(session: SessionFile, followUp?: string): Promise<AgentRunResult> {
     // WARMUP: session restore mang system prompt RIÊNG (từ session cũ) — hủy
     // request prefill của prompt mới để không nhân đôi prefill nền.
     await this.settleWarmup();
@@ -1514,7 +1433,28 @@ export class Agent {
     buildCmd: string,
     initialBuild: BuildResult | null = null,
   ): Promise<AgentRunResult> {
-    return runAgentLoop(this.runLoopRuntime(), startSteps, buildCmd, initialBuild);
+    // P2-guard: entries (run/runTurn/resume) acquire the slot synchronously
+    // via enterRun(); runLoop owns the RELEASE — including guardrail stops,
+    // aborts, and throws out of the loop itself.
+    try {
+      return await runAgentLoop(this.runLoopRuntime(), startSteps, buildCmd, initialBuild);
+    } finally {
+      this.runActive = false;
+    }
+  }
+
+  /**
+   * P2-guard: an Agent holds live state (messages, memory, runSignal,
+   * session writer). Two overlapping runs on ONE instance used to interleave
+   * silently: the second reset the first's signals mid-flight and both
+   * appended to the same event log. Overlap is always a caller bug — refuse
+   * at the ENTRY, before any setup clobbers the in-flight run.
+   */
+  private enterRun(): void {
+    if (this.runActive) {
+      throw new Error("agent is already running — await the current run (or abort()) before starting another");
+    }
+    this.runActive = true;
   }
 
   private runLoopRuntime(): RunLoopRuntime {

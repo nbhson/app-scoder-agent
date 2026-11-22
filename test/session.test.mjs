@@ -47,6 +47,20 @@ describe("newSessionId", () => {
     for (let i = 0; i < 20; i++) a.add(newSessionId());
     assert.ok(a.size > 1, "20 lần gọi phải tạo >1 id duy nhất");
   });
+  it("P2-entropy: suffix đến từ crypto, không phải Math.random", () => {
+    // Freeze the SAME second AND a constant Math.random — two processes that
+    // shared a PRNG seed used to collide 1/65536 and interleave writes into
+    // one session dir. randomBytes(2) keeps ids distinct regardless.
+    const orig = Math.random;
+    try {
+      Math.random = () => 0.4999;
+      const now = new Date("2026-10-28T10:00:00");
+      const a = new Set(Array.from({ length: 200 }, () => newSessionId(now)));
+      assert.ok(a.size >= 20, `200 id cùng giây phải tản mát (got ${a.size} unique)`);
+    } finally {
+      Math.random = orig;
+    }
+  });
 });
 
 describe("SessionStore", () => {

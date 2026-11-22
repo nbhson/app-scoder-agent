@@ -10,7 +10,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../dist/server/server.js";
+import { startServer, validateRunRequest } from "../dist/server/server.js";
 
 // ── Temp project: build.js fails until lib.js is fixed ──────────────────────
 const tmp = mkdtempSync(join(tmpdir(), "scoder-server-test-"));
@@ -141,6 +141,35 @@ describe("scoder serve — HTTP API", () => {
       body: JSON.stringify({ task: "" }),
     });
     assert.equal(res.status, 400);
+  });
+
+  // P2-boundary: JSON.parse trả về MỌI shape — null/array/scalar trước đây
+  // gây TypeError đọc .task (500) hoặc chui ngược vào config (maxSteps "abc"
+  // → NaN; provider object → hành vi LLM đổi ngầm).
+  for (const [label, body, re] of [
+    ["body là null", "null", /JSON object/],
+    ["body là array", "[]", /JSON object/],
+    ["body là scalar", "42", /JSON object/],
+    ["workdir không phải string", JSON.stringify({ task: "t", workdir: 123 }), /"workdir" must be a string/],
+    ["maxSteps NaN", JSON.stringify({ task: "t", maxSteps: "abc" }), /"maxSteps" must be a positive integer/],
+    ["provider lạ", JSON.stringify({ task: "t", provider: "ollama" }), /"provider" must be/],
+    ["permission rác", JSON.stringify({ task: "t", permission: 7 }), /"permission" must be/],
+  ]) {
+    it(`POST /api/runs -> 400 khi ${label}`, async () => {
+      const res = await fetch(`${API}/api/runs`, {
+        method: "POST",
+        headers: { ...AUTH, "Content-Type": "application/json" },
+        body,
+      });
+      assert.equal(res.status, 400);
+      assert.match(await res.json().then((b) => b.error), re);
+    });
+  }
+
+  it("validateRunRequest unit: input hợp lệ giữ nguyên giá trị", () => {
+    const v = validateRunRequest({ task: "t", maxSteps: 12, provider: "anthropic", permission: "readonly", model: "m", buildCmd: "b", workdir: "/tmp" });
+    assert.ok("value" in v);
+    assert.equal(v.value.maxSteps, 12);
   });
 
   it("POST /api/runs -> 400 khi permission=ask (server không prompt được)", async () => {

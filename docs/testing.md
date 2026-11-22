@@ -58,6 +58,10 @@ ubuntu matrix (Node 20/22/24)     macOS (Node 22)             ubuntu (Node 22)
   → build → test → eval                tests actually run)         78 branch / 84 funcs)
 ```
 
+- `npm run lint` carries `--max-warnings=43` — a ratcheted budget: the
+  remaining warnings (complexity, consistent-type-imports…) are tracked, but
+  NEW ones fail the build. Lower the number in package.json as warnings are
+  burned down; never raise it without review.
 - `docs:check` fails the build when README/docs drift from argv tables or
   reference `src`/`dist` paths that no longer exist.
 - `scripts/check-secrets.mjs` scans the committed `.scoderrc.json` for API

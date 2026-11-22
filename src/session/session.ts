@@ -11,6 +11,7 @@
  *   <workdir>/.scoder/sessions/<id>/events.jsonl — v2 durable event log
  *   <workdir>/.scoder/sessions/<id>/manifest.json — projection summary
  */
+import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, appendFileSync, renameSync, readFileSync, readdirSync, existsSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ChatMessage } from "../llm/llm.js";
@@ -70,7 +71,12 @@ export function newSessionId(now = new Date()): string {
   const h = pad(now.getHours());
   const mi = pad(now.getMinutes());
   const s = pad(now.getSeconds());
-  const rand = Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0");
+  // P2-entropy: Math.random() gave 16 bits in a same-second namespace —
+  // two `scoder` launches sharing one clock tick had a 1/65536 chance of
+  // writing the SAME session dir (interleaved events.jsonl, lost history).
+  // randomBytes(2) keeps the byte-identical YYYYMMDD-HHmmss-hex4 format
+  // (still sorts by name == time) while removing the shared-PRVG source.
+  const rand = randomBytes(2).toString("hex");
   return `${y}${mo}${d}-${h}${mi}${s}-${rand}`;
 }
 
