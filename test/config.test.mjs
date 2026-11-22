@@ -16,10 +16,15 @@ beforeEach(() => {
   mkdirSync(TMP, { recursive: true });
   // Cách ly khỏi ~/.scoder/config.json thật trên máy — test phải độc lập môi trường.
   process.env.SCODER_CONFIG = GLOBAL_ISOLATION;
+  // Các test này kiểm tra precedence/merge của rc, không kiểm tra trust gate
+  // (test/project-trust.test.mjs lo cái đó) — bypass trust cho deterministic.
+  process.env.SCODER_TRUST_PROJECT = "1";
+  delete process.env.SCODER_TRUST_FILE;
 });
 
 afterEach(() => {
   rmSync(TMP, { recursive: true, force: true });
+  delete process.env.SCODER_TRUST_PROJECT;
   if (process.env.SCODER_CONFIG === GLOBAL_ISOLATION) delete process.env.SCODER_CONFIG;
   delete process.env.SCODER_API_KEY;
   delete process.env.SCODER_LOG_FILE;

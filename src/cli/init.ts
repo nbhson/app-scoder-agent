@@ -59,6 +59,11 @@ export async function runInit(): Promise<void> {
     permissions: { mode: ["auto", "ask", "readonly"].includes(permission) ? permission : "auto" },
   };
   writeFileSync(rcPath, JSON.stringify(rc, null, 2) + "\n");
+  // P1-config-trust: settings written BY the user through this wizard are
+  // user intent — trust the directory, otherwise the trust gate would ignore
+  // the .scoderrc.json we just created (baseUrl, permissions, buildCmd…).
+  const { trustProject } = await import("../config/trust.js");
+  trustProject(process.cwd());
   ui.success(`wrote ${rcPath} (provider: ${provider})`);
 
   const rl2 = createInterface({ input: process.stdin, output: process.stdout });

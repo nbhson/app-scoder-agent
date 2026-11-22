@@ -28,12 +28,15 @@ beforeEach(() => {
   // test sẽ phụ thuộc môi trường. trỏ SCODER_CONFIG vào file không tồn tại.
   prevConfigPath = process.env.SCODER_CONFIG;
   process.env.SCODER_CONFIG = join(dir, "no-global-config.json");
+  // rc precedence tests — trust gate không liên quan (project-trust.test.mjs)
+  process.env.SCODER_TRUST_PROJECT = "1";
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
   if (prevConfigPath === undefined) delete process.env.SCODER_CONFIG;
   else process.env.SCODER_CONFIG = prevConfigPath;
+  delete process.env.SCODER_TRUST_PROJECT;
 });
 
 const base = { apiKey: "k", baseUrl: "http://x", model: "m", provider: "openai" };

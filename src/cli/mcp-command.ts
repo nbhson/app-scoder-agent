@@ -47,6 +47,10 @@ export async function runMcpCommand(cfg: AgentConfig, cmd: "list" | "add" | "rem
     const rc = existsSync(rcPath) ? JSON.parse(readFileSync(rcPath, "utf8")) : {};
     mkdirSync(dirname(rcPath) || ".", { recursive: true });
     writeFileSync(rcPath, JSON.stringify({ ...rc, mcpServers: allServers }, null, 2) + "\n", "utf8");
+    // P1-config-trust: `scoder mcp add` is an explicit user action — accept
+    // this directory's project config (mcpServers spawns processes at start).
+    const { trustProject } = await import("../config/trust.js");
+    trustProject(cfg.workdir);
     console.log(`MCP server "${name}" added to ${rcPath}`);
     return;
   }

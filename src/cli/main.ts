@@ -76,6 +76,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.subcommand === "trust") {
+    const { runTrustCommand } = await import("./trust-command.js");
+    await runTrustCommand(args.trustArgs ?? [], cfg.workdir);
+    return;
+  }
+
   if (args.subcommand === "list") {
     const sessions = listSessions(cfg.workdir);
     if (sessions.length === 0) {

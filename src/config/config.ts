@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import type { PermissionMode, PermissionRule, PermissionEffect } from "../security/permissions.js";
 import { parseCustomProviders, resolveProvider, splitProviderModel } from "../llm/provider-registry.js";
+import { applyProjectTrust, guardSavedApprovals } from "./trust.js";
 import type { Reporter } from "../io/reporter.js";
 
 export interface AgentConfig {
@@ -440,7 +441,10 @@ export function loadRcFile(workdir: string): RcFile {
   for (const name of [".scoderrc.json", ".scoderrc"]) {
     const p = resolve(workdir, name);
     if (existsSync(p)) {
-      return mergeRc(global, readRcFile(p, name));
+      // P1-config-trust: a project rc is attacker-controlled until the
+      // directory is trusted — sensitive fields (baseUrl, formatter,
+      // mcpServers, permissions, …) are dropped for untrusted workdirs.
+      return mergeRc(global, applyProjectTrust(readRcFile(p, name), workdir));
     }
   }
   return global;
@@ -745,6 +749,9 @@ export function loadSavedApprovals(workdir: string): PermissionRule[] {
   // (PermissionChecker, saveApproval's filter) only read the returned array.
   const p = savedApprovalsPath(workdir);
   if (!existsSync(p)) return [];
+  // P1-config-trust: a committed .scoder/permissions.local.json is NOT
+  // evidence the user approved anything — honor it only in trusted dirs.
+  if (!guardSavedApprovals(workdir)) return [];
   const st = stampOf(p);
   const hit = approvalsFileMemo.get(p);
   if (hit && sameStamp(hit, st)) return hit.rules;

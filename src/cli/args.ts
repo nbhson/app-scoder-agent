@@ -20,7 +20,8 @@ export interface CliArgs {
   provider?: string;
   noSave?: boolean;
   logFile?: boolean;
-  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init" | "models" | "mcp";
+  subcommand?: "list" | "resume" | "logs" | "cost" | "serve" | "tui" | "init" | "models" | "mcp" | "trust";
+  trustArgs?: string[]; // rest args for the trust subcommand
   mcpCmd?: "list" | "add" | "remove" | "test" | "import";
   mcpArgs?: string[]; // rest args for the mcp subcommand
   resumeId?: string;
@@ -43,6 +44,9 @@ USAGE
   scoder                           Start interactive session (chat + tools)
   scoder tui [task]                Full-screen terminal UI (chat pane, live tool feed)
   scoder init                      First-run wizard: writes .scoderrc.json + tests the connection
+  scoder trust [path|--list|--revoke <path>]
+                                    Trust a project directory so its .scoderrc.json
+                                    sensitive fields + saved approvals apply (~/.scoder/trust.json)
   scoder list                      List saved sessions for this directory
   scoder models [provider] [--refresh]
                                     Model catalog (context window, pricing) —
@@ -202,10 +206,13 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       default: {
         if (a.startsWith("-")) {
-          // MCP subcommand flags (--command, --url, --trust, --args) are not
-          // known globally — pass them through as positional args for runMcpCommand
-          // to interpret. Only throw if we are NOT in an mcp subcommand context.
-          const isMcpContext = rest[0] === "mcp" || argv.slice(0, i).includes("mcp");
+          // MCP and trust subcommand flags (--command, --url, --trust, --args,
+          // --list, --revoke) are not known globally — pass them through as
+          // positional args for runMcpCommand/runTrustCommand to interpret.
+          // Only throw if we are NOT in such a subcommand context.
+          const isMcpContext =
+            rest[0] === "mcp" || argv.slice(0, i).includes("mcp") ||
+            rest[0] === "trust" || argv.slice(0, i).includes("trust");
           if (!isMcpContext) throw new Error(`Unknown option: ${a} (see --help)`);
           rest.push(a);
           // Consume the next token as this option's value if present.
@@ -251,6 +258,11 @@ export function parseArgs(argv: string[]): CliArgs {
     args.task = null;
   } else if (rest[0] === "init") {
     args.subcommand = "init";
+    args.task = null;
+  } else if (rest[0] === "trust") {
+    // scoder trust [path] [--list|--revoke <path>] — P1-config-trust
+    args.subcommand = "trust";
+    args.trustArgs = rest.slice(1);
     args.task = null;
   } else if (rest[0] === "mcp") {
     // scoder mcp list|add <name>|remove <name>|test <name>
