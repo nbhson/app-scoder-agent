@@ -439,6 +439,80 @@ export class Agent {
     return this.steerInbox.drain().map((x) => x.text);
   }
 
+  /** `/btw` không arg mở lại đáp án gần nhất (Claude Code) — chỉ sống trong phiên. */
+  private lastSideAnswer: { question: string; answer: string } | null = null;
+
+  /**
+   * `/btw` — side question (pattern from Claude Code): one disposable LLM call
+   * over a READ-ONLY copy of the current conversation. No tools are offered;
+   * neither question nor answer enters `this.messages`, so the main thread and
+   * its provider-side prompt cache stay untouched. Because the prefix is
+   * identical, the exchange costs barely more than the answer itself. Works
+   * while a run is in flight — the snapshot is taken synchronously, so it is
+   * always a consistent history.
+   */
+  async sideQuestion(question: string): Promise<{ ok: boolean; answer: string }> {
+    const q = question.trim();
+    if (!q) {
+      if (this.lastSideAnswer) return { ok: true, answer: `${this.lastSideAnswer.question}\n${this.lastSideAnswer.answer}` };
+      return { ok: false, answer: "usage: /btw <question> — ask without interrupting the task" };
+    }
+    if (!this.config.apiKey) return { ok: false, answer: "no API key configured — set SCODER_API_KEY or OPENAI_API_KEY" };
+    // Snapshot BEFORE awaiting: single-threaded, so no run-loop push can slip
+    // in mid-copy. A dangling assistant tool_calls (snapshot landed between the
+    // model asking for tools and all results being pushed) would make providers
+    // reject the request — cut that unfinished round, keep everything before it.
+    const messages = this.messages.slice();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        const answered = new Set(
+          messages.slice(i + 1).filter((t) => t.role === "tool" && t.tool_call_id).map((t) => t.tool_call_id),
+        );
+        if (!m.tool_calls.every((tc) => answered.has(tc.id))) messages.length = i;
+        break;
+      }
+    }
+    messages.push({
+      role: "user",
+      content:
+        "This is a SIDE QUESTION from the user (`/btw`). Answer it directly and concisely " +
+        "from what you already know in this conversation — you have NO tools here, so do " +
+        "not attempt to read files, run commands, or continue the main task. " +
+        "Your reply will not be added to the conversation history.\n\n" +
+        q,
+    });
+    try {
+      // Own AbortController — NOT runSignal: Esc must keep steering the main
+      // task, and a /btw must never be cancelled by an in-flight run.
+      const ac = new AbortController();
+      const res = await this.client.chat(messages, [], { signal: ac.signal });
+      const text = (res.message.content ?? "").trim();
+      if (!text) return { ok: false, answer: "side question returned no answer" };
+      // /cost stays honest: count the side call (silently — no reporter noise
+      // while a run is streaming, no context event that would fight the loop).
+      this.usageTotals.calls += 1;
+      this.usageTotals.inputTokens += res.usage?.prompt_tokens ?? 0;
+      this.usageTotals.outputTokens += res.usage?.completion_tokens ?? 0;
+      this.usageTotals.cachedTokens += res.usage?.cached_tokens ?? 0;
+      this.logger.log({
+        type: "llm_usage",
+        model: this.client.model,
+        provider: this.config.provider,
+        side: "btw",
+        usage: {
+          input_tokens: res.usage?.prompt_tokens ?? 0,
+          output_tokens: res.usage?.completion_tokens ?? 0,
+          cached_tokens: res.usage?.cached_tokens ?? 0,
+        },
+      });
+      this.lastSideAnswer = { question: q, answer: text };
+      return { ok: true, answer: text };
+    } catch (err) {
+      return { ok: false, answer: `side question failed: ${(err as Error).message}` };
+    }
+  }
+
   /** Reset the run-signal so a new run() can use a fresh controller. */
   private resetRunSignal(): void {
     this.runSignal = new AbortController();

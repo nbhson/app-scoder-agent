@@ -74,7 +74,7 @@ export function SessionPicker({ workdir, onSelect, onClose }: SessionPickerProps
           ← saved sessions
         </Text>
         <Text dimColor>no saved sessions found</Text>
-        <Text dimColor>esc to close</Text>
+        <Text dimColor>Esc to close</Text>
       </Box>
     );
   }
@@ -133,7 +133,7 @@ export function SessionPicker({ workdir, onSelect, onClose }: SessionPickerProps
         <Text dimColor>{"─".repeat(38)}</Text>
       </Box>
       <Text dimColor>
-        ↑↓ / jk  navigate · enter select · esc close
+        Up/Down or jk  navigate · Enter select · Esc close
       </Text>
       <Text dimColor>
         quick-jump: press 1-{Math.min(sessions.length, 9)} to jump

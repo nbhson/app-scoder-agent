@@ -43,7 +43,7 @@ export function PermissionModal({ prompt }: PermissionModalProps): React.JSX.Ele
       {/* Header bar */}
       <Box justifyContent="space-between" marginBottom={1}>
         <Text color={theme.warn} bold>⚠ permission — {prompt.kind}</Text>
-        <Text dimColor>timeout {prompt.timeoutSecs}s → deny</Text>
+        <Text dimColor>timeout {prompt.timeoutSecs}s then deny</Text>
       </Box>
 
       {/* Command description */}
@@ -52,12 +52,12 @@ export function PermissionModal({ prompt }: PermissionModalProps): React.JSX.Ele
       {/* Diff (if any) */}
       {prompt.diff && (
         <Box flexDirection="column" marginTop={1}>
-          {hasMoreAbove && <Text dimColor>↑ {start} earlier lines</Text>}
+          {hasMoreAbove && <Text dimColor>{start} lines above</Text>}
           {shown.map((l, i) => (
             <DiffLine key={start + i} line={l.length > 160 ? l.slice(0, 160) + "…" : l} />
           ))}
           {hasMoreBelow && (
-            <Text dimColor>↓ {lines.length - start - MODAL_DIFF_WINDOW} more lines</Text>
+            <Text dimColor>{lines.length - start - MODAL_DIFF_WINDOW} more lines below</Text>
           )}
         </Box>
       )}
@@ -66,7 +66,7 @@ export function PermissionModal({ prompt }: PermissionModalProps): React.JSX.Ele
       <Box marginTop={1} flexDirection="column">
         <Text dimColor>{"─".repeat(28)}</Text>
         <Text dimColor>  y · a · n · q  to answer</Text>
-        {prompt.diff && <Text dimColor>  pgup · pgdn · home · end  scroll diff</Text>}
+        {prompt.diff && <Text dimColor>  PageUp · PageDown · Home · End  scroll diff</Text>}
       </Box>
     </Box>
   );

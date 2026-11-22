@@ -233,7 +233,7 @@ describe("sidebar — harness log tab", () => {
     assert.match(out, /#1 m1/);
     assert.match(out, /echo hi → ok/);
     assert.match(out, /\d{2}:\d{2}:\d{2}/);
-    assert.match(out, /↑↓ select/);
+    assert.match(out, /jk select/);
   });
 
   it("filter pill narrows rows; selection marks the cursor", async () => {
@@ -248,7 +248,7 @@ describe("sidebar — harness log tab", () => {
     const out = await renderSidebar(buildLogState(), 30, "log", { filter: "ALL", selId: 3, offset: 0, detail: true });
     assert.match(out, /DETAIL/);
     assert.match(out, /ref step 1/);
-    assert.match(out, /⏎ full/);
+    assert.match(out, /Enter full/);
   });
 
   it("empty log shows the hint line, not a blank pane", async () => {

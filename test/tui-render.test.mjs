@@ -309,13 +309,25 @@ describe("tui chrome — StatusBar", () => {
   it("idle: hiện keybinds, không spinner", async () => {
     const out = await renderOnce(React.createElement(StatusBar, { state: initialState(), scroll: null }), 120);
     assert.match(out, /idle/);
-    assert.match(out, /ctrl\+c/);
+    assert.match(out, /Ctrl\+C/);
+  });
+
+  it("key hints viết chữ (Ctrl+B, Enter) — không glyph ⌃ ⇧ ⏎ ⇥, không cắt giữa hint", async () => {
+    const wide = await renderOnce(React.createElement(StatusBar, { state: initialState(), scroll: null }), 120);
+    assert.ok(!/[⌃⇧⏎⇥⌥]/.test(wide), `footer không có glyph phím: ${JSON.stringify(wide)}`);
+    assert.match(wide, /Enter send/);
+    assert.match(wide, /Ctrl\+B log/);
+    // 100 cols: hint RƠI nguyên khối khỏi đuôi, không biến thành "Ctrl+C qu…"
+    const narrow = await renderOnce(React.createElement(StatusBar, { state: initialState(), scroll: null }), 100);
+    const hintRow = narrow.split("\n").find((l) => l.includes("Enter send")) ?? "";
+    assert.ok(!hintRow.includes("…"), `hint không bị cắt giữa từ: ${JSON.stringify(hintRow)}`);
+    assert.match(hintRow, /Ctrl\+C quit/);
   });
 
   it("running + scroll: hiện scroll position", async () => {
     const s = runningState();
-    const out = await renderOnce(React.createElement(StatusBar, { state: s, scroll: "↑ 12/40" }), 120);
+    const out = await renderOnce(React.createElement(StatusBar, { state: s, scroll: "12/40 above" }), 120);
     assert.match(out, /running/);
-    assert.match(out, /scroll ↑ 12\/40/);
+    assert.match(out, /scroll 12\/40 above/);
   });
 });

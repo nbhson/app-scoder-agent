@@ -87,7 +87,7 @@ describe("palette — render", () => {
     assert.match(text, /⌕/);
     assert.match(text, /ACTIONS/);
     assert.match(text, /search commands, agents, themes/);
-    assert.match(text, /↑\/↓ select · ⏎ run · esc close/);
+    assert.match(text, /Up\/Down select · Enter run · Esc close/);
     for (const line of text.split("\n")) {
       assert.ok(stringWidth(line) <= 100, `row overflow: ${line}`);
     }

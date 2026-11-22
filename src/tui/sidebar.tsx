@@ -524,10 +524,10 @@ function LogTab({ state, view, rows }: { state: TuiState; view: LogView; rows: n
           {detailLines.map((l, i) => (
             <Text key={i} dimColor wrap="truncate">  {l}</Text>
           ))}
-          <Text dimColor>  ⏎ full · y copy · esc close</Text>
+          <Text dimColor>  Enter full · y copy · Esc close</Text>
         </Box>
       )}
-      <Text dimColor>↑↓ select · f filter · d detail · ⏎/F open</Text>
+      <Text dimColor>jk select · f filter · d detail · Enter/F</Text>
     </Box>
   );
 }

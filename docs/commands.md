@@ -88,7 +88,7 @@ scoder --no-save -y "run the migration"
 | `Ctrl+S` | Open session picker — browse and resume saved sessions |
 | `Ctrl+T` | Toggle thinking/reasoning stream visibility |
 | `↑ / ↓` | Recall message history |
-| `PgUp / PgDn` | Scroll the chat pane |
+| `PageUp` / `PageDown` | Scroll the chat pane |
 | `Home / End` | Jump to bottom / top |
 | `Esc` | Return to live tail (when scrolled up) / abort task |
 | `Ctrl+C` | Quit (press twice to confirm) |
@@ -98,20 +98,30 @@ scoder --no-save -y "run the migration"
 | Command | Description |
 |---------|-------------|
 | `/help` | Show command list (builtin + custom) |
-| `/agent` | List/select primary agents (build/plan/review/custom) — **⇧Tab** cycles the built-ins in the TUI |
+| `/agent` | List/select primary agents (build/plan/review/custom) — **Shift+Tab** cycles the built-ins in the TUI |
 | `/init` | Create an AGENTS.md template in this project |
 | `/theme` | Switch palette (TUI) — persist the default via `theme` in the config file |
 | `/clear` | Reset conversation + agent context |
 | `/compact` | Summarize older history now (manual compaction) |
+| `/btw <question>` | Side question answered from session context — no tools, kept out of history; works while a task runs |
 | `/cost` | Session token usage |
 | `/model` | Active model/provider/build |
 | `/skill [name]` | List discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
-| `/permission <mode>` | Switch permission mode — **⇧P** cycles auto/ask/readonly in the TUI (input empty) |
+| `/permission <mode>` | Switch permission mode — **Shift+P** cycles auto/ask/readonly in the TUI (input empty) |
 | `/shortcut` | All TUI keybindings in the full-screen viewer (TUI only; aliases `/shortcuts`, `/keys`) |
 
 Sessions are managed with `scoder list` / `scoder resume` (CLI) or the
 **Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.
+
+### Side questions (`/btw`)
+
+`/btw <question>` answers a quick question from the current session context
+without polluting the main conversation: a single tool-less LLM call over a
+read-only snapshot of the history — neither question nor answer is appended to
+the conversation, and the provider-side prompt cache stays warm. In the TUI it
+works while a task is running (the run loop never sees the exchange). Usage is
+counted toward `/cost`; bare `/btw` re-shows the last answer (session-only).
 
 ## Custom Commands
 

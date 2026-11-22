@@ -231,7 +231,7 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
     assert.match(clean, /HARNESS LOG · ALL · \d+ entries/, `F phải mở log dump (${where()})`);
     assert.match(clean, /\d\d:\d\d:\d\d\.\d (RUN|LLM|TOOL|SHELL|FILE|BUILD|MCP|SUB|GUARD|PERM|EVT)/, "dòng dump đủ cột giờ + tên loại");
     assert.ok(!/❯ F/.test(clean), "phím F tắt input — không rơi vào dòng soạn thảo");
-    assert.match(clean, /↑↓ select/, "key hints của log tab");
+    assert.match(clean, /jk select/, "key hints của log tab");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
   }, 90_000);
 });

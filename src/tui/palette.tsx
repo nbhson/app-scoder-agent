@@ -52,7 +52,7 @@ export function buildPaletteItems(sources: PaletteSources): PaletteItem[] {
   out.push({
     group: "ACTIONS",
     label: "Open saved sessions…",
-    desc: "resume a previous session (ctrl+s)",
+    desc: "resume a previous session (Ctrl+S)",
     invoke: { kind: "action", action: "sessions" },
   });
   for (const c of sources.commands ?? BUILTIN_COMMANDS) {
@@ -77,7 +77,7 @@ export function buildPaletteItems(sources: PaletteSources): PaletteItem[] {
     out.push({
       group: "AGENTS",
       label: `agent: ${a}`,
-      desc: "switch primary agent (⇧⇥ cycles)",
+      desc: "switch primary agent (Shift+Tab cycles)",
       invoke: { kind: "submit", text: `/agent ${a}` },
     });
   }
@@ -205,11 +205,11 @@ export function Palette({ agents, custom, onInvoke, onClose }: PaletteProps): Re
         <Text dimColor>   {shown.length}/{items.length}</Text>
       </Text>
       {rows.length === 0 ? (
-        <Text dimColor>  no matches — esc to close</Text>
+        <Text dimColor>  no matches — Esc to close</Text>
       ) : (
         rows
       )}
-      <Text dimColor>↑/↓ select · ⏎ run · esc close · typing filters</Text>
+      <Text dimColor>Up/Down select · Enter run · Esc close · typing filters</Text>
     </Box>
   );
 }

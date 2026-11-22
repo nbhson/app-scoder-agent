@@ -165,6 +165,18 @@ export function coreCommands(): CommandEntry[] {
       },
     },
     {
+      name: "/btw",
+      description: "side question from session context — no tools, stays out of history",
+      async run(slash, host, notice) {
+        const agent = host.agent();
+        if (!agent) return notice("agent not ready — start a task first", "warn");
+        // KHÔNG gate on isRunning: /btw là side channel — main run vẫn chạy,
+        // snapshot history bất biến, reply không vào history (Claude Code).
+        const r = await agent.sideQuestion(slash.arg);
+        notice(r.ok ? `btw: ${r.answer}` : r.answer, r.ok ? "info" : "warn");
+      },
+    },
+    {
       name: "/skill",
       description: "list skills, or load one into context: /skill <name> [task]",
       run(slash, host, notice) {

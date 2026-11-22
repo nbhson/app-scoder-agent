@@ -3,6 +3,35 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`/btw <question>` — side questions (REPL + TUI, pattern from Claude Code)**:
+  one tool-less LLM call over a read-only snapshot of the current conversation.
+  The question and answer never enter `this.messages`, so the main thread and
+  its provider-side prompt cache stay untouched (the exchange costs barely more
+  than the answer itself). Works while a task is running — an unfinished
+  trailing tool-call round is trimmed from the snapshot, the live history is
+  never touched. Side calls count toward `/cost`; a bare `/btw` replays the
+  last answer. `Agent.sideQuestion()` + registry handler + docs
+  (`test/btw.test.mjs`, `test/command-registry.test.mjs`).
+
+### Changed
+
+- **Keybindings are spelled out across the TUI** — `⌃T` / `⇧⇥` / `⏎` / `↑↓` became
+  `Ctrl+T`, `Shift+Tab`, `Enter`, `Up/Down` in every surface a user reads: the
+  `/shortcut` sheet, the `?` help panel, the bottom status bar, the panel footers
+  (harness-log tab, DETAIL pane, full-screen viewer, palette, session picker, vim
+  hint) and the `/agent`, `/permission`, `/help` texts. The status-bar hint line
+  also stopped clipping mid-key: hints are now whole segments dropped from the
+  tail when the terminal is narrow (`pickHints`), and the left side
+  (status · model · git chip) reserves its width first, so the git chip survives
+  at 100 cols. `src/tui/shortcuts.ts` + `chrome`/`app`/`sidebar`/`pager`/`palette`/
+  `session-picker`/`input`/`permission-modal` (`.tsx`) and
+  `src/commands/definitions.ts`; regression tests in `test/tui-shortcuts.test.mjs`
+  and `test/tui-render.test.mjs`.
+
 ## [1.1.0] — 2026-11-23
 
 Full audit of the codebase (`fix/all-review-findings`, 11 commits) — every

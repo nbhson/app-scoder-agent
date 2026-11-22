@@ -166,6 +166,55 @@ describe("dispatchCommand (T1)", () => {
     assert.match(s.lines[0].text, /agent not ready/);
   });
 
+  it("/btw <question> → sideQuestion, trả lời qua notice, KHÔNG spawn task", async () => {
+    const asked = [];
+    const s = sink();
+    const host = fakeHost({
+      agent: () => ({
+        sideQuestion: async (q) => {
+          asked.push(q);
+          return { ok: true, answer: "it reads .env" };
+        },
+      }),
+    });
+    const r = await dispatchCommand("/btw what does the loader do", host, s.fn);
+    assert.equal(r.handled, true);
+    assert.equal(r.outcome?.task, undefined, "btw là side channel — không phải task mới");
+    assert.deepEqual(asked, ["what does the loader do"]);
+    assert.equal(s.lines[0].level, "info");
+    assert.match(s.lines[0].text, /^btw: it reads \.env$/);
+  });
+
+  it("/btw khi agent đang chạy → VẪN hỏi được (không gate isRunning như /compact)", async () => {
+    const s = sink();
+    let asked = 0;
+    const host = fakeHost({
+      isRunning: () => true,
+      agent: () => ({ sideQuestion: async () => { asked++; return { ok: true, answer: "a" }; } }),
+    });
+    await dispatchCommand("/btw quick question", host, s.fn);
+    assert.equal(asked, 1);
+    assert.equal(s.lines[0].level, "info");
+  });
+
+  it("/btw khi chưa có agent → warn", async () => {
+    const s = sink();
+    await dispatchCommand("/btw hello", fakeHost(), s.fn);
+    assert.equal(s.lines[0].level, "warn");
+    assert.match(s.lines[0].text, /agent not ready/);
+  });
+
+  it("/btw lỗi từ sideQuestion → notice mức warn, không crash", async () => {
+    const s = sink();
+    const host = fakeHost({
+      agent: () => ({ sideQuestion: async () => ({ ok: false, answer: "usage: /btw <question> — ask without interrupting the task" }) }),
+    });
+    const r = await dispatchCommand("/btw", host, s.fn);
+    assert.equal(r.handled, true);
+    assert.equal(s.lines[0].level, "warn");
+    assert.match(s.lines[0].text, /usage: \/btw/);
+  });
+
   it("extra command được nhận trước core (frontend-specific override)", async () => {
     const s = sink();
     const r = await dispatchCommand("/cost", fakeHost(), s.fn, [
@@ -185,6 +234,7 @@ describe("dispatchCommand (T1)", () => {
     assert.ok(coreCommands().some((c) => c.name === "/mcp"));
     assert.ok(coreCommands().some((c) => c.name === "/skill"));
     assert.ok(coreCommands().some((c) => c.name === "/compact"));
+    assert.ok(coreCommands().some((c) => c.name === "/btw"));
   });
 });
 

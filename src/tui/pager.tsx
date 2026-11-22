@@ -141,7 +141,7 @@ export function Pager({ sources, startIndex, wheelRef, onSave, onClose }: PagerP
   if (!source) {
     return (
       <Box borderStyle={boxBorderStyle()} borderColor={theme.accent} paddingX={1} flexShrink={0}>
-        <Text dimColor>nothing to show yet — esc to close</Text>
+        <Text dimColor>nothing to show yet — Esc to close</Text>
       </Box>
     );
   }
@@ -176,9 +176,9 @@ export function Pager({ sources, startIndex, wheelRef, onSave, onClose }: PagerP
         {display.length === 0 && <Text dimColor>  (empty)</Text>}
       </Box>
       <Text dimColor>
-        {` ↑↓/jk scroll · PgUp/PgDn · Home/End · ⇥ next${sources.length > 1 ? ` (${idx + 1}/${sources.length})` : ""}` +
+        {` Up/Down or jk scroll · PageUp/PageDown · Home/End · Tab next${sources.length > 1 ? ` (${idx + 1}/${sources.length})` : ""}` +
           (source.kind === "diff" ? " · w word/raw" : "") +
-          " · y save · q/esc close"}
+          " · y save · q/Esc close"}
         {off > 0 || pct < 100 ? `  ·  ${pct}%` : ""}
       </Text>
     </Box>

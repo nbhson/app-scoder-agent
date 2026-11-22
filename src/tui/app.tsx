@@ -25,7 +25,7 @@ import { transcriptWindow, estimateTotalRows } from "./selectors.js";
 import { formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE, discoverCustomCommands } from "../commands/definitions.js";
 import { dispatchCommand } from "../commands/registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
-import { BuildRail, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH, osc52Copy } from "./chrome.js"; // T2
+import { BuildRail, HelpLine, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH, osc52Copy } from "./chrome.js"; // T2
 import { clipCells } from "./text-width.js";
 import { Input } from "./input.js"; // T2
 import { SessionPicker } from "./session-picker.js"; // session picker modal
@@ -554,20 +554,27 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               <Text></Text>
               <Text dimColor>type a task to start — the agent plans, edits, and builds</Text>
               <Text></Text>
-              {/* Key hints: phím tắt bold nổi bật, nhãn dim — quét nhanh hơn. */}
+              {/* Key hints: spelled-out modifiers (Ctrl+S, Shift+Enter) — ⌃ ⇧ ⏎
+                  read as icons. Phím tắt bold, nhãn dim — quét nhanh hơn. */}
               <Text>
-                <Text bold color={theme.accent}>⏎</Text>
+                <Text bold color={theme.accent}>Enter</Text>
                 <Text dimColor> send   </Text>
-                <Text bold color={theme.accent}>ctrl+s</Text>
+                <Text bold color={theme.accent}>Ctrl+S</Text>
                 <Text dimColor> sessions   </Text>
-                <Text bold color={theme.accent}>tab</Text>
+                <Text bold color={theme.accent}>Tab</Text>
                 <Text dimColor> complete   </Text>
                 <Text bold color={theme.accent}>/help</Text>
                 <Text dimColor> commands</Text>
               </Text>
               <Text>
-                <Text bold color={theme.accent}>ctrl+o</Text>
+                <Text bold color={theme.accent}>Ctrl+O</Text>
                 <Text dimColor> select/copy — releases the mouse for drag-highlight + native copy</Text>
+              </Text>
+              <Text>
+                <Text bold color={theme.accent}>/shortcut</Text>
+                <Text dimColor> or </Text>
+                <Text bold color={theme.accent}>?</Text>
+                <Text dimColor>  — every keybinding in this app</Text>
               </Text>
                            {state.warmup?.active && (
                  <Box flexDirection="column" alignItems="center" marginTop={1}>
@@ -649,16 +656,59 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
         />
       )}
       {helpOpen && (
-        <Box flexDirection="column" borderStyle={boxBorderStyle()} borderColor={theme.dim} paddingX={1} paddingY={1}>
-          <Text color={theme.brand} bold>Help (?)</Text>
-          <Text dimColor>
-            keys: ⇧⏎ newline · ⇧⇥ agent build/plan/review · ⇧P permission auto/ask/readonly (empty input) · ⌃P palette
-            · ⌃S sessions · ⌃T thinking · ⌃O select · v view output/diff · ? help · esc abort · ⌃C quit
-          </Text>
-          <Text dimColor>
-            sidebar: ⌃B harness log tab · ↑↓ select row · f filter ALL/LLM/TOOL/MCP/SUB/EVT · d detail · ⏎ full payload
-            · y copy · F full log · PgUp/PgDn scroll · g head · G tail · /log [cat] prints the log in the viewer
-          </Text>
+        // maxHeight + overflow: the frame has to stay inside the terminal. A Box
+        // taller than the screen makes Ink's diff paint torn rows (the command
+        // list alone is 23 lines) — keys stay on top, the list clips instead.
+        <Box
+          flexDirection="column"
+          borderStyle={boxBorderStyle()}
+          borderColor={theme.dim}
+          paddingX={1}
+          paddingY={1}
+          overflow="hidden"
+          maxHeight={Math.max(10, (rows ?? 24) - 8)}
+        >
+          <Text color={theme.brand} bold>Help — press ? or Esc to close</Text>
+          <Text dimColor>Single-letter keys act when the input line is empty. Every binding: /shortcut · every command: /help</Text>
+          <HelpLine
+            items={[
+              ["Enter", "send"],
+              ["Shift+Enter", "newline"],
+              ["Tab", "complete"],
+              ["Up/Down", "history"],
+              ["Esc", "abort"],
+              ["Ctrl+C", "quit"],
+            ]}
+          />
+          <HelpLine
+            items={[
+              ["Ctrl+P", "palette"],
+              ["Ctrl+S", "sessions"],
+              ["Ctrl+T", "thinking"],
+              ["Ctrl+O", "select/copy"],
+              ["Ctrl+B", "log tab"],
+            ]}
+          />
+          <HelpLine
+            items={[
+              ["v", "view output/diff"],
+              ["Shift+Tab", "agent build/plan/review"],
+              ["Shift+P", "permission auto/ask/readonly"],
+            ]}
+          />
+          <HelpLine
+            items={[
+              ["Ctrl+B", "log tab:"],
+              ["Up/Down", "select"],
+              ["g / G", "first / last"],
+              ["f", "filter"],
+              ["d", "detail"],
+              ["Enter", "payload"],
+              ["F", "dump"],
+              ["y", "copy"],
+              ["/log [cat]", "in the viewer"],
+            ]}
+          />
           <Text>{formatSlashHelp("scoder tui")}</Text>
         </Box>
       )}
@@ -714,7 +764,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           reservedRef={reservedKeysRef}
         />
       </Box>
-      <StatusBar state={state} scroll={effScrollOffset > 0 ? `↑ ${Math.min(effScrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />
+      <StatusBar state={state} scroll={effScrollOffset > 0 ? `${Math.min(effScrollOffset, maxScroll)}/${maxScroll} above` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />
     </Box>
   );
 }

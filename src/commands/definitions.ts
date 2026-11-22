@@ -41,16 +41,17 @@ export interface CommandDef {
 /** Built-in commands — the single catalog both help and completion read. */
 export const BUILTIN_COMMANDS: CommandDef[] = [
   { name: "/help", aliases: [], description: "show this command list (builtin + custom)", usage: "/help", visibility: "public", source: "builtin" },
-  { name: "/agent", aliases: [], description: "list selectable agents — /agent <name> to switch (idle only; ⇧⇥ cycles build/plan/review)", usage: "/agent [name]", visibility: "public", source: "builtin" },
+  { name: "/agent", aliases: [], description: "list selectable agents — /agent <name> to switch (idle only; Shift+Tab cycles build/plan/review)", usage: "/agent [name]", visibility: "public", source: "builtin" },
   { name: "/init", aliases: [], description: "create an AGENTS.md template in this project", usage: "/init", visibility: "public", source: "builtin" },
   { name: "/theme", aliases: [], description: "switch palette: /theme <name> — /theme list (mission|paper|mono|light|high-contrast|solarized)", usage: "/theme [name|list]", visibility: "tui-only", source: "builtin" },
   { name: "/clear", aliases: [], description: "clear the conversation and reset agent context", usage: "/clear", visibility: "public", source: "builtin" },
   { name: "/compact", aliases: [], description: "summarize older history now (manual compaction)", usage: "/compact", visibility: "public", source: "builtin" },
+  { name: "/btw", aliases: [], description: "side question answered from session context — no tools, kept out of history: /btw <question>", usage: "/btw <question>", visibility: "public", source: "builtin" },
   { name: "/cost", aliases: [], description: "token usage of the current session", usage: "/cost", visibility: "public", source: "builtin" },
   { name: "/model", aliases: [], description: "show the active model & provider", usage: "/model [provider/model]", visibility: "public", source: "builtin" },
   { name: "/skill", aliases: [], description: "list skills, or load one into context: /skill <name>", usage: "/skill [name]", visibility: "public", source: "builtin" },
   { name: "/mcp", aliases: [], description: "MCP servers & tools: /mcp [server] [tool] [json|text]", usage: "/mcp [server [tool [json]]]", visibility: "public", source: "builtin" },
-  { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly> (⇧P cycles)", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
+  { name: "/permission", aliases: [], description: "view or switch permission mode: /permission <auto|ask|readonly> (Shift+P cycles)", usage: "/permission [auto|ask|readonly]", visibility: "public", source: "builtin" },
   { name: "/log", aliases: [], description: "harness log in the full-screen viewer: /log [cat] (all|llm|tool|mcp|sub|evt)", usage: "/log [cat]", visibility: "tui-only", source: "builtin" },
   { name: "/shortcut", aliases: ["/shortcuts", "/keys"], description: "all keybindings in the full-screen viewer", usage: "/shortcut", visibility: "tui-only", source: "builtin" },
 ];
@@ -439,7 +440,7 @@ export function ghostText(
 /** Format the /help listing (shared so both frontends render identically). */
 export function formatSlashHelp(commandName: string, custom: Array<{ cmd: string; desc: string }> = []): string {
   const rows = [...SLASH_COMMANDS, ...custom].map((c) => `  ${c.cmd.padEnd(12)} ${c.desc}`).join("\n");
-  return `Commands (${commandName}):\n${rows}\n  Anything else is sent to the agent as a task.\n  Tab completes commands; ↑/↓ recalls history.`;
+  return `Commands (${commandName}):\n${rows}\n  Anything else is sent to the agent as a task.\n  Tab completes commands; Up/Down recalls history.\n  Keybindings: press ? in the TUI, or run /shortcut.`;
 }
 
 /**

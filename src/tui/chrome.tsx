@@ -164,7 +164,58 @@ export function osc52Copy(text: string): boolean {
   }
 }
 
+/**
+ * One help row: `Key` in accent + what it does in dim, joined by ` · `.
+ * Modifiers are spelled out (Ctrl+T, Shift+Tab) — the help panel is exactly
+ * where ⌃/⇧ glyphs stop people. Presentational only (used by the ? overlay).
+ */
+export function HelpLine({ items }: { items: ReadonlyArray<readonly [string, string]> }): React.JSX.Element {
+  return (
+    <Text>
+      {items.map(([key, what], i) => (
+        <Text key={key}>
+          {i > 0 && <Text dimColor> · </Text>}
+          <Text bold color={theme.accent}>{key}</Text>
+          <Text dimColor>{` ${what}`}</Text>
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+/**
+ * Bottom-bar key hints — modifiers spelled out ("Ctrl+B", "Shift+Tab", "Enter"),
+ * never ⌃ ⇧ ⏎ ⇥ glyphs (they read as icons and are slow to scan). Ordered
+ * most-needed first: `pickHints` drops whole hints from the tail when the
+ * terminal is narrow, instead of clipping mid-word like `fit()` did.
+ */
+function hintSegments(sidebarTabLabel: string): string[] {
+  return [
+    "Enter send",
+    "Esc abort",
+    "Ctrl+C quit",
+    `Ctrl+B ${sidebarTabLabel}`,
+    "Ctrl+P palette",
+    "Shift+Tab agent",
+    "Shift+P perm",
+    "Ctrl+T thinking",
+    "? help",
+  ];
+}
+
+/** Join ` · ` while the budget holds; always returns at least the first hint. */
+export function pickHints(segs: string[], budget: number): string {
+  let out = "";
+  for (const s of segs) {
+    const next = out ? `${out} · ${s}` : s;
+    if (measure(next) > budget) break;
+    out = next;
+  }
+  return out || fit(segs[0] ?? "", budget);
+}
+
 export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "overview", git = null }: { state: TuiState; scroll?: string | null; selectMode?: boolean; sidebarTab?: "overview" | "log"; git?: GitContext | null }): React.JSX.Element {
+
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
   // Sidebar hidden → the metrics it would show must not vanish from the UI.
@@ -190,34 +241,43 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
 
   const model = state.model || "—";
 
-  // Right side: select-mode reminder OR scroll position OR keybind hints
-  const metrics = narrow ? compactMetrics(state) : null;
-  const rightText = selectMode
-    ? "⊝ select · drag to highlight · ⌘C/ctrl+c copy · ctrl+o back"
-    : scroll
-      ? `scroll ${scroll} · esc→tail`
-      : metrics
-        // sidebar hidden (<SIDEBAR_MIN_COLS): surface ctx/cost here instead.
-        ? `${metrics} · ctrl+s sessions · esc abort`
-        // ⇧⏎ (newline) lives in the help panel; the footer stays short enough
-        // that ctrl+c quit never gets truncated at 100 cols.
-        : `⏎ send · ⇧⇥ agent · ⇧P perm · ⌃B ${sidebarTab === "log" ? "overview" : "log"} · ctrl+t ${state.thinkingVisible ? "◉" : "○"} · esc abort · ctrl+c quit`;
-
   // A3: steering/queue depth — data was already in state, nothing rendered it.
   const badge = queueBadge(state);
 
-  const leftBudget = Math.max(24, width - rightText.length - (badge ? badge.length + 3 : 3));
+  // P7: while running (or when a guardrail owns the BuildRail center) the git
+  // chip relocates HERE as its own dim node — the status color/bold must not
+  // bleed into it. Decided before the hint line is built: the left side states
+  // its preferred content first so a long spelled-out hint can never squeeze
+  // the chip out of the bar (the old 0.62 cap let it eat the whole left side).
+  const railShowsGit = git != null && state.status !== "running" && !state.lastGuardrail;
+  let gitText = git && !railShowsGit ? gitChip(git) : null;
+  const leftPreferred =
+    measure(statusLabel) +
+    (model !== "—" ? measure(` · ${model}`) : 0) +
+    (gitText ? measure(` · ⎇ ${gitText}`) : 0) +
+    (badge ? measure(badge) + 3 : 0);
+
+  // Right side: select-mode reminder OR scroll position OR keybind hints.
+  // Never more than 0.72 of the row, and never less than what the left needs.
+  const metrics = narrow ? compactMetrics(state) : null;
+  const rightBudget = Math.max(12, Math.min(Math.floor(width * 0.72), width - leftPreferred - 6));
+  const rightText = selectMode
+    ? pickHints(["select mode", "Ctrl+O back", "drag to highlight", "Cmd+C copies"], rightBudget)
+    : scroll
+      ? pickHints([`scroll ${scroll}`, "Esc to tail"], rightBudget)
+      : metrics
+        // sidebar hidden (<SIDEBAR_MIN_COLS): surface ctx/cost here instead.
+        ? pickHints([metrics, "Ctrl+S sessions", "Esc abort"], rightBudget)
+        : pickHints(hintSegments(sidebarTab === "log" ? "overview" : "log"), rightBudget);
+
+  const leftBudget = Math.max(24, width - measure(rightText) - (badge ? measure(badge) + 3 : 3));
   let left = statusLabel;
   if (model && model !== "—") {
     const part = ` · ${model}`;
-    if (left.length + part.length <= leftBudget) left += part;
+    if (measure(left) + part.length <= leftBudget) left += part;
     else left = fit(left, leftBudget);
   }
-  // P7: while running (or when a guardrail owns the BuildRail center) the
-  // git chip relocates here as its own dim node — the status color/bold
-  // must not bleed into it. Dropped entirely when the left budget is gone.
-  const railShowsGit = git != null && state.status !== "running" && !state.lastGuardrail;
-  let gitText = git && !railShowsGit ? gitChip(git) : null;
+  // Dropped entirely when the left budget really is gone.
   if (gitText && measure(left) + measure(` · ⎇ ${gitText}`) > leftBudget) gitText = null;
 
   return (
@@ -241,9 +301,10 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
         {gitText && <Text dimColor> · ⎇ {gitText}</Text>}
         {badge && <Text color={theme.accent}> {badge}</Text>}
       </Text>
-      {/* Right: hints — cap 0.62: dòng hint đầy đủ (⇧⏎/⇧⇥/⇧P, ~75 cell) vượt
-          nửa ngang; left (status+model) đã có leftBudget riêng co theo right. */}
-      <Text dimColor>{fit(rightText, Math.floor(width * 0.62))}</Text>
+      {/* Right: hints — pickHints already sized the line to the budget, so a
+          whole hint disappears instead of "Ctrl+C qu…" when the terminal is
+          narrow. Left (status+model) has its own leftBudget below. */}
+      <Text dimColor>{rightText}</Text>
     </Box>
   );
 }

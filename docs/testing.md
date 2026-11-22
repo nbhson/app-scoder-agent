@@ -45,6 +45,7 @@ Tests are auto-discovered via `test/*.test.mjs`:
 | `test/perf-p0-p1.test.mjs` | Performance fixes: schema-aware token estimate, MCP tool filter + schema cap (incl. the window-aware share cap), `read_file` line-aware truncation, workspace fingerprint + verification cache, usage/prompt metrics, `probeContextWindow` against a real `node:http` mock (`/props`, `/api/show`, API key), `historyTokenBudget` clamping, fixed-cost calibration |
 | `test/session.test.mjs` | Session store, prune, resolve, crypto session-id entropy |
 | `test/cost.test.mjs` | Token usage & cost aggregation |
+| `test/btw.test.mjs` | `/btw` side questions: tool-less snapshot, main history untouched, dangling tool-call round trimmed, replay of last answer |
 | `test/guardrails.test.mjs` | Guardrail Engine: rule registry, thresholds |
 | `test/prompt.test.mjs` | System prompt versioning |
 | `test/anthropic.test.mjs` | Message translation + native SSE streaming |

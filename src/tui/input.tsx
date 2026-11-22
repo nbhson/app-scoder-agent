@@ -333,13 +333,13 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
               {s}
             </Text>
           ))}
-          <Text dimColor>  ↑/↓ select · tab/enter accept · esc close</Text>
+          <Text dimColor>  Up/Down select · Tab/Enter accept · Esc close</Text>
         </Box>
       )}
       {/* Input row(s) — styled prompt + typed text + ghost + block cursor */}
       {lineNodes}
       {candidates && <Text dimColor>  {candidates}  (tab completes)</Text>}
-      {vimMode === "normal" && <Text dimColor>  -- NORMAL -- h/l/w/b/e · x · i/a/A insert · ⏎ send · ⇧⏎ newline</Text>}
+      {vimMode === "normal" && <Text dimColor>  -- NORMAL -- h/l/w/b/e · x · i/a/A insert · Enter send · Shift+Enter newline</Text>}
     </Box>
   );
 }

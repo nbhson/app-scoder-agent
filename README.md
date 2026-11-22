@@ -52,7 +52,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoin
 # Run a task
 scoder "add a ping function to src/network.ts"
 
-# Interactive REPL (supports /help, /clear, /compact, /cost, /model, /skill, /mcp, /permission)
+# Interactive REPL (supports /help, /clear, /compact, /btw, /cost, /model, /skill, /mcp, /permission)
 scoder
 
 # Full-screen TUI with rich agent display
@@ -260,20 +260,30 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | Command | Description |
 |---|---|
 | `/help` | command list (builtin + custom) |
-| `/agent` | list/select primary agents (build/plan/review/custom) — **⇧Tab** cycles the 3 built-ins in the TUI |
+| `/agent` | list/select primary agents (build/plan/review/custom) — **Shift+Tab** cycles the 3 built-ins in the TUI |
 | `/init` | create an AGENTS.md template in this project |
 | `/theme` | switch palette (TUI) — persisted via `theme` in the config file |
 | `/clear` | reset conversation + agent context |
 | `/compact` | summarize older history now (manual compaction) |
+| `/btw <question>` | side question answered from session context — no tools, never added to history; works while a task runs (bare `/btw` replays the last answer) |
 | `/cost` | session token usage |
 | `/model` | active model/provider/build |
 | `/skill [name]` | list discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers + tools; exec one directly: `/mcp <server> <tool> [json\|text]` or `/mcp mcp__server__tool [json\|text]` — non-JSON text binds to the tool's first string parameter |
-| `/permission <auto\|ask\|readonly>` | switch permission mode at runtime — **⇧P** cycles the 3 modes in the TUI (input empty) |
+| `/permission <auto\|ask\|readonly>` | switch permission mode at runtime — **Shift+P** cycles the 3 modes in the TUI (input empty) |
 
 Sessions are managed with `scoder list` / `scoder resume` (CLI) or the **Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.
 
 In the TUI, **Tab** completes commands (and `/skill` names, `/mcp <server> <tool>` arguments), **↑/↓** recall sent-message history, **Shift+Enter** inserts a newline for multi-line messages.
+
+### Side questions (`/btw`)
+
+`/btw <question>` asks something **without touching the main conversation** (pattern from Claude Code):
+
+- One tool-less LLM call over a read-only snapshot of the current history — no file reads, no commands, and neither the question nor the answer is appended to the conversation. The prefix stays byte-identical, so the provider-side prompt cache keeps working and the aside costs barely more than the answer itself
+- Works while a task is running in the TUI — the run loop never sees the exchange and the task is not interrupted
+- Token usage still counts toward `/cost`; bare `/btw` re-shows the last answer (session-only)
+- Good for quick factual questions and forgotten constraints you do not want padded into the thread; if the answer should steer the task, send a normal message (which steers at the next step boundary) instead
 
 ### Context compaction
 
@@ -415,10 +425,10 @@ Features:
 - **Header row 2** — (no longer present; phase breadcrumb + metrics moved into the sidebar / status bar to avoid duplication)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
 - **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
-- **Slash commands** — `/help`, `/clear`, `/compact`, `/cost`, `/model`, `/skill`, `/mcp`, `/permission` (identical to the REPL; `/theme`, `/log` and `/shortcut` are TUI-only). `/theme` switches for the current session only — to persist a palette, set `theme` in `.scoderrc.json` / `~/.scoder/config.json`, `SCODER_THEME`, or `.scoder/theme.json`
+- **Slash commands** — `/help`, `/clear`, `/compact`, `/btw`, `/cost`, `/model`, `/skill`, `/mcp`, `/permission` (identical to the REPL; `/theme`, `/log` and `/shortcut` are TUI-only). `/theme` switches for the current session only — to persist a palette, set `theme` in `.scoderrc.json` / `~/.scoder/config.json`, `SCODER_THEME`, or `.scoder/theme.json`
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
-- **Scrollback** — `PgUp`/`PgDn` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
-- **Keybinds** — `Enter` send · `Shift+Enter` newline (multi-line input) · `Shift+Tab` cycle agent build→plan→review · `Shift+P` cycle permission auto→ask→readonly (input empty) · `PgUp`/`PgDn` scroll · `Esc` reset scroll / abort · `Ctrl+O` toggle select mode (releases mouse tracking so you can drag-highlight chat text and copy it with `⌘C`/`Ctrl+C`) · `Ctrl+C` quit. `Shift+Enter` needs a terminal that reports modified Enter (kitty keyboard protocol — auto-detected at startup; iTerm2-style `\n`, `Alt+Enter` and `Ctrl+J` work everywhere)
+- **Scrollback** — `PageUp`/`PageDown` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
+- **Keybinds** — `Enter` send · `Shift+Enter` newline (multi-line input) · `Shift+Tab` cycle agent build→plan→review · `Shift+P` cycle permission auto→ask→readonly (input empty) · `PageUp`/`PageDown` scroll · `Esc` reset scroll / abort · `Ctrl+O` toggle select mode (releases mouse tracking so you can drag-highlight chat text and copy it with `Cmd+C`/`Ctrl+C`) · `Ctrl+C` quit. `Shift+Enter` needs a terminal that reports modified Enter (kitty keyboard protocol — auto-detected at startup; iTerm2-style `\n`, `Alt+Enter` and `Ctrl+J` work everywhere)
 - Non-TTY environments (CI, pipes) automatically fall back to the classic REPL
 - `permission: "ask"` works in the TUI — prompts render as an in-pane modal (`y`/`a`/`n`/`q`)
 
@@ -611,6 +621,7 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/config.test.mjs` — env/rc/cli precedence, logFile mapping, permission lists
 - `test/session.test.mjs` — session store, smart prune, resolve
 - `test/cost.test.mjs` — token usage & cost aggregation, session metrics (latency/success/guardrails)
+- `test/btw.test.mjs` — `/btw` side questions: tool-less snapshot call, main history untouched, dangling tool-call round trimmed, last-answer replay
 - `test/guardrails.test.mjs` — Guardrail Engine: rule registry, default rules, configurable thresholds, decision logging, priority order
 - `test/prompt.test.mjs` — system prompt versioning (`PROMPT_VERSION`) + dynamic assembly
 - `test/anthropic.test.mjs` — message translation + native SSE streaming

@@ -22,8 +22,18 @@ describe("shortcutSections", () => {
 
   it("documents the headline bindings the app actually handles", () => {
     const all = shortcutSections().flatMap((s) => s.rows.map((r) => r.keys));
-    for (const k of ["⌃P", "⌃S", "⌃B", "⌃O", "⌃T", "⇧⇥", "⇧P", "?", "v", "Esc", "⌃C"]) {
+    for (const k of ["Ctrl+P", "Ctrl+S", "Ctrl+B", "Ctrl+O", "Ctrl+T", "Shift+Tab", "Shift+P", "?", "v", "Esc", "Ctrl+C"]) {
       assert.ok(all.includes(k), `keybinding ${k} listed`);
+    }
+  });
+
+  it("spells out modifiers — no ⌃ ⇧ ⏎ ⇥ glyphs anywhere in the sheet", () => {
+    for (const s of shortcutSections()) {
+      for (const r of s.rows) {
+        assert.ok(!/[⌃⇧⏎⇥⌥]/.test(r.keys), `keys column is plain text: "${r.keys}"`);
+        assert.ok(!/[⌃⇧⏎⇥⌥]/.test(r.what), `description is plain text: "${r.what}"`);
+      }
+      assert.ok(!/[⌃⇧⏎⇥⌥]/.test(s.title), `section title is plain text: "${s.title}"`);
     }
   });
 });
@@ -32,7 +42,7 @@ describe("formatShortcuts", () => {
   it("renders section titles + aligned rows as viewer text", () => {
     const text = formatShortcuts(76);
     assert.match(text, /── GLOBAL ─+/);
-    assert.match(text, /⏎\s+send the task/);
+    assert.match(text, /Enter\s+send the task/);
     // No line exceeds the requested width (viewer wraps at columns-10, so a
     // 76-col sheet always fits narrow terminals).
     for (const line of text.split("\n")) assert.ok(line.length <= 90, `line within budget: ${line}`);

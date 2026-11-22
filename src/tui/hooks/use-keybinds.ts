@@ -169,7 +169,7 @@ export function useTuiKeybinds(deps: {
         items: [...s.items, {
           kind: "notice",
           text: next
-            ? "select mode ON — drag to highlight, copy with ⌘C/Ctrl+C · scroll via PgUp/PgDn · Ctrl+O back to mouse wheel"
+            ? "select mode ON — drag to highlight, copy with Cmd+C or Ctrl+C · scroll via PageUp/PageDown · Ctrl+O back to mouse wheel"
             : "select mode OFF — mouse wheel scrolling restored",
           level: "info",
         }],

@@ -27,7 +27,7 @@ scoder tui "fix the bug"       # auto-submit initial task
  │    └ ✓ build passed                                                   │
  └───────────────────────────────────────────────────────────────────────┘
 ────────────────── Status Bar (app bar, thin divider) ────────────────────
- ⠙ running · gpt-4o-mini          ⏎ send · ctrl+s sessions · ctrl+c quit
+ ⠙ running · gpt-4o-mini          Enter send · Ctrl+S sessions · Ctrl+C quit
                             ┌─ Sidebar (≥100 cols) ─┐
                             │ ─ SESSION ──────────  │
                             │   model …             │
@@ -85,6 +85,9 @@ scoder tui "fix the bug"       # auto-submit initial task
 - Queue badge (`⇢ N`) in the status bar while steering messages await delivery;
   when the sidebar is hidden (narrow terminals) the status bar shows compact
   `ctx % · $cost` metrics instead of the key hints
+- `/btw` side questions are answered while a task runs and stay off the
+  transcript — a tool-less one-shot over a read-only history snapshot (no
+  queue badge; the run loop never sees the exchange, usage counts in `/cost`)
 - Rich assistant display is terminal-native and dependency-free:
   - GFM tables use measured pane width, bounded cells, Unicode borders, and
     remain readable on narrow terminals instead of forcing horizontal overflow.
@@ -158,9 +161,9 @@ and avoids increasing startup cost or introducing a browser-only dependency.
   show `· ×N` (N events absorbed). Every event is accounted for; nothing is
   silently dropped. Streaming rows (LLM stream, shell output) keep a `… Nc NB`
   counter and merge when they finish.
-- Navigation (input must be empty): `↑↓`/`jk` select, `PgUp/PgDn` scroll, `g`/`G`
+- Navigation (input must be empty): `Up`/`Down` or `jk` select, `PageUp`/`PageDown` scroll, `g`/`G`
   head/tail, `f` cycles the filter (`ALL → LLM → TOOL → MCP → SUB → EVT`), `d`
-  toggles the DETAIL panel (counters + payload pointer), `⏎` opens the **full
+  toggles the DETAIL panel (counters + payload pointer), `Enter` opens the **full
   payload in the viewer** (resolved from the transcript; evicted payloads fall
   back to `.scoder/logs/<session>.jsonl`), `F` dumps the **whole filtered log**
   into the full-screen viewer (wide rows — commands and args are not truncated
@@ -177,13 +180,13 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 - Diffs render with **word-level highlighting** (common prefix/suffix dimmed,
   only the changed words on a background — `w` toggles raw unified mode)
 - `y` saves the full text to `.scoder/views/<timestamp>.txt`
-- Wheel, `↑↓`/`jk`, `PgUp/PgDn`, `Home/End` (`g`/`G`) scroll; `q`/`Esc` closes.
+- Wheel, `Up`/`Down` or `jk`, `PageUp`/`PageDown`, `Home`/`End` (`g`/`G`) scroll; `q`/`Esc` closes.
   While open, the viewer owns the keyboard — transcript keybinds don't leak in.
 
 ### Command Palette (`Ctrl+P`)
 - One search line over grouped actions: builtin + custom slash commands,
   agents, themes, permission modes, and the session picker
-- Fuzzy ranking (label weighted above description), `↑↓` select, `⏎` invokes
+- Fuzzy ranking (label weighted above description), `Up`/`Down` select, `Enter` invokes
   through the same registry path as typing the command (all gates apply)
 
 ### Status Bar
@@ -213,13 +216,13 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Shift+Enter` | Insert a newline (multi-line input; continues with `⏎ send` on the last line) |
+| `Shift+Enter` | Insert a newline (multi-line input; `Enter` on the last line sends) |
 | `Shift+Tab` | Cycle primary agent build→plan→review (dispatches `/agent`; idle-only, resets the conversation) |
 | `Shift+P` | Cycle permission mode auto→ask→readonly (dispatches `/permission`; only when the input is empty — otherwise it types a capital `P`) |
-| `↑/↓` | Recall message history |
+| `Up`/`Down` | Recall message history |
 | `Tab` | Autocomplete (commands, skill names, MCP tools) |
-| `PgUp/PgDn` | Page scroll (0.8 viewport) |
-| `Home/End` | Jump to top/bottom |
+| `PageUp`/`PageDown` | Page scroll (0.8 viewport) |
+| `Home`/`End` | Jump to top/bottom |
 | `Esc` | Return to live tail / Abort / enter vim normal mode in input |
 | `Ctrl+C` | Quit |
 | `Ctrl+P` | Open command palette (fuzzy search over commands, agents, themes, permission modes) |
@@ -256,18 +259,19 @@ Same commands available in TUI and REPL:
 | Command | Description |
 |---------|-------------|
 | `/help` | Command list (builtin + custom) |
-| `/agent` | List/select primary agents (⇧Tab cycles build/plan/review) |
+| `/agent` | List/select primary agents (**Shift+Tab** cycles build/plan/review) |
 | `/init` | Create AGENTS.md template |
 | `/theme` | Switch palette |
 | `/log` | Harness log in the full-screen viewer: `/log [llm\|tool\|mcp\|sub\|sys]` (TUI only) |
 | `/shortcut` | All keybindings in the full-screen viewer (TUI only; aliases `/shortcuts`, `/keys`) |
 | `/clear` | Reset conversation |
 | `/compact` | Summarize older history |
+| `/btw <question>` | Side question from session context — no tools, not added to history, works while a task runs |
 | `/cost` | Token usage |
 | `/model` | Model info |
 | `/skill [name]` | List skills; with a name, load it |
 | `/mcp` | MCP servers & tools |
-| `/permission <mode>` | Switch mode (⇧P cycles auto/ask/readonly) |
+| `/permission <mode>` | Switch mode (**Shift+P** cycles auto/ask/readonly) |
 
 Sessions are resumed via the **Ctrl+S** session picker; quit with `exit` or
 **Ctrl+C**.
