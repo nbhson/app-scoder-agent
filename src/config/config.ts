@@ -11,6 +11,14 @@ export interface AgentConfig {
   /** OpenAI-compatible base URL, e.g. https://api.openai.com/v1 */
   baseUrl: string;
   apiKey: string;
+  /**
+   * P0-5: where `apiKey` came from. A provider hot-swap (`/model
+   * anthropic/…`) must not keep the key of the provider being left, unless the
+   * user pinned it — `flag` (--api-key / programmatic override), or `rc`
+   * (apiKey in the rc file, which is provider-agnostic). Env-derived keys are
+   * re-resolved against the NEW provider's `apiKeyEnv`.
+   */
+  apiKeySource?: "flag" | "env" | "rc" | "none";
   model: string;
   /** Provider backend: "openai" (compatible) or "anthropic" (native Messages API) */
   provider: "openai" | "anthropic";
@@ -528,6 +536,22 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   }
   // API key: provider-specific env var wins (registry), then legacy chain.
   const providerKeyEnv = providerDef ? process.env[providerDef.apiKeyEnv] : undefined;
+  // P0-5: same chain as before, but remember WHICH source won — a provider
+  // hot-swap may only re-resolve an env-derived key; a pinned one (flag or rc)
+  // is provider-agnostic and must survive the switch.
+  const keyFromEnv =
+    process.env.SCODER_API_KEY ??
+    providerKeyEnv ??
+    (isAnthropic ? process.env.ANTHROPIC_API_KEY : undefined) ??
+    process.env.OPENAI_API_KEY;
+  const apiKey = overrides.apiKey ?? keyFromEnv ?? rc.apiKey ?? "";
+  const apiKeySource: NonNullable<AgentConfig["apiKeySource"]> = overrides.apiKey
+    ? "flag"
+    : keyFromEnv
+      ? "env"
+      : rc.apiKey
+        ? "rc"
+        : "none";
 
   // Validate maxSteps: NaN/0/negative would silently break the agent loop
   // (steps < NaN is always false → the loop never runs).
@@ -541,14 +565,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const cfg: AgentConfig = {
     provider,
     baseUrl: overrides.baseUrl ?? process.env.SCODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
-    apiKey:
-      overrides.apiKey ??
-      process.env.SCODER_API_KEY ??
-      providerKeyEnv ??
-      (isAnthropic ? process.env.ANTHROPIC_API_KEY : undefined) ??
-      process.env.OPENAI_API_KEY ??
-      rc.apiKey ??
-      "",
+    apiKey,
+    apiKeySource,
     model: modelFromSlash || (overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL)),
     providerDef,
     contextWindow: rc.contextWindow ?? (providerDef as { contextWindow?: number } | undefined)?.contextWindow,

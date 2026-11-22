@@ -455,6 +455,23 @@ export class PermissionChecker {
     private config: PermissionConfig,
   ) {}
 
+  /** Current permission mode (read view for TUI/tests). */
+  get mode(): PermissionMode {
+    return this.config.mode;
+  }
+
+  /**
+   * P0-4: switch mode IN PLACE instead of rebuilding. Rebuilding used to drop
+   * `promptHandler` (so shell/edit prompts fell back to readline on stdin —
+   * garbage in the TUI alt-screen, no modal), lost the in-memory session
+   * allowlist + "always allow edits", and left `ctx.permissions` on the stale
+   * instance. Classify memos key on `config.mode` (see shellMemo), so a mode
+   * change invalidates cached decisions by itself.
+   */
+  setMode(mode: PermissionMode): void {
+    this.config = { ...this.config, mode };
+  }
+
   /** Dispatch to promptHandler with timeout ⇒ deny (safe default). */
   private async ask(req: PermissionRequest): Promise<boolean> {
     if (!this.promptHandler) return false; // no handler in alt-screen = deny

@@ -1,9 +1,9 @@
 import type { AgentConfig } from "./config/config.js";
 import { loadPermissionLists, loadPolicyRules, loadSavedApprovals, adaptiveToolOutputChars } from "./config/config.js";
-import { LlmClient, LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
+import { LlmError, redactSecrets, type ChatMessage, type ChatResult, type ToolCall, type ToolSpec } from "./llm/llm.js";
 import { parseToolArgsCached } from "./llm/tool-args.js";
 import type {ToolResult} from "./tools/types.js";
-import { AnthropicClient } from "./llm/provider-anthropic.js";
+import { createClientRuntime, createSwappedRuntime, resolveSwapConnection } from "./agent/provider-runtime.js";
 import { allToolSpecs, baseToolSpecs } from "./tools/registry.js";
 import {setMaxOutputChars, setMaxToolOutputChars} from "./tools/path-safety.js";
 import { type TaskRunner, type ToolContext, type TodoItem, type AskUserRequest } from "./tools/types.js";
@@ -12,7 +12,7 @@ import { expandMentions } from "./context/context.js";
 import { createGuardrailEngine, type GuardrailDecision } from "./agent/guardrails.js";
 import type { VerifyCommands } from "./workspace/diagnostics.js";
 import { PROMPT_VERSION } from "./context/prompt.js";
-import { PermissionChecker, type PermissionAnswer, type PermissionRequest } from "./security/permissions.js";
+import { PermissionChecker, type PermissionAnswer, type PermissionMode, type PermissionRequest } from "./security/permissions.js";
 import { SessionStore, EventSessionStore, type SessionFile } from "./session/session.js";
 import { DEFAULT_COMPACTION, estimateTokens, estimateSchemaTokens, findCutIndex, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "./context/compaction.js";
 import { SnapshotManager } from "./workspace/snapshot.js";
@@ -20,7 +20,7 @@ import { contextWindowFor } from "./llm/model-catalog.js";
 import { probeContextWindow, type ProbedWindow } from "./llm/context-probe.js";
 import { promptMetrics, type PromptMetrics } from "./llm/prompt-metrics.js";
 import { JsonlLogger } from "./session/logger.js";
-import { createRuntime, parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
+import { parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
 import { loadRcFile, isLocalBaseUrl } from "./config/config.js";
 import {McpManager} from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
@@ -321,35 +321,10 @@ export class Agent {
     this.reporter = reporter;
     this.tools = baseToolSpecs(resolved.def, reporter, config.allowSubagents);
     this.guardrails = createGuardrailEngine(config.guardrails ?? {}, (d) => this.logGuardrailDecision(d));
-    const commonOpts = {
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-      model: config.model,
-      maxTokens: config.maxTokens,
-      temperature: config.temperature,
-      requestTimeoutMs: config.limits?.requestTimeoutMs, // G7
-    };
-    // I-01: registry-driven runtime — providerDef (custom/builtin) wins; else legacy ternary.
-    // I-05: thinking budget = 25% maxTokens khi reasoning on (Anthropic only).
-    // I-12: eval harness — scripted client override thay vì construct.
-    const thinkingBudget = config.reasoning === "on" ? Math.max(1024, Math.floor(config.maxTokens * 0.25)) : 0;
-    this.client = config.clientFactory?.() ??
-      (config.providerDef?.kind === "anthropic" || (!config.providerDef && config.provider === "anthropic")
-        ? new AnthropicClient({ ...commonOpts, enableCache: config.providerDef?.supportCache ?? true, thinkingBudgetTokens: thinkingBudget })
-        : new LlmClient({ ...commonOpts, stream: config.stream }));
-    const permLists = loadPermissionLists(config.workdir);
-    this.permissions = new PermissionChecker({
-      mode: config.permissionMode,
-      allowCommands: permLists.allowCommands,
-      denyCommands: permLists.denyCommands,
-      nonInteractive: config.yes,
-      rules: config.permissionRules,
-      savedRules: loadSavedApprovals(config.workdir),
-      policyRules: loadPolicyRules(config.workdir),
-    });
-    // T-03: route permission prompts through the event stream when an event
-    // sink is attached (TUI/serve) — readline on stdin corrupts alt-screen.
-    this.permissions.promptHandler = (req) => this.programmaticPermissionPrompt(req);
+    // I-01/I-05/I-12: runtime selection lives in agent/provider-runtime.ts so
+    // `/model` hot-swap and construction cannot drift apart.
+    this.client = createClientRuntime(config);
+    this.permissions = this.buildPermissionChecker(config.permissionMode);
     this.ctx = {
       workdir: config.workdir,
       permissions: this.permissions,
@@ -605,6 +580,29 @@ export class Agent {
    */
   private programmaticPermissionPrompt(req: PermissionRequest): Promise<PermissionAnswer> {
     return this.interaction.permissionPrompt(this.interactionRuntime(), req);
+  }
+
+  /**
+   * P0-4: the ONE factory for this agent's PermissionChecker. It always wires
+   * `promptHandler` (T-03) — a checker built without it falls back to readline
+   * on stdin, which corrupts the TUI alt-screen and leaves the modal hanging.
+   * `ctx.permissions` keeps the same instance: mode changes go through
+   * `setMode()` rather than a rebuild, so session approvals and the handler
+   * survive `/permission`.
+   */
+  private buildPermissionChecker(mode: PermissionMode): PermissionChecker {
+    const permLists = loadPermissionLists(this.config.workdir);
+    const checker = new PermissionChecker({
+      mode,
+      allowCommands: permLists.allowCommands,
+      denyCommands: permLists.denyCommands,
+      nonInteractive: this.config.yes,
+      rules: this.config.permissionRules,
+      savedRules: loadSavedApprovals(this.config.workdir),
+      policyRules: loadPolicyRules(this.config.workdir),
+    });
+    checker.promptHandler = (req) => this.programmaticPermissionPrompt(req);
+    return checker;
   }
 
   /**
@@ -1040,6 +1038,7 @@ export class Agent {
       return;
     }
     this.config.contextWindow = probe.tokens;
+    this.probedWindow = probe.tokens;
     this.logger.log({ type: "context_window", tokens: probe.tokens, source: probe.source, detail: probe.detail, model: this.client.model });
     const catalog = contextWindowFor(this.config.provider, this.config.model);
     if (probe.tokens !== catalog) {
@@ -1048,6 +1047,19 @@ export class Agent {
       );
     }
     this.applyAdaptiveReadBudget();
+  }
+
+  /**
+   * P0-5: context window discovered by the probe (0 = never probed). A swap
+   * must discard it — the 4096-token window probed off local Ollama would keep
+   * trimming/compacting a conversation aimed at a 200k endpoint (and vice
+   * versa). An rc-declared `contextWindow` is never probed, so it survives.
+   */
+  private probedWindow = 0;
+  private dropProbedWindow(): void {
+    if (!this.probedWindow) return;
+    if (this.config.contextWindow === this.probedWindow) this.config.contextWindow = undefined;
+    this.probedWindow = 0;
   }
 
   /**
@@ -1662,19 +1674,20 @@ export class Agent {
     return confirmMcpToolBridge(this.mcpBridgeRuntime(), fullName);
   }
 
-  /** Switch permission mode at runtime (/permission) — rebuilds the checker. */  setPermissionMode(mode: "auto" | "ask" | "readonly"): void {
-    if (mode === this.config.permissionMode) return;
+  /**
+   * P0-4: switch permission mode at runtime (`/permission`). The checker is
+   * mutated in place — rebuilding it used to drop `promptHandler` and leave
+   * `ctx.permissions` on the stale instance, so shell/edit prompts fell back
+   * to readline on stdin inside the TUI alt-screen (garbled output, modal
+   * never answered) and the tool layer kept evaluating the OLD mode.
+   */
+  setPermissionMode(mode: PermissionMode): void {
+    if (mode === this.config.permissionMode && this.ctx.permissions === this.permissions) return;
     this.config = { ...this.config, permissionMode: mode };
-    const permLists = loadPermissionLists(this.config.workdir);
-    this.permissions = new PermissionChecker({
-      mode,
-      allowCommands: permLists.allowCommands,
-      denyCommands: permLists.denyCommands,
-      nonInteractive: this.config.yes,
-      rules: this.config.permissionRules,
-      savedRules: loadSavedApprovals(this.config.workdir),
-      policyRules: loadPolicyRules(this.config.workdir),
-    });
+    this.permissions.setMode(mode);
+    // Belt and braces: keep every view of the checker in sync, even if a
+    // future rebuild path swaps the instance.
+    this.ctx.permissions = this.permissions;
     this.ctx.permissionMode = mode;
     this.reporter.info(`permission mode → ${mode}`);
   }
@@ -1688,23 +1701,31 @@ export class Agent {
     const [prov, id] = splitProviderModel(model);
     if (!prov || prov === this.config.provider) {
       const m = id ?? model;
+      if (m === this.config.model) return `model → ${m} (${this.config.provider})`;
       this.client.setModel(m);
       this.config = { ...this.config, model: m };
+      this.dropProbedWindow();
       return `model → ${m} (${this.config.provider})`;
     }
     // Cross-provider: rebuild the client runtime.
     const resolved = resolveProvider(prov, parseCustomProviders(loadRcFile(this.config.workdir).providers));
     if ("error" in resolved) return `ERROR: ${resolved.error}`;
-    this.client = createRuntime(resolved.def, {
-      baseUrl: this.config.baseUrl,
-      apiKey: this.config.apiKey,
+    // P0-5: endpoint + key are re-resolved for the TARGET provider. Passing the
+    // outgoing config.baseUrl here made `anthropic/…` POST to
+    // https://api.openai.com/v1/messages with the OpenAI key.
+    const conn = resolveSwapConnection(this.config, resolved.def);
+    this.config = {
+      ...this.config,
+      provider: resolved.def.kind === "anthropic" ? "anthropic" : "openai",
+      providerDef: resolved.def,
       model: id,
-      maxTokens: this.config.maxTokens,
-      temperature: this.config.temperature,
-      enableCache: resolved.def.supportCache,
-    });
-    this.config = { ...this.config, provider: prov as "openai" | "anthropic", model: id, providerDef: resolved.def };
-    return `model → ${id} (provider ${prov})`;
+      baseUrl: conn.baseUrl,
+      apiKey: conn.apiKey,
+    };
+    this.client = createSwappedRuntime(this.config, resolved.def, conn);
+    this.dropProbedWindow();
+    const endpoint = conn.endpointFromDef ? `, ${conn.baseUrl}` : "";
+    return `model → ${id} (provider ${prov}${endpoint})`;
   }
 
   private finish(
