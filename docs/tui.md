@@ -230,6 +230,10 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | `?` | Show help modal |
 | Mouse wheel | Scroll chat pane (or the open viewer) |
 
+The full, always-current list (including the Harness Log, viewer, palette and
+session-picker keys) is available in-app with **`/shortcut`** — it opens the
+cheat sheet in the full-screen viewer.
+
 **Reading while the agent works.** Scrolled up from the bottom, the chat pane
 gains two affordances: a `▼ +N new lines` pill above the input while the run
 keeps producing below the fold, and a thin proportional scrollbar on the
@@ -256,6 +260,7 @@ Same commands available in TUI and REPL:
 | `/init` | Create AGENTS.md template |
 | `/theme` | Switch palette |
 | `/log` | Harness log in the full-screen viewer: `/log [llm\|tool\|mcp\|sub\|sys]` (TUI only) |
+| `/shortcut` | All keybindings in the full-screen viewer (TUI only; aliases `/shortcuts`, `/keys`) |
 | `/clear` | Reset conversation |
 | `/compact` | Summarize older history |
 | `/cost` | Token usage |

@@ -46,7 +46,8 @@ import {
   type LogView,
 } from "./log.js"; // harness log (P8)
 import { fileIndex } from "./at-complete.js";
-import { newContentPill, scrollThumb } from "./scrollbar.js"; // A5 scroll affordances
+import { newContentPill, scrollThumb, tailAnchor } from "./scrollbar.js"; // A5 scroll affordances
+import { formatShortcuts } from "./shortcuts.js"; // /shortcut cheat sheet
 import { getTheme, setActiveTheme, theme } from "./theme.js";
 import { boxBorderStyle, charset, isAsciiMode } from "./charset.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
@@ -126,7 +127,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const [sidebarTab, setSidebarTab] = useState<"overview" | "log">("overview");
   const [logView, setLogView] = useState<LogView>(DEFAULT_LOG_VIEW);
   // P8: viewer opened from the log (entry payload) instead of a transcript item.
-  const [pagerLog, setPagerLog] = useState<{ entryId: number; text: string } | null>(null);
+  // `/shortcut` reuses the same slot with its own title (shortcuts.ts).
+  const [pagerLog, setPagerLog] = useState<{ entryId: number; text: string; title?: string } | null>(null);
   // P6: desktop notify on finish. `focused` starts true — terminals without
   // DEC 1004 never report, and the >45s fallback covers long runs there.
   const { stdin: focusStdin, isRawModeSupported: focusSupported } = useStdin();
@@ -202,20 +204,34 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     return { ...transcriptWindow(state.items, top, viewportRows), maxScroll: max };
   }, [state.items, scrollOffset, viewportRows]);
   const maxScroll = win.maxScroll;
+  // ── Tail anchor (scrollbar.ts) ── estimate over-counts rows on wide
+  // terminals ⇒ estimated bottom sits past the real one: scrolling back down
+  // left the last generated line floating mid-screen with blank below and
+  // pill/thumb still reporting "scrolled up". Clamp contentOffset to the
+  // mounted window's measured bottom and treat as at-bottom for every
+  // offset-derived affordance.
+  const anchor = tailAnchor({
+    track: viewport.clientHeight,
+    totalRows: win.totalRows,
+    maxScroll,
+    offset: scrollOffset,
+    winOffset: win.offset,
+    contentHeight: content.height,
+    hasMeasured: content.hasMeasured,
+    tailMounted: win.end >= state.items.length,
+  });
+  const effScrollOffset = anchor.offset;
   // A5 pill: baseline = row count captured the moment the user scrolled up;
   // growth after that is "new content behind you". Cleared at the bottom.
   const scrollBaseRowsRef = useRef<number | null>(null);
-  if (scrollOffset === 0) scrollBaseRowsRef.current = null;
+  if (effScrollOffset === 0) scrollBaseRowsRef.current = null;
   else if (scrollBaseRowsRef.current == null) scrollBaseRowsRef.current = win.totalRows;
-  const newRowsPill = newContentPill(scrollBaseRowsRef.current ?? win.totalRows, win.totalRows, scrollOffset);
+  const newRowsPill = newContentPill(scrollBaseRowsRef.current ?? win.totalRows, win.totalRows, effScrollOffset);
   // A5 thumb: a 1-column proportional scrollbar on the chat pane's right
   // edge; off in select mode (the rail would be copied as text).
-  const thumb = selectMode ? null : scrollThumb(viewport.clientHeight || 0, win.totalRows, scrollOffset);
-  // Follow-bottom (scrollOffset = 0): offset chính xác theo số đo thật.
-  const contentOffset =
-    scrollOffset === 0 && content.hasMeasured
-      ? Math.max(0, content.height - viewport.clientHeight)
-      : win.offset;
+  const thumb = selectMode ? null : scrollThumb(viewport.clientHeight || 0, anchor.totalRows, effScrollOffset);
+  // Follow-bottom (scrollOffset = 0) OR tail-pinned: exact measured offset.
+  const contentOffset = anchor.contentOffset;
 
   const skills = useMemo(() => discoverSkills(cfg.workdir), [cfg.workdir]);
   const skillNames = useMemo(() => skills.map((s) => s.name), [skills]);
@@ -350,6 +366,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     [pushNotice],
   );
 
+  /** `/shortcut` — the keybinding cheat sheet in the full-screen viewer. */
+  const openShortcutsPager = useCallback(() => {
+    setPagerLog({ entryId: -1, title: "keybindings · /shortcut", text: formatShortcuts() });
+  }, []);
+
   const handleSessionSelect = useSessionResume({
     cfg, createAgent, pushNotice, update, runningRef, setScrollOffset, setSessionPickerOpen,
   });
@@ -372,7 +393,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const { submit } = useSubmit({
     cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode,
     tuiHost, agentRef, runningRef, stateRef,
-    historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager,
+    historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager, openShortcutsPager,
   });
 
   /** Create (or return) the session agent — permission mode always current. */
@@ -651,11 +672,11 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           onClose={() => setPagerAt(null)}
         />
       )}
-      {/* P8: viewer opened from a harness-log row (full payload). */}
+      {/* P8: viewer opened from a harness-log row (full payload) — or /shortcut. */}
       {pagerLog && !permPrompt && (
         <Pager
           sources={[{
-            title: `harness log entry ${pagerLog.entryId >= 0 ? `#${pagerLog.entryId}` : "(filtered dump)"}`,
+            title: pagerLog.title ?? `harness log entry ${pagerLog.entryId >= 0 ? `#${pagerLog.entryId}` : "(filtered dump)"}`,
             kind: "output",
             text: pagerLog.text,
             meta: "from state.log",
@@ -693,7 +714,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           reservedRef={reservedKeysRef}
         />
       </Box>
-      <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />
+      <StatusBar state={state} scroll={effScrollOffset > 0 ? `↑ ${Math.min(effScrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />
     </Box>
   );
 }

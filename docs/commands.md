@@ -87,6 +87,7 @@ scoder --no-save -y "run the migration"
 | `/skill [name]` | List discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
 | `/permission <mode>` | Switch permission mode — **⇧P** cycles auto/ask/readonly in the TUI (input empty) |
+| `/shortcut` | All TUI keybindings in the full-screen viewer (TUI only; aliases `/shortcuts`, `/keys`) |
 
 Sessions are managed with `scoder list` / `scoder resume` (CLI) or the
 **Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.

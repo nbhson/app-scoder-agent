@@ -353,8 +353,9 @@ const PHASES_IDLE_ROWS = 3; // title + "— idle"
  * undefined/0 (chưa đo xong) → không giới hạn (behavior cũ, dùng trong tests).
  */
 export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_LOG_VIEW }: { state: TuiState; config: AgentConfig; rows?: number; tab?: "overview" | "log"; view?: LogView }): React.JSX.Element {
-  // Border top/bottom + the P8 tab-bar row all sit inside the box: reserve 3.
-  const avail = rows != null && rows > 0 ? Math.max(8, rows - 3) : Number.POSITIVE_INFINITY;
+  // Border top/bottom + the P8 tab-bar row + the 1-row gap under it all sit
+  // inside the box: reserve 4.
+  const avail = rows != null && rows > 0 ? Math.max(8, rows - 4) : Number.POSITIVE_INFINITY;
 
   let used = SESSION_ROWS;
   const fits = (h: number) => used + h <= avail;
@@ -430,13 +431,15 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
         overflow="hidden"
       >
         <TabBar active="log" count={state.log.length} dropped={state.logDropped} filter={view.filter} />
+        <TabGap />
         <LogTab state={state} view={view} rows={avail} />
       </Box>
     );
   }
 
-  // Tab-bar row is already reserved in `avail` above — sections and their
-  // greedy-fit order are exactly as before, just 1 row tighter.
+  // Tab-bar row + the 1-row gap below it are already reserved in `avail`
+  // above — sections and their greedy-fit order are exactly as before, just
+  // 1 row tighter.
   return (
     <Box
       flexDirection="column"
@@ -448,6 +451,7 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
       overflow="hidden"
     >
       <TabBar active="overview" count={state.log.length} dropped={state.logDropped} filter={view.filter} />
+      <TabGap />
       <SessionSection state={state} config={config} />
       {body}
     </Box>
@@ -455,6 +459,15 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
 }
 
 // ── P8: tab bar ──────────────────────────────────────────────────────────────
+
+/**
+ * One blank row under the tab bar — the terminal's ~12px "margin-bottom" that
+ * separates the OVERVIEW/HARNESS LOG tabs from the section content below.
+ * Kept as a real row so the height budget (`avail`) accounts for it exactly.
+ */
+function TabGap(): React.JSX.Element {
+  return <Box height={1} flexShrink={0} />;
+}
 
 function TabBar({ active, count, dropped, filter }: { active: "overview" | "log"; count: number; dropped: number; filter: LogFilter }): React.JSX.Element {
   const on = (t: "overview" | "log") => (active === t

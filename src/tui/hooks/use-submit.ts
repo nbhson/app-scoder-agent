@@ -32,8 +32,10 @@ export function useSubmit(deps: {
   bumpFrame: () => void;
   /** `/log [cat]` (tui-only) — render the harness log into the full-screen viewer. */
   openLogPager: (arg: string) => void;
+  /** `/shortcut` (tui-only) — the keybinding cheat sheet in the full-screen viewer. */
+  openShortcutsPager: () => void;
 }) {
-  const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager } = deps;
+  const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager, openShortcutsPager } = deps;
   // Close any lingering streaming messages when the user sends a new query —
   // prevents green/dim text from the previous response appearing stale.
   // P-perf: immutable rewrite. Mutating `it.streaming = false` in place left
@@ -96,6 +98,14 @@ export function useSubmit(deps: {
           // narrow terminals where the sidebar tab is not reachable.
           writeInput("");
           openLogPager(slash.arg.trim());
+          return;
+        }
+        if (slash.cmd === "/shortcut") {
+          // parseSlashCommand canonicalizes the /shortcuts + /keys aliases.
+          // tui-only: the full keybinding cheat sheet in the viewer (the ?
+          // overlay only carries the headline keys).
+          writeInput("");
+          openShortcutsPager();
           return;
         }
         // T1: phần còn lại qua registry dùng chung với REPL.

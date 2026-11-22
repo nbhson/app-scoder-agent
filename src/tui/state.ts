@@ -398,9 +398,14 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.lastLlmTokPerSec = null;
       // The TUI pushes the user's message itself when submitting; avoid a
       // duplicate when run_start carries the same task. `quiet` (resume) =
-      // transcript đã hiển thị rồi, không append nữa.
-      const last = lastItem(state);
-      if (!ev.quiet && !(last && last.kind === "user" && last.text === ev.task)) {
+      // transcript đã hiển thị rồi, không append nữa. Scan back PAST notices:
+      // a notice can land between the submit push and run_start (e.g. Enter
+      // on the empty log tab → "no log row selected") — checking only the
+      // last item used to miss the dedupe and print the command twice.
+      let prev = state.items.length - 1;
+      while (prev >= 0 && state.items[prev].kind === "notice") prev--;
+      const before = prev >= 0 ? state.items[prev] : undefined;
+      if (!ev.quiet && !(before && before.kind === "user" && before.text === ev.task)) {
         appendItem(state, { kind: "user", text: ev.task });
       }
       // Plan của task trước không được lọt sang task mới.

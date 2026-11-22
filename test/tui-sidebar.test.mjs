@@ -214,7 +214,9 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
   });
 
   it("terminal thấp (~23 dòng): section dưới không vừa bị BỎ QUA trọn vẹn (không clip nửa chừng)", async () => {
-    // 23 = 22 hàng nội dung như cũ + 1 hàng tab bar P8 (avail = rows − 3).
+    // 23 = 22 hàng nội dung như cũ + 1 hàng tab bar P8; tab-gap dưới tab bar
+    // ăn thêm 1 hàng ở các test plan-cap (rows − 4), nhưng ở 23 hàng các
+    // section dưới vốn đã không vừa nên kết quả bỏ qua không đổi.
     const out = await renderSidebar(busyState(), cfg, 23);
     // Vừa: SESSION + MCP + METRICS. Hết chỗ: PHASES + PLAN + BUILD.
     assert.match(out, /─ SESSION/);
@@ -226,8 +228,9 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
     assert.match(out, /└─/, "border dưới vẽ gọn");
   });
 
-  it("terminal vừa (~32 dòng): PHASES hiện, PLAN co giãn theo chỗ còn lại", async () => {
-    const out = await renderSidebar(busyState(), cfg, 32);
+  it("terminal vừa (~33 dòng): PHASES hiện, PLAN co giãn theo chỗ còn lại", async () => {
+    // 33 = 32 hàng nội dung + 1 hàng tab-gap dưới tab bar (rows − 4).
+    const out = await renderSidebar(busyState(), cfg, 33);
     assert.match(out, /─ PHASES/);
     assert.match(out, /─ PLAN/);
     assert.match(out, /1\/3 steps/);
@@ -247,7 +250,8 @@ describe("tui sidebar — height budget (thứ tự gốc, fit gọn)", () => {
       type: "todo",
       items: Array.from({ length: 14 }, (_, i) => ({ content: `step ${i + 1}`, status: i === 0 ? "in_progress" : "pending" })),
     });
-    const out = await renderSidebar(s, cfg, 32);
+    // 33 = 32 hàng nội dung + 1 hàng tab-gap (rows − 4).
+    const out = await renderSidebar(s, cfg, 33);
     assert.match(out, /─ METRICS/, "METRICS vẫn hiện dù plan dài");
     assert.match(out, /steps ▰/, "fuel gauge của METRICS vẫn vẽ");
     assert.match(out, /─ PLAN/);
@@ -343,5 +347,17 @@ describe("tui sidebar — anchor elapsed/tok-s reset theo từng lượt", () =>
     assert.ok(r.startedAt, "quiet vẫn reset anchor");
     let n = applyEvent({ ...initialState(), items: [{ kind: "assistant", text: "…" }] }, baseEvent);
     assert.equal(n.items.length, 2, "không quiet thì vẫn append như cũ");
+  });
+
+  it("run_start vẫn dedupe khi có notice chen giữa dòng user và sự kiện (bug duplicate display)", () => {
+    // TUI pushes the user item on submit; a notice (e.g. Enter on the empty
+    // log tab) can land before run_start arrives. The old last-item check
+    // missed the dedupe and printed the command twice.
+    let s = { ...initialState(), items: [{ kind: "user", text: "phân tích readme.md" }, { kind: "notice", text: "no log row selected", level: "info" }] };
+    s = applyEvent(s, { ...baseEvent, task: "phân tích readme.md" });
+    assert.equal(s.items.filter((i) => i.kind === "user").length, 1, "không nhân đôi khi notice chen giữa");
+    // ...nhưng text KHÁC vẫn phải append normally.
+    let d = applyEvent({ ...initialState(), items: [{ kind: "user", text: "câu cũ" }, { kind: "notice", text: "n", level: "info" }] }, { ...baseEvent, task: "câu mới" });
+    assert.equal(d.items.filter((i) => i.kind === "user").length, 2, "task khác text ⇒ append");
   });
 });

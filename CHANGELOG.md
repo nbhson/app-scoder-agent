@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 ## [Unreleased]
 
 ### Added
+- **`/shortcut`** — every keybinding of the TUI in one place, shown in the
+  full-screen viewer (grouped GLOBAL · SCROLLING · INPUT · HARNESS LOG ·
+  VIEWER · PALETTE · SESSION PICKER). Aliases `/shortcuts`, `/keys`; the
+  cheat sheet lives in `tui/shortcuts.ts` and is unit-tested so it stays in
+  sync with the real handlers. The `?` overlay only carries headline keys.
 - **TUI command palette (`Ctrl+P`)** — fuzzy-searchable, grouped actions
   (builtin + custom commands, agents, themes, permission modes, session
   picker) replacing the static key/value dump; Enter dispatches through the
@@ -55,6 +60,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 ### Changed
 - The sidebar's first row is now the OVERVIEW/HARNESS LOG tab bar — section
   content is unchanged, one row of the height budget goes to tabs (P8).
+- **Sidebar tab bar now has a one-row gap beneath it** — the OVERVIEW/HARNESS
+  LOG tabs are visually separated from the section content below (the terminal
+  equivalent of the requested ~12px margin-bottom). The row is reserved in the
+  height budget, so the greedy-fit sections shift down by one row (a plan that
+  capped at one line on a 32-row terminal now needs 33).
 - Tool transcript rows carry an explicit `✓`/`✗` status glyph once finished
   (previously color-only) (P1).
 - Overlay keyboard ownership unified: palette, session picker, help and the
@@ -62,6 +72,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   input field (P2/P3).
 - Interface microcopy consolidated to English across welcome, hints and
   notices (P1).
+
+### Fixed
+- **Duplicate user command in the transcript** — submitting a task pushes the
+  `you ▸ …` line immediately; when a `notice` landed between that push and the
+  `run_start` event (e.g. pressing `⏎` on the empty Harness Log tab → "no log
+  row selected"), the reducer's last-item dedupe missed it and printed the same
+  command a second time. The dedupe now scans back past trailing notices.
+- **Scroll-to-bottom no longer leaves the last line floating mid-screen** —
+  the scroll offset counts ESTIMATED rows; on wide terminals the estimate
+  over-counts (paragraphs wrap wider than the 60/76/EST_WIDTH assumptions),
+  so the estimated bottom sits past the real one: scrolling up during a run
+  and back down showed the generated tail with blank below, a stuck
+  `▼ +N new lines` pill and a scrollbar thumb that refused to reach the end.
+  When the mounted window reaches the last item, `contentOffset` is now
+  clamped to the window's measured bottom (tail anchor in
+  `tui/scrollbar.ts`), and pill/thumb/status treat the view as at-bottom.
 
 ## [0.9.20] — 2026-11-19
 

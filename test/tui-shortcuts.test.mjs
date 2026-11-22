@@ -1,0 +1,55 @@
+/**
+ * `/shortcut` — pure cheat-sheet helpers (shortcuts.ts) + wiring checks.
+ * Chạy: node --test test/tui-shortcuts.test.mjs (sau khi npm run build)
+ */
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { shortcutSections, formatShortcuts } from "../dist/tui/shortcuts.js";
+import { parseSlashCommand, resolveCommandDef, SLASH_COMMANDS } from "../dist/commands/definitions.js";
+
+describe("shortcutSections", () => {
+  it("has a GLOBAL section and every row carries keys + what", () => {
+    const secs = shortcutSections();
+    assert.ok(secs.some((s) => s.title === "GLOBAL"), "GLOBAL section present");
+    for (const s of secs) {
+      assert.ok(s.rows.length > 0, `${s.title} is not empty`);
+      for (const r of s.rows) {
+        assert.ok(r.keys.trim().length > 0, `${s.title}: every row has a key`);
+        assert.ok(r.what.trim().length > 0, `${s.title}: every row has a description`);
+      }
+    }
+  });
+
+  it("documents the headline bindings the app actually handles", () => {
+    const all = shortcutSections().flatMap((s) => s.rows.map((r) => r.keys));
+    for (const k of ["⌃P", "⌃S", "⌃B", "⌃O", "⌃T", "⇧⇥", "⇧P", "?", "v", "Esc", "⌃C"]) {
+      assert.ok(all.includes(k), `keybinding ${k} listed`);
+    }
+  });
+});
+
+describe("formatShortcuts", () => {
+  it("renders section titles + aligned rows as viewer text", () => {
+    const text = formatShortcuts(76);
+    assert.match(text, /── GLOBAL ─+/);
+    assert.match(text, /⏎\s+send the task/);
+    // No line exceeds the requested width (viewer wraps at columns-10, so a
+    // 76-col sheet always fits narrow terminals).
+    for (const line of text.split("\n")) assert.ok(line.length <= 90, `line within budget: ${line}`);
+  });
+});
+
+describe("/shortcut command wiring", () => {
+  it("is a registered tui-only command", () => {
+    const def = resolveCommandDef("/shortcut");
+    assert.ok(def, "resolves");
+    assert.equal(def.visibility, "tui-only");
+    assert.ok(SLASH_COMMANDS.some((c) => c.cmd === "/shortcut"), "listed in help/completion");
+  });
+
+  it("parseSlashCommand canonicalizes the aliases", () => {
+    assert.equal(parseSlashCommand("/shortcut")?.cmd, "/shortcut");
+    assert.equal(parseSlashCommand("/shortcuts")?.cmd, "/shortcut");
+    assert.equal(parseSlashCommand("/keys")?.cmd, "/shortcut");
+  });
+});
