@@ -44,6 +44,8 @@ export function useTuiKeybinds(deps: {
     toggleDetail: () => void;
     openEntry: () => void;
     copyEntry: () => void;
+    /** `F` — dump the current filter into the full-screen viewer. */
+    dump: () => void;
     escChain: () => "handled";
   };
   exit: () => void;
@@ -110,6 +112,7 @@ export function useTuiKeybinds(deps: {
       if (key.home || _input === "g") return logHandlers.top();
       if (key.end || _input === "G") return logHandlers.tail();
       if (_input === "f") return logHandlers.cycleFilter();
+      if (_input === "F") return logHandlers.dump();
       if (_input === "d") return logHandlers.toggleDetail();
       if (key.return) return logHandlers.openEntry();
       if (_input === "y") return logHandlers.copyEntry();

@@ -33,6 +33,12 @@ export interface InputProps {
   atSources: { skills: string[]; agents: string[]; files: string[] };
   /** T-03: when set, the permission modal owns the keyboard. */
   modalRef: React.MutableRefObject<unknown>;
+  /**
+   * Single characters that GLOBAL keybinds consume when the input is empty
+   * (`v`, `?`, LOG-tab keys…). Ink fires every useInput handler, so without
+   * swallowing them here the reserved key would ALSO be typed into the line.
+   */
+  reservedRef?: React.MutableRefObject<Set<string>>;
 }
 
 /**
@@ -46,7 +52,7 @@ export function isNewlineKey(input: string, key: { return?: boolean; shift?: boo
   return (key.return === true && (key.shift === true || key.meta === true)) || input === "\n";
 }
 
-export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef }: InputProps): React.JSX.Element {
+export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef, reservedRef }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
 
@@ -243,6 +249,10 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
       if (input.length > 0 && !key.ctrl && !key.meta && !key.escape && !key.upArrow && !key.downArrow && !key.tab) {
         // ⇧P với input trống = phím tắt cycle permission (use-keybinds) — đừng chèn "P".
         if (key.shift && input === "P" && current === "") return;
+        // Phím tắt toàn cục (v, ?, log-tab keys) — use-keybinds xử lý ở handler
+        // KHÁC (Ink không stop propagation giữa các useInput); input trống thì
+        // ký tự phải bị nuốt ở đây, không rơi vào dòng soạn thảo.
+        if (input.length === 1 && current.trim() === "" && reservedRef?.current.has(input)) return;
         // A chunk may contain several pasted chars — even a trailing newline
         // (terminal pastes / PTY writes deliver "exit\r" as one chunk).
         const parts = input.split(/[\r\n]+/);

@@ -23,10 +23,10 @@ import { ctxPctOf, runCostUsd } from "./metrics.js";
 import {
   DEFAULT_LOG_VIEW,
   filterLog,
-  fmtLogTs,
-  logColor,
+  fmtLogClock,
   logDetailLines,
-  logGlyph,
+  logKind,
+  logKindColor,
   logSuffix,
   logWindow,
   type LogFilter,
@@ -489,9 +489,9 @@ function LogTab({ state, view, rows }: { state: TuiState; view: LogView; rows: n
     lines.push(
       <Text key={e.id} wrap="truncate">
         <Text dimColor>{selected ? "❱" : " "}</Text>
-        <Text color={theme.dim}>{` ${fmtLogTs(e.ts)}`}</Text>
-        <Text color={logColor(e)}>{` ${logGlyph(e.cat)} `}</Text>
-        <Text bold={selected}>{clipCells(e.text + logSuffix(e), INNER - 15)}</Text>
+        <Text color={theme.dim}>{` ${fmtLogClock(e.ts)} `}</Text>
+        <Text color={logKindColor(e)} bold={selected}>{`${logKind(e)} `}</Text>
+        <Text bold={selected}>{clipCells(e.text + logSuffix(e), INNER - 17)}</Text>
       </Text>,
     );
   });
@@ -514,7 +514,7 @@ function LogTab({ state, view, rows }: { state: TuiState; view: LogView; rows: n
           <Text dimColor>  ⏎ full · y copy · esc close</Text>
         </Box>
       )}
-      <Text dimColor>↑↓ select · Pg scroll · f {view.filter.toLowerCase()} · d detail · ⏎ full</Text>
+      <Text dimColor>↑↓ select · f filter · d detail · ⏎/F open</Text>
     </Box>
   );
 }

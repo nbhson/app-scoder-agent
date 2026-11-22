@@ -211,16 +211,26 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
   }, 90_000);
 
-  it("⌃B chuyển sidebar sang tab HARNESS LOG — rows thật, time column, hints (P8)", async () => {    const { clean, raw, exitCode, ptyErr } = await runPty("logtab", [
-      // Run xong → toggles tab; đóng bằng Ctrl+C (idle → quit ngay).
+  it("⌃B chuyển sidebar sang tab HARNESS LOG — rows thật, time column, hints (P8)", async () => {
+    const { clean, raw, exitCode, ptyErr } = await runPty("logtab", [
+      // Run xong (idle) → ⌃B bật tab LOG. Anchor "select…f filter" là footer
+      // hint CHỈ có trên tab LOG (label "HARNESS LOG" hiện cả khi OVERVIEW).
+      // F → dump viewer; " entries" khớp header dump → esc đóng; hint #2 → ⌃C quit.
       "--send-after", "All done:\x02",
-      "--send-after", "HARNESS LOG:\x03",
+      "--send-after", "select.{0,60}f filter:F",
+      "--send-after", " entries:\x1b",
+      "--send-after", "2:select.{0,60}f filter:\x03",
     ]);
     const where = () => ctx(clean, raw.length, ptyErr, exitCode);
     assert.ok(/OVERVIEW/.test(clean), `frame đầu phải có tab OVERVIEW (${where()})`);
     assert.ok(/HARNESS LOG/.test(clean), `⌃B phải bật tab HARNESS LOG (${where()})`);
-    assert.match(clean, /\d{2}:\d{2}:\d{2}\.\d/, "log rows có cột giờ HH:MM:SS.d");
-    assert.match(clean, /→ (ok|PASS|FAIL)|llm #\d+/, "rows thật của run (llm/tool/build verdict)");
+    assert.match(clean, /\d{2}:\d{2}:\d{2}/, "log rows có cột giờ HH:MM:SS");
+    assert.match(clean, /→ (ok|PASS|FAIL)|#\d+ /, "rows thật của run (llm/tool/build verdict)");
+    assert.match(clean, /(TOOL|SHELL|RUN|LLM|EVT) /, "cột nhãn loại bằng chữ");
+    // F → full-screen dump: header + dòng wide (giờ tenths + label cột).
+    assert.match(clean, /HARNESS LOG · ALL · \d+ entries/, `F phải mở log dump (${where()})`);
+    assert.match(clean, /\d\d:\d\d:\d\d\.\d (RUN|LLM|TOOL|SHELL|FILE|BUILD|MCP|SUB|GUARD|PERM|EVT)/, "dòng dump đủ cột giờ + tên loại");
+    assert.ok(!/❯ F/.test(clean), "phím F tắt input — không rơi vào dòng soạn thảo");
     assert.match(clean, /↑↓ select/, "key hints của log tab");
     assert.equal(exitCode, 0, `exit code phải là 0 (nhận ${exitCode}; ${where()})`);
   }, 90_000);

@@ -2,18 +2,19 @@
  * Harness Log (P8) — pure view-model helpers over `state.log`.
  *
  * The reducer (state.ts) is the single data source; everything here is
- * derivation for the Sidebar tab: filtering, tail-windowing, glyph/color
+ * derivation for the Sidebar tab: filtering, tail-windowing, glyph/label
  * mapping and lazy payload resolution (item → session jsonl fallback).
  * Framework-free so the whole category/merge/anchor matrix is unit-testable.
  */
 import { isAsciiMode } from "./charset.js";
 import { theme } from "./theme.js";
+import { measure } from "./text-width.js";
 import type { ChatItem, LogCat, LogEntry } from "./state.js";
 import { JsonlLogger } from "../session/logger.js";
 
-export type LogFilter = "ALL" | "LLM" | "TOOL" | "MCP" | "SUB" | "SYS";
+export type LogFilter = "ALL" | "LLM" | "TOOL" | "MCP" | "SUB" | "EVT";
 
-export const LOG_FILTER_CYCLE: LogFilter[] = ["ALL", "LLM", "TOOL", "MCP", "SUB", "SYS"];
+export const LOG_FILTER_CYCLE: LogFilter[] = ["ALL", "LLM", "TOOL", "MCP", "SUB", "EVT"];
 
 const BUCKETS: Record<LogFilter, LogCat[] | null> = {
   ALL: null,
@@ -21,7 +22,7 @@ const BUCKETS: Record<LogFilter, LogCat[] | null> = {
   TOOL: ["tool", "shell", "file", "build"],
   MCP: ["mcp"],
   SUB: ["sub"],
-  SYS: ["sys", "run", "guard", "perm"],
+  EVT: ["evt", "run", "guard", "perm"],
 };
 
 export function filterLog(entries: LogEntry[], f: LogFilter): LogEntry[] {
@@ -29,7 +30,7 @@ export function filterLog(entries: LogEntry[], f: LogFilter): LogEntry[] {
   return cats ? entries.filter((e) => cats.includes(e.cat)) : entries;
 }
 
-// ── glyphs & colors ─────────────────────────────────────────────────────────
+// ── glyphs, labels & colors ─────────────────────────────────────────────────
 
 const GLYPH: Record<LogCat, { u: string; a: string }> = {
   run: { u: "◆", a: "R" },
@@ -42,7 +43,7 @@ const GLYPH: Record<LogCat, { u: string; a: string }> = {
   sub: { u: "⊙", a: "S" },
   guard: { u: "⚠", a: "!" },
   perm: { u: "⛔", a: "?" },
-  sys: { u: "·", a: "." },
+  evt: { u: "·", a: "." },
 };
 
 export function logGlyph(cat: LogCat): string {
@@ -50,30 +51,99 @@ export function logGlyph(cat: LogCat): string {
   return isAsciiMode() ? g.a : g.u;
 }
 
+/**
+ * Text kind column — the audit log must be scannable without relying on
+ * color (dim terminals, ASCII mode, copy/paste). Every category maps to a
+ * fixed 5-letter label: RUN LLM TOOL SHELL FILE BUILD MCP SUB GUARD PERM EVT.
+ */
+const LABEL: Record<LogCat, string> = {
+  run: "RUN",
+  llm: "LLM",
+  tool: "TOOL",
+  shell: "SHELL",
+  file: "FILE",
+  build: "BUILD",
+  mcp: "MCP",
+  sub: "SUB",
+  guard: "GUARD",
+  perm: "PERM",
+  evt: "EVT",
+};
+
+export function logLabel(cat: LogCat): string {
+  return LABEL[cat];
+}
+
+/**
+ * Row foreground for the TEXT column (the kind column always carries its own
+ * color, so the body stays quiet — `dim` for chatter, status color otherwise).
+ */
 export function logColor(e: LogEntry): string {
   switch (e.cat) {
-    case "run": return theme.brand;
+    case "run":
+    case "file":
+      return theme.brand;
     case "llm":
-    case "perm": return theme.accent;
+    case "perm":
+      return theme.accent;
     case "shell":
-    case "guard": return theme.warn;
-    case "file": return theme.brand;
-    case "build": return e.text.includes("PASS") ? theme.success : theme.error;
+    case "guard":
+      return theme.warn;
+    case "build":
+      return e.text.includes("PASS") ? theme.success : theme.error;
     case "tool":
     case "mcp":
-    case "sys": return theme.dim;
-    case "sub": return theme.thinking;
+    case "evt":
+      return theme.dim;
+    case "sub":
+      return theme.thinking;
   }
+}
+
+/** Color for the kind column: verdict first, category second. */
+export function logKindColor(e: LogEntry): string {
+  if (/→ FAILED|FAILED|xit 1/.test(e.text)) return theme.error;
+  if (/→ ok|→ PASS/.test(e.text)) return theme.success;
+  if (e.cat === "guard" || e.cat === "perm") return theme.warn;
+  return logColor(e);
+}
+
+/**
+ * The fixed-width kind column — a 5-letter label (`SHELL`, `TOOL`…),
+ * NEVER the glyph alone: an audit row must read correctly in ASCII mode,
+ * without color, and after copy/paste. The glyph stays in the DETAIL panel.
+ */
+export function logKind(e: LogEntry): string {
+  return logLabel(e.cat).padEnd(5);
+}
+
+/**
+ * The FULL display line for one entry: kind label padded to one column,
+ * then the message. Used by the sidebar LOG tab and the `/log` dump so
+ * both agree.
+ */
+export function renderLog(e: LogEntry, width: number, opts?: { suffix?: string }): string {
+  const kind = logKind(e);
+  const body = `${e.text}${opts?.suffix ?? logSuffix(e)}`;
+  const room = Math.max(0, width - measure(kind) - 1);
+  const shown = measure(body) <= room ? body : `${body.slice(0, Math.max(0, room - 1))}…`;
+  return `${kind} ${shown}`;
 }
 
 /** Live rows render a `…` suffix so an open stream is distinguishable. */
 export function logSuffix(e: LogEntry): string {
-  if (!e.meta?.live) return "";
   const bits: string[] = [];
-  if (e.meta.chunks) bits.push(`${e.meta.chunks}c`);
-  if (e.meta.bytes) bits.push(`${e.meta.bytes >= 1000 ? `${(e.meta.bytes / 1000).toFixed(1)}k` : e.meta.bytes}B`);
-  if (e.meta.count) bits.push(`▸${e.meta.count}`);
-  return ` …${bits.length > 0 ? ` ${bits.join(" ")}` : ""}`;
+  if (e.meta?.live) {
+    if (e.meta.chunks) bits.push(`${e.meta.chunks}c`);
+    if (e.meta.bytes) bits.push(`${e.meta.bytes >= 1000 ? `${(e.meta.bytes / 1000).toFixed(1)}k` : e.meta.bytes}B`);
+    if (e.meta.count) bits.push(`▸${e.meta.count}`);
+  }
+  // foldLog counter: this line absorbed N events of the same kind (ctx %,
+  // queue depth, todo flips, warmup ticks…) — keeps the audit trail COMPLETE
+  // (nothing silently dropped) while staying one row per live signal.
+  if (e.meta?.hits && e.meta.hits > 1) bits.push(`×${e.meta.hits}`);
+  if (bits.length === 0) return "";
+  return ` ${e.meta?.live ? "…" : "·"} ${bits.join(" ")}`;
 }
 
 // ── formatting ──────────────────────────────────────────────────────────────
@@ -84,6 +154,12 @@ const p2 = (n: number): string => String(n).padStart(2, "0");
 export function fmtLogTs(ts: number): string {
   const d = new Date(ts);
   return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${Math.floor(d.getMilliseconds() / 100)}`;
+}
+
+/** Compact HH:MM:SS for the sidebar row prefix (the tenths digit ate 3 cells). */
+export function fmtLogClock(ts: number): string {
+  const d = new Date(ts);
+  return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
 }
 
 export interface LogView {
@@ -236,25 +312,37 @@ export function payloadFromSessionLog(
   return null;
 }
 
-/** Full counters for the DETAIL panel / payload header. */
-export function detailMeta(e: LogEntry): string {
-  const m = e.meta;
-  if (!m) return "";
+/** Numeric counters of a row: tokens/cost/time + merge counts (split from the
+ *  joiner so both stay under the lint complexity budget). */
+function metaBits(m: NonNullable<LogEntry["meta"]>): string[] {
   const bits: string[] = [];
   if (m.tokensIn != null || m.tokensOut != null) bits.push(`in ${m.tokensIn ?? 0} out ${m.tokensOut ?? 0}${m.cached ? ` cache ${m.cached}` : ""}`);
   if (m.ms != null) bits.push(`${(m.ms / 1000).toFixed(1)}s`);
   if (m.chunks != null) bits.push(`${m.chunks} chunks`);
   if (m.bytes != null) bits.push(`${m.bytes} bytes`);
   if (m.count != null) bits.push(`${m.count} ticks`);
+  return bits;
+}
+
+function statusBits(m: NonNullable<LogEntry["meta"]>): string[] {
+  const bits: string[] = [];
+  if (m.hits != null && m.hits > 1) bits.push(`×${m.hits} folded`);
   if (m.exit != null) bits.push(`exit ${m.exit ? 0 : 1}`);
   if (m.pct != null) bits.push(`${m.pct}% ctx`);
+  return bits;
+}
+
+/** Full counters for the DETAIL panel / payload header. */
+export function detailMeta(e: LogEntry): string {
+  if (!e.meta) return "";
+  const bits = [...metaBits(e.meta), ...statusBits(e.meta)];
   return bits.length > 0 ? `\n${bits.join(" · ")}` : "";
 }
 
 /** DETAIL panel rows (≤8): summary + meta + pointer, each cell-clipped. */
 export function logDetailLines(entry: LogEntry, width: number, clip: (s: string, w: number) => string): string[] {
   const out: string[] = [];
-  out.push(clip(`${entry.cat.toUpperCase()} · ${entry.text}`, width));
+  out.push(clip(`${logLabel(entry.cat)} · ${entry.text}`, width));
   const meta = detailMeta(entry).trim();
   if (meta) out.push(clip(meta, width));
   if (entry.ref) {

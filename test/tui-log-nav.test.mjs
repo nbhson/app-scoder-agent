@@ -22,6 +22,8 @@ import {
   moveSelection,
   followOffset,
   fmtLogTs,
+  fmtLogClock,
+  renderLog,
   detailMeta,
   logDetailLines,
   logGlyph,
@@ -42,7 +44,7 @@ describe("log filter", () => {
   const entries = [
     E(1, "run", "r"), E(2, "llm", "l"), E(3, "tool", "t"), E(4, "shell", "s"),
     E(5, "file", "f"), E(6, "build", "b"), E(7, "mcp", "m"), E(8, "sub", "u"),
-    E(9, "guard", "g"), E(10, "perm", "p"), E(11, "sys", "y"),
+    E(9, "guard", "g"), E(10, "perm", "p"), E(11, "evt", "y"),
   ];
   it("ALL passes everything; buckets group by category", () => {
     assert.equal(filterLog(entries, "ALL").length, 11);
@@ -50,7 +52,7 @@ describe("log filter", () => {
     assert.deepEqual(filterLog(entries, "TOOL").map((e) => e.cat), ["tool", "shell", "file", "build"]);
     assert.deepEqual(filterLog(entries, "MCP").map((e) => e.cat), ["mcp"]);
     assert.deepEqual(filterLog(entries, "SUB").map((e) => e.cat), ["sub"]);
-    assert.deepEqual(filterLog(entries, "SYS").map((e) => e.cat), ["run", "guard", "perm", "sys"]);
+    assert.deepEqual(filterLog(entries, "EVT").map((e) => e.cat), ["run", "guard", "perm", "evt"]);
   });
   it("cycle list contains ALL first and never repeats", () => {
     assert.equal(LOG_FILTER_CYCLE[0], "ALL");
@@ -61,7 +63,7 @@ describe("log filter", () => {
 // ── tail window ─────────────────────────────────────────────────────────────
 
 describe("log window", () => {
-  const entries = Array.from({ length: 100 }, (_, i) => E(i, "sys", `row ${i}`));
+  const entries = Array.from({ length: 100 }, (_, i) => E(i, "evt", `row ${i}`));
   it("offset 0 follows the tail; offset counts rows hidden at the BOTTOM", () => {
     const w = logWindow(entries, 10, 0);
     assert.equal(w.rows.at(-1).text, "row 99");
@@ -95,7 +97,7 @@ describe("selection", () => {
     assert.equal(moveSelection([30, 31, 32], 99, 1), 32);
   });
   it("followOffset keeps the cursor inside the window", () => {
-    const entries = Array.from({ length: 100 }, (_, i) => E(i, "sys", `r${i}`));
+    const entries = Array.from({ length: 100 }, (_, i) => E(i, "evt", `r${i}`));
     assert.equal(followOffset(entries, 10, 0, 95), 0, "visible already");
     assert.equal(followOffset(entries, 10, 0, 50), 40, "window scrolls up until the row is on screen");
     assert.equal(followOffset(entries, 10, 45, 99), 0, "moving below the window snaps to tail");
@@ -109,6 +111,10 @@ describe("formatting", () => {
   it("fmtLogTs = fixed HH:MM:SS.d column", () => {
     assert.match(fmtLogTs(Date.UTC(2026, 0, 2, 9, 3, 4, 500)), /^\d{2}:\d{2}:\d{2}\.\d$/);
   });
+  it("fmtLogClock = compact sidebar clock (no tenths)", () => {
+    const ts = new Date(2026, 0, 2, 9, 3, 4, 500).getTime(); // local — matches fmtLogClock
+    assert.equal(fmtLogClock(ts), "09:03:04");
+  });
   it("detailMeta spells out every counter", () => {
     const m = detailMeta(E(1, "llm", "x", { tokensIn: 10, tokensOut: 20, cached: 5, ms: 1234, chunks: 3, bytes: 400, count: 2, exit: true, pct: 30 }));
     for (const bit of ["in 10 out 20 cache 5", "1.2s", "3 chunks", "400 bytes", "2 ticks", "exit 0", "30% ctx"]) {
@@ -119,8 +125,17 @@ describe("formatting", () => {
     assert.equal(logSuffix(E(1, "llm", "x", { live: true, chunks: 4, bytes: 1500 })), " … 4c 1.5kB");
     assert.equal(logSuffix(E(1, "tool", "x", { live: false })), "");
   });
+  it("folded events surface a ×N counter — the audit trail stays complete", () => {
+    assert.equal(logSuffix(E(1, "evt", "ctx 40%", { key: "ctx", hits: 7 })), " · ×7");
+    assert.equal(logSuffix(E(1, "evt", "ctx 40%", { key: "ctx", hits: 1 })), "");
+  });
+  it("renderLog paints a fixed kind column then the message", () => {
+    assert.equal(renderLog(E(1, "shell", "npm test → ok", { ms: 50 }), 40), "SHELL npm test → ok");
+    assert.equal(renderLog(E(2, "evt", "ctx 34%", { key: "ctx", hits: 3 }), 40), "EVT   ctx 34% · ×3");
+    assert.ok(renderLog(E(3, "tool", "x".repeat(300), {}), 30).length <= 36, "clipped to width + column");
+  });
   it("glyphs are one display cell in both charsets", () => {
-    for (const cat of ["run", "llm", "tool", "shell", "file", "build", "mcp", "sub", "guard", "perm", "sys"]) {
+    for (const cat of ["run", "llm", "tool", "shell", "file", "build", "mcp", "sub", "guard", "perm", "evt"]) {
       const g = logGlyph(cat);
       assert.ok(measure(g) <= 2, `${cat} glyph ${g} too wide`);
     }
@@ -152,7 +167,7 @@ describe("payload resolution", () => {
     assert.match(p.text, /\+y/);
   });
   it("rows without a ref fall back to their own text + counters", () => {
-    const p = resolveLogPayload(E(3, "sys", "compact 90.0k→12.0k", { ms: 800 }), items);
+    const p = resolveLogPayload(E(3, "evt", "compact 90.0k→12.0k", { ms: 800 }), items);
     assert.match(p.text, /compact 90\.0k→12\.0k/);
     assert.match(p.text, /0\.8s/);
   });
@@ -215,9 +230,9 @@ describe("sidebar — harness log tab", () => {
     assert.match(out, /HARNESS LOG/);
     assert.match(out, /│/);
     assert.match(out, /step 1\/9/);
-    assert.match(out, /llm #1 m1/);
+    assert.match(out, /#1 m1/);
     assert.match(out, /echo hi → ok/);
-    assert.match(out, /\d{2}:\d{2}:\d{2}\.\d/);
+    assert.match(out, /\d{2}:\d{2}:\d{2}/);
     assert.match(out, /↑↓ select/);
   });
 

@@ -142,23 +142,33 @@ and avoids increasing startup cost or introducing a browser-only dependency.
   to showing the phase breadcrumb + metrics inline
 
 ### Harness Log (`Ctrl+B`)
-- `Ctrl+B` toggles the sidebar between **OVERVIEW** (everything above, unchanged)
+- `Ctrl+B` toggles the sidebar between **OVERVIEW** (every section above, unchanged)
   and **HARNESS LOG** — a live ring buffer (800 rows) of *all* harness activity:
   run/step turns, LLM calls (tokens, cache, duration), tool calls, shell commands,
   file edits, build results, MCP status, subagents, guardrail hits, permission
   asks/answers, queue/compaction/context pressure, errors
-- One row per activity, `HH:MM:SS.d` + category glyph (`◆ run ⇅ llm ▸ tool ⚡ shell
-  ✎ file ▣ build ◈ mcp ⊙ sub ⚠ guard ⛔ perm · sys`); streaming rows stay open
-  with a `… Nc Nb` counter suffix and merge when they finish — token deltas and
-  stdout chunks never flood the pane
+- Audit format: `HH:MM:SS` clock + a fixed **kind label column** — `RUN · LLM ·
+  TOOL · SHELL · FILE · BUILD · MCP · SUB · GUARD · PERM · EVT` — then the
+  message. Text labels (not just glyphs) so a row is readable without color,
+  in ASCII mode, and after copy/paste; the label column is colored by outcome
+  (red on FAILED, green on ok/PASS). `run`, `llm`, `▸` prefixes were dropped
+  from the message itself — the column already says it.
+- Repeating events FOLD instead of flooding: context pressure, queue depth,
+  todo status flips, warmup ticks and history trims update ONE live row and
+  show `· ×N` (N events absorbed). Every event is accounted for; nothing is
+  silently dropped. Streaming rows (LLM stream, shell output) keep a `… Nc NB`
+  counter and merge when they finish.
 - Navigation (input must be empty): `↑↓`/`jk` select, `PgUp/PgDn` scroll, `g`/`G`
-  head/tail, `f` cycles the filter (`ALL → LLM → TOOL → MCP → SUB → SYS`), `d`
+  head/tail, `f` cycles the filter (`ALL → LLM → TOOL → MCP → SUB → EVT`), `d`
   toggles the DETAIL panel (counters + payload pointer), `⏎` opens the **full
   payload in the viewer** (resolved from the transcript; evicted payloads fall
-  back to `.scoder/logs/<session>.jsonl`), `y` copies the entry (OSC 52, or saves
-  to `.scoder/views/`), `Esc` closes DETAIL → OVERVIEW → tail
-- `/log [cat]` prints the same (filtered) log into the full-screen viewer — works
-  on narrow terminals where the sidebar tab is unreachable
+  back to `.scoder/logs/<session>.jsonl`), `F` dumps the **whole filtered log**
+  into the full-screen viewer (wide rows — commands and args are not truncated
+  like the 46-cell sidebar), `y` copies the entry (OSC 52, or saves to
+  `.scoder/views/`), `Esc` closes DETAIL → OVERVIEW → tail
+- `/log [cat]` prints the same (filtered) log into the viewer — works on
+  narrow terminals where the sidebar tab is unreachable (`cat` ∈
+  `ALL|LLM|TOOL|MCP|SUB|EVT`)
 
 ### Full-screen Viewer (`v`)
 - Every "… truncated" in the transcript has an escape hatch: `v` opens the
@@ -214,6 +224,7 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | `Ctrl+C` | Quit |
 | `Ctrl+P` | Open command palette (fuzzy search over commands, agents, themes, permission modes) |
 | `Ctrl+B` | Toggle sidebar tab OVERVIEW ⇄ HARNESS LOG (log keys live when input is empty — see Harness Log) |
+| `F` | On the LOG tab with empty input: dump the whole filtered log into the full-screen viewer |
 | `Ctrl+S` | Open session picker |
 | `v` | Full-screen viewer for the newest tool output / diff (only when the input is empty) |
 | `?` | Show help modal |

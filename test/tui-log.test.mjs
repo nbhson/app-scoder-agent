@@ -35,7 +35,7 @@ describe("harness log — categories", () => {
   it("run_start + step land as run rows", () => {
     const s = fed({ type: "step", step: 2, maxSteps: 40 });
     assert.equal(s.log[0].cat, "run");
-    assert.match(s.log[0].text, /run ▸ build: fix the flaky test/);
+    assert.match(s.log[0].text, /▸ build: fix the flaky test/);
     assert.match(texts(s).at(-1), /^step 2\/40$/);
     assert.equal(byCat(s, "llm").length, 0);
   });
@@ -53,7 +53,7 @@ describe("harness log — categories", () => {
     assert.equal(rows[0].meta.chunks, 2);
     assert.equal(rows[0].meta.tokensIn, 1500);
     assert.equal(rows[0].meta.tokensOut, 700);
-    assert.match(rows[0].text, /llm #\d+ m1 · in 1\.5k out 700 \(cache 200\)/);
+    assert.match(rows[0].text, /#\d+ m1 · in 1\.5k out 700 \(cache 200\)/);
   });
 
   it("reasoning merges into the open llm row even when thinking is hidden", () => {
@@ -76,7 +76,7 @@ describe("harness log — categories", () => {
     );
     const shells = byCat(s, "shell");
     assert.equal(shells.length, 1, "stdout chunks and progress ticks must MERGE");
-    assert.equal(shells[0].text, "▸ ls -la /tmp → ok · 0.0s");
+    assert.equal(shells[0].text, "ls -la /tmp → ok · 0.0s");
     assert.equal(shells[0].meta.bytes, 500);
     assert.equal(shells[0].meta.count, 1);
     assert.equal(shells[0].meta.live, false);
@@ -129,7 +129,8 @@ describe("harness log — categories", () => {
     assert.equal(subs[0].text, "explore done · 5 steps");
     assert.equal(byCat(s, "perm").length, 2, "permission ask + question");
     assert.ok(texts(s).some((t) => t === "compact 90.0k→12.0k (manual)"));
-    assert.ok(texts(s).some((t) => t === "queue 2 pending"));
+    assert.ok(texts(s).some((t) => t === "queue 2 pending · 0 steering"));
+    assert.ok(texts(s).some((t) => t.startsWith("trim · output_budget")), "history trims are auditable (evt fold)");
     assert.ok(texts(s).some((t) => t === "error: provider 502"));
   });
 
@@ -150,7 +151,7 @@ describe("harness log — categories", () => {
     assert.equal(s.log.at(-1).text, "answer always: rm");
   });
 
-  it("warmup logs per STAGE change; context per 3-point move; todo per size change", () => {
+  it("warmup/context/todo fold repeating events into one live row (×N), never drop them", () => {
     const s = fed(
       { type: "warmup", active: true, stage: "indexing", percent: 10, message: null },
       { type: "warmup", active: true, stage: "indexing", percent: 55, message: null },
@@ -163,14 +164,22 @@ describe("harness log — categories", () => {
       { type: "todo", items: [{ content: "a", status: "completed" }, { content: "b", status: "pending" }] },
       { type: "todo", items: [{ content: "a", status: "completed" }] },
     );
-    const sys = byCat(s, "sys");
-    assert.ok(sys.some((e) => e.text.startsWith("warmup indexing 10%")));
-    assert.ok(!sys.some((e) => e.text.startsWith("warmup indexing 55")), "ticks must not spam");
-    assert.ok(sys.some((e) => e.text === "warmup idle"));
-    const ctxs = sys.filter((e) => e.text.startsWith("ctx "));
-    assert.equal(ctxs.length, 2, "10% → 11% suppressed (<3 pts), 10 → 14 logged");
-    const plans = sys.filter((e) => e.text.startsWith("plan ·"));
+    const evt = byCat(s, "evt");
+    // Same stage ticks fold: ONE indexing row showing the latest percent ×2.
+    const idx = evt.find((e) => e.text.startsWith("warmup indexing"));
+    assert.ok(idx, "warmup indexing row exists");
+    assert.match(idx.text, /warmup indexing 55%/);
+    assert.equal(idx.meta.hits, 2);
+    assert.equal(evt.filter((e) => e.text.startsWith("warmup")).length, 3, "idle + retrieval + indexing rows");
+    // Every pressure report survives as one row: latest value, hits counted.
+    const ctxs = evt.filter((e) => e.text.startsWith("ctx "));
+    assert.equal(ctxs.length, 1);
+    assert.match(ctxs[0].text, /ctx 14% \(14\.0k\/100\.0k\)/);
+    assert.equal(ctxs[0].meta.hits, 3);
+    // Plan: size change opens a new fold key, status flip folds into `×N`.
+    const plans = evt.filter((e) => e.text.startsWith("plan ·"));
     assert.equal(plans.length, 2, "size changes only (2 todos, then 1)");
+    assert.equal(plans[0].meta.hits, 2, "the 2-todo row absorbed the flip");
   });
 });
 

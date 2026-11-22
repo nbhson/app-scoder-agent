@@ -58,7 +58,7 @@ export type BuildLamp = "none" | "ok" | "fail";
 
 export type LogCat =
   | "run" | "llm" | "tool" | "shell" | "file" | "build" | "mcp"
-  | "sub" | "guard" | "perm" | "sys";
+  | "sub" | "guard" | "perm" | "evt";
 
 export interface LogEntry {
   /** Monotonic id — selection anchors on this so the cursor survives growth. */
@@ -84,6 +84,14 @@ export interface LogEntry {
     pct?: number;
     /** true = stream still open; later events MERGE into this row, never add. */
     live?: boolean;
+    /**
+     * Fold key for repeating events (context %, queue depth, todo flips,
+     * warmup ticks, history trims): a new event with the same key REPLACES
+     * this row's text and bumps `hits` instead of appending — so every event
+     * is accounted for in the audit trail without flooding the ring.
+     */
+    key?: string;
+    hits?: number;
   };
 }
 
@@ -274,6 +282,26 @@ function fmtK(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+/**
+ * Fold a REPEATING event into the newest row with the same `key` (refreshing
+ * its text + timestamp and counting the hit), or open such a row. This is how
+ * the audit log stays COMPLETE without flooding: every `context` / `queue` /
+ * `todo` / `warmup` / `trim` event is represented, but N of them read as one
+ * live line with a `×N` counter instead of N rows.
+ */
+function foldLog(state: TuiState, cat: LogCat, key: string, text: string, meta: LogEntry["meta"] = {}): void {
+  // Only fold into a RECENT row (search is bounded): matching an old one would
+  // drag its timestamp forward and break the chronological tail.
+  for (let i = state.log.length - 1; i >= Math.max(0, state.log.length - 16); i--) {
+    const e = state.log[i];
+    if (e.cat === cat && e.meta?.key === key) {
+      patchLog(state, i, { text: clipLog(text), ts: Date.now(), meta: { ...meta, key, hits: (e.meta?.hits ?? 1) + 1 } });
+      return;
+    }
+  }
+  pushLog(state, cat, text, { meta: { ...meta, key, hits: 1 } });
+}
+
 /** Short one-arg hint for a tool line (command/path first, like the transcript). */
 function toolArgHint(args: Record<string, unknown>): string {
   for (const key of ["command", "path", "pattern", "query", "url", "id"]) {
@@ -295,17 +323,21 @@ function mergeLlmActivity(state: TuiState, bytes: number): void {
     patchLog(state, i, { meta: { ...m, live: true, chunks: (m?.chunks ?? 0) + 1, bytes: (m?.bytes ?? 0) + bytes } });
     return;
   }
-  pushLog(state, "llm", `llm #${state.usage.calls + 1} streaming`, {
+  // Text omits the "llm" word — the row's kind column (LLM) says it already.
+  pushLog(state, "llm", `#${state.usage.calls + 1} streaming`, {
     ref: { kind: "item", step: state.step },
-    meta: { live: true, chunks: 1, bytes },
+    meta: { live: true, chunks: 1, bytes, key: `llm#${state.usage.calls + 1}` },
   });
 }
 
 /** Guardrail event: đếm + giữ decision gần nhất (ngắn, tự giải thích cho header). */
 function applyGuardrail(state: TuiState, ev: { rule: string; action: string; reason: string }): void {
-  // history-trim là routine context management — đếm làm gì, hiện làm gì:
-  // header chỉ hiển thị những can thiệp THẬT sự đáng chú ý (inject/finish/verify).
-  if (ev.action === "trim") return;
+  // history-trim là routine context management — không tính vào header, nhưng
+  // audit log vẫn phải thấy nó (fold thành một dòng `trim ×N`).
+  if (ev.action === "trim") {
+    foldLog(state, "evt", "trim", `trim · ${ev.rule} — history trimmed`, {});
+    return;
+  }
   state.guardrailCount += 1;  // Thông điệp thân thiện theo rule — không dump raw "rule · reason" lên UI.
   const HUMAN: Record<string, string> = {
     "wrap-up": "sắp hết bước — yêu cầu agent chốt việc và chạy build",
@@ -374,7 +406,8 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       // Plan của task trước không được lọt sang task mới.
       state.plan = null;
       state.warmup = null;
-      pushLog(state, "run", `run ▸ ${ev.agent ?? "build"}: ${ev.task}`);
+      // Kind column already says RUN — keep the payload prefix `▸ build:` short.
+      pushLog(state, "run", `▸ ${ev.agent ?? "build"}: ${ev.task}`);
       break;
     }
     case "llm_reasoning": {
@@ -454,14 +487,16 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         const li = findLive(state, ["llm"]);
         const chunks = li >= 0 ? state.log[li].meta?.chunks ?? 0 : 0;
         const bits = [
-          `llm #${state.usage.calls} ${state.model || "?"}`,
+          `#${state.usage.calls} ${state.model || "?"}`,
           `in ${fmtK(inT)} out ${fmtK(outT)}${cac > 0 ? ` (cache ${fmtK(cac)})` : ""}`,
         ];
         if (callMs != null) bits.push(`${(callMs / 1000).toFixed(1)}s`);
         if (chunks > 0) bits.push(`${chunks} chunks`);
         const text = bits.join(" · ");
-        const meta = { live: false, tokensIn: inT, tokensOut: outT, cached: cac, ms: callMs ?? undefined, chunks };
-        if (li >= 0) patchLog(state, li, { text, meta });
+        const meta = { live: false, tokensIn: inT, tokensOut: outT, cached: cac, ms: callMs ?? undefined, chunks, key: `llm#${state.usage.calls}` };
+        // Spread the open row's meta so its `key` survives the close — this
+        // lets a late/orphaned usage event fold back into the same line.
+        if (li >= 0) patchLog(state, li, { text, meta: { ...state.log[li].meta, ...meta } });
         else pushLog(state, "llm", text, { ref: { kind: "item", step: state.step }, meta });
       }
       state.streamingOutputChars = 0;
@@ -487,9 +522,11 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       {
         const isShell = ev.name === "run_command";
         const arg = isShell ? String(ev.args.command ?? "") : toolArgHint(ev.args);
-        pushLog(state, isShell ? "shell" : "tool", isShell ? `▸ ${arg}` : `${ev.name} ${arg}`.trim(), {
+        pushLog(state, isShell ? "shell" : "tool", isShell ? arg : `${ev.name} ${arg}`.trim(), {
           ref: { kind: "item", step: ev.step, callId: ev.id, name: ev.name },
-          meta: { live: true },
+          // key = tool name: findLive merges output/progress by name anyway,
+          // and the key lets a late result fold into the row after it closed.
+          meta: { live: true, key: ev.name },
         });
       }
       break;
@@ -582,15 +619,17 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     case "todo": {
       // Snapshot last-wins cho sidebar PLAN (field riêng, không bị MAX_ITEMS
       // eviction xoá trên run dài). Chat item vẫn append để giữ transcript.
-      const prevCount = state.plan?.length ?? -1;
       state.plan = ev.items.map((t) => ({ ...t }));
       appendItem(state, { kind: "todo", items: ev.items.map((t) => ({ ...t })) });
-      // P8 anti-spam: only when the checklist GROWS/RESETS — incremental
-      // status flips of the same list would flood the log.
-      if (ev.items.length !== prevCount) {
-        const done = ev.items.filter((t) => t.status === "completed").length;
-        pushLog(state, "sys", `plan · ${ev.items.length} todos (${done} done)`);
-      }
+      // Every todo event is accounted for, but N updates of the SAME checklist
+      // fold into one line (`×N`) — status flips would otherwise flood the ring.
+      const done = ev.items.filter((t) => t.status === "completed").length;
+      foldLog(
+        state,
+        "evt",
+        `plan#${ev.items.length}`,
+        `plan · ${ev.items.length} todos (${done} done)`,
+      );
       break;
     }
     case "guardrail": {
@@ -613,40 +652,38 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     case "steer_queued": {
       // Pending depth tracked via the absolute `queue` event; nothing else.
       state.queue = { ...state.queue, pending: state.queue.pending + 1, steering: state.queue.steering + (ev.mode === "steer" ? 1 : 0) };
-      pushLog(state, "sys", `${ev.mode} +1 · queue ${state.queue.pending}`);
+      pushLog(state, "evt", `${ev.mode} +1 · queue ${state.queue.pending}`);
       break;
     }
     case "steer_delivered": {
       state.queue = { pending: 0, steering: 0 };
       appendItem(state, { kind: "notice", text: `steer: ${ev.count} message(s) delivered`, level: "info" });
-      pushLog(state, "sys", `steer delivered ×${ev.count}`);
+      pushLog(state, "evt", `steer delivered ×${ev.count}`);
       break;
     }
     case "queue": {
-      const changed = state.queue.pending !== ev.pending;
       state.queue = { pending: ev.pending, steering: ev.steering };
-      if (changed) pushLog(state, "sys", `queue ${ev.pending} pending`);
+      // Depth is re-reported constantly; fold it into one live line (`×N`).
+      foldLog(state, "evt", "queue", `queue ${ev.pending} pending · ${ev.steering} steering`);
       break;
     }
     case "compaction": {
       appendItem(state, { kind: "compaction", tokensBefore: ev.tokensBefore, tokensAfter: ev.tokensAfter, manual: ev.manual });
-      pushLog(state, "sys", `compact ${fmtK(ev.tokensBefore)}→${fmtK(ev.tokensAfter)}${ev.manual ? " (manual)" : ""}`);
+      pushLog(state, "evt", `compact ${fmtK(ev.tokensBefore)}→${fmtK(ev.tokensAfter)}${ev.manual ? " (manual)" : ""}`);
       break;
     }
     case "context": {
       state.context = { tokens: ev.tokens, window: ev.window, pct: ev.pct };
-      // P8: only when pressure moves ≥3 points — context is reported every
-      // step and the ring is for meaningful changes.
-      let lastPct: number | undefined;
-      for (let i = state.log.length - 1; i >= 0; i--) {
-        if (state.log[i].cat === "sys" && state.log[i].meta?.pct != null) {
-          lastPct = state.log[i].meta?.pct;
-          break;
-        }
-      }
-      if (lastPct == null || Math.abs(ev.pct - lastPct) >= 3) {
-        pushLog(state, "sys", `ctx ${ev.pct}% (${fmtK(ev.tokens)}/${fmtK(ev.window)})`, { meta: { pct: ev.pct } });
-      }
+      // One report per step → fold into a single live pressure line showing the
+      // LATEST value + how many reports it absorbed. Nothing is dropped, so the
+      // audit trail is complete without 40 near-identical rows per run.
+      foldLog(
+        state,
+        "evt",
+        "ctx",
+        `ctx ${ev.pct}% (${fmtK(ev.tokens)}/${fmtK(ev.window)})${ev.compacted ? " · compacted" : ""}`,
+        { pct: ev.pct },
+      );
       break;
     }
     case "agent_start": {
@@ -726,19 +763,19 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
     }
     case "warmup": {
            if (ev.active) {
-             const prevStage = state.warmup?.stage;
              state.warmup = { active: true, stage: ev.stage, percent: Math.max(0, Math.min(100, ev.percent)), message: ev.message ?? null };
-             // P8: one row per STAGE change, not per progress tick.
-             if (prevStage !== ev.stage) pushLog(state, "sys", `warmup ${ev.stage} ${Math.max(0, Math.min(100, ev.percent))}%`);
+             // One line per STAGE; ticks of the same stage fold in (`×N`) so
+             // every warmup event is represented without 200 progress rows.
+             foldLog(state, "evt", `warmup:${ev.stage}`, `warmup ${ev.stage} ${Math.max(0, Math.min(100, ev.percent))}%`);
            } else {
-             if (state.warmup?.active) pushLog(state, "sys", "warmup idle");
+             if (state.warmup?.active) pushLog(state, "evt", "warmup idle");
              state.warmup = null;
            }
            break;
          }
     case "error": {
       appendItem(state, { kind: "notice", text: ev.message, level: "error" });
-      pushLog(state, "sys", `error: ${ev.message}`, { meta: { exit: false } });
+      pushLog(state, "evt", `error: ${ev.message}`, { meta: { exit: false } });
       break;
     }
   }

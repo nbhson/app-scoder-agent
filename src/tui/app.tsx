@@ -39,8 +39,7 @@ import {
   fmtLogTs,
   followOffset,
   logDetailLines,
-  logGlyph,
-  logSuffix,
+  renderLog,
   moveSelection,
   resolveLogPayload,
   type LogFilter,
@@ -160,6 +159,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     emitNotify(buildNotify("SCoder", notifyBody(state.status, state.summary ?? "", state.step, durMs)));
   }, [state.status, state.summary, state.step, state.startedAt, state.endedAt, cfg.notify]);
   const inputRef = useRef(initialTask ?? "");
+  // ── Reserved single-key shortcuts (P8 fix) ── Ink calls EVERY useInput
+  // handler for a keystroke, so a shortcut char (v, ?, log keys) would also
+  // land in the input unless Input itself swallows it. The set mirrors the
+  // gating in use-keybinds: global chars always, log chars only on the LOG
+  // tab — both only meaningful while the line is empty (checked in Input).
+  const reservedKeysRef = useRef<Set<string>>(new Set(["v", "?"]));
+  useEffect(() => {
+    reservedKeysRef.current =
+      sidebarTab === "log" ? new Set(["v", "?", "j", "k", "f", "d", "y", "g", "G", "F"]) : new Set(["v", "?"]);
+  }, [sidebarTab]);
   const writeInput = useCallback(
     (v: string) => {
       inputRef.current = v;
@@ -316,22 +325,27 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     (arg: string) => {
       const s = stateRef.current;
       const f = arg.toUpperCase();
-      const filter = (["ALL", "LLM", "TOOL", "MCP", "SUB", "SYS"] as const).includes(f as never)
-        ? (f as LogFilter)
-        : arg ? null : "ALL" as LogFilter;
-      if (filter === null) {
-        pushNotice(`unknown category "${arg}" — ALL|LLM|TOOL|MCP|SUB|SYS`, "warn");
+      // Bucket names (TOOL, EVT…) AND raw categories (shell, build, guard…)
+      // both work — the dump is for grepping, finer is better.
+      const CATS = ["run", "llm", "tool", "shell", "file", "build", "mcp", "sub", "guard", "perm", "evt"] as const;
+      const asCat = f.toLowerCase() as (typeof CATS)[number];
+      let entries: typeof s.log;
+      if (f === "" || f === "ALL") entries = s.log;
+      else if ((["ALL", "LLM", "TOOL", "MCP", "SUB", "EVT"] as const).includes(f as never)) entries = filterLog(s.log, f as LogFilter);
+      else if (CATS.includes(asCat)) entries = s.log.filter((e) => e.cat === asCat);
+      else {
+        pushNotice(`unknown category "${arg}" — ALL|LLM|TOOL|MCP|SUB|EVT or a single cat (shell, build, guard…)`);
         return;
       }
-      const entries = filterLog(s.log, filter);
       if (entries.length === 0) {
         pushNotice("harness log is empty — events land here as the agent works");
         return;
       }
+      // Wide lines (no clipping): the sidebar truncates, the viewer doesn't.
       const text = entries
-        .map((e) => `${fmtLogTs(e.ts)} ${logGlyph(e.cat)} ${e.text}${logSuffix(e)}${detailMeta(e).replace("\n", "   ")}`)
+        .map((e) => `${fmtLogTs(e.ts)} ${renderLog(e, 240)}${detailMeta(e).replace("\n", "   ")}`)
         .join("\n");
-      setPagerLog({ entryId: -1, text: `# HARNESS LOG · ${filter} · ${entries.length} entries\n${text}` });
+      setPagerLog({ entryId: -1, text: `# HARNESS LOG · ${f || "ALL"} · ${entries.length} entries\n${text}` });
     },
     [pushNotice],
   );
@@ -404,6 +418,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     toggleDetail: () => setLogView((v) => ({ ...v, detail: !v.detail })),
     openEntry: openLogEntry,
     copyEntry: copyLogEntry,
+    // `F` — same dump as `/log`, using the CURRENT filter (wide viewer rows).
+    dump: () => openLogPager(logViewRef.current.filter),
     escChain: () => {
       const v = logViewRef.current;
       if (v.detail) { setLogView({ ...v, detail: false }); return "handled" as const; }
@@ -412,7 +428,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       setSidebarTab("overview");
       return "handled" as const;
     },
-  }), [stateRef, openLogEntry, copyLogEntry]);
+  }), [stateRef, openLogEntry, copyLogEntry, openLogPager]);
 
   useTuiKeybinds({
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
@@ -619,8 +635,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
             · ⌃S sessions · ⌃T thinking · ⌃O select · v view output/diff · ? help · esc abort · ⌃C quit
           </Text>
           <Text dimColor>
-            sidebar: ⌃B harness log tab · ↑↓ select row · f filter ALL/LLM/TOOL/MCP/SUB/SYS · d detail · ⏎ full payload
-            · y copy · PgUp/PgDn scroll · g head · G tail · /log [cat] prints the log in the viewer
+            sidebar: ⌃B harness log tab · ↑↓ select row · f filter ALL/LLM/TOOL/MCP/SUB/EVT · d detail · ⏎ full payload
+            · y copy · F full log · PgUp/PgDn scroll · g head · G tail · /log [cat] prints the log in the viewer
           </Text>
           <Text>{formatSlashHelp("scoder tui")}</Text>
         </Box>
@@ -674,6 +690,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           config={cfg}
           atSources={atSources}
           modalRef={overlayRef}
+          reservedRef={reservedKeysRef}
         />
       </Box>
       <StatusBar state={state} scroll={scrollOffset > 0 ? `↑ ${Math.min(scrollOffset, maxScroll)}/${maxScroll}` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />

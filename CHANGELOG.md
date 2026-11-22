@@ -30,6 +30,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   select, `f` filter, `d` detail, `⏎` opens the full payload in the viewer
   (transcript item → `.scoder/logs/<session>.jsonl` fallback), `y` copies,
   `/log [cat]` dumps the log for narrow terminals (P8).
+- **Harness Log audit columns** — every row now carries a fixed text kind
+  label (`RUN LLM TOOL SHELL FILE BUILD MCP SUB GUARD PERM EVT`) instead of a
+  bare glyph, a compact `HH:MM:SS` clock (the tenths digit was eating 3 cells
+  of body), and outcome-colored labels; repeating events (context pressure,
+  queue depth, todo flips, warmup ticks, history trims) fold into one live row
+  with a `· ×N` counter so the audit trail is complete without flooding —
+  nothing is silently dropped anymore. `F` on the LOG tab dumps the whole
+  filtered log into the full-screen viewer (wide rows, no truncation); the
+  `SYS` filter bucket is renamed `EVT` (P8 follow-up).
 - **Desktop notification on finish** — when a run ends (success/failed) while
   the terminal is unfocused, scoder emits an OSC 777 notify with status, step
   count, duration and a sanitized summary. Focus tracking uses DEC 1004; on
