@@ -112,6 +112,13 @@ export function banner(title: string, rows: Array<[string, string]>): void {
 let _streamLine = "";
 let _streamColor = CYAN;
 let _streamPrefix = "";
+// P-stream: live newline normalization so the raw stream has the same visual
+// rhythm as the finalized markdown view (no "extra blank lines while
+// generating, fixed when done"). _nlRun = consecutive newlines written since
+// the last visible character; a paragraph break is exactly one blank line.
+let _nlRun = 0;
+let _hadContent = false;
+let _lastOut = "";
 
 /** Start a streaming line. Call llmStreamChunk() for each delta, then llmStreamEnd(). */
 export function llmStreamStart(prefix = "assistant", color = CYAN): void {
@@ -119,6 +126,9 @@ export function llmStreamStart(prefix = "assistant", color = CYAN): void {
   _streamLine = "";
   _streamColor = color;
   _streamPrefix = prefix;
+  _nlRun = 0;
+  _hadContent = false;
+  _lastOut = "";
   process.stdout.write(`${color}${prefix}:${RESET} `);
 }
 
@@ -126,7 +136,20 @@ export function llmStreamStart(prefix = "assistant", color = CYAN): void {
 export function llmStreamChunk(delta: string): void {
   if (QUIET) return;
   _streamLine += delta;
-  process.stdout.write(delta);
+  let out = "";
+  for (const c of delta) {
+    if (c === "\r") continue; // terminal output is line-oriented
+    if (c === "\n") {
+      if (!_hadContent) continue; // drop the blank run before the first word
+      if (++_nlRun > 2) continue; // 3+ consecutive newlines → paragraph break
+    } else {
+      _hadContent = true;
+      _nlRun = 0;
+    }
+    out += c;
+  }
+  if (out) _lastOut = out[out.length - 1];
+  process.stdout.write(out);
 }
 
 /** Finish the streaming line (append suffix + newline). */
@@ -134,7 +157,10 @@ export function llmStreamEnd(suffix = ""): string {
   if (QUIET) return "";
   const line = _streamLine;
   _streamLine = "";
-  process.stdout.write(`${suffix}\n`);
+  // Only close the line if the caret is not already at column 0 — a stream
+  // ending in "\n" must not add a spurious blank line after the prefix row.
+  const needsNewline = suffix !== "" || _lastOut !== "\n";
+  process.stdout.write(`${suffix}${needsNewline ? "\n" : ""}`);
   return line;
 }
 

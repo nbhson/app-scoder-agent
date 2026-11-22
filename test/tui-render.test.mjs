@@ -213,6 +213,39 @@ describe("tui chat-views — todo chuyển sidebar", () => {
     assert.equal(out.trim(), "");
   });
 
+  // ── P-stream: markdown live trong lúc generate (không còn raw text) ──────
+
+  it("streaming assistant: markdown collapse khoảng trắng dư + ▋ inline", async () => {
+    const item = { kind: "assistant", text: "Working on it.\n\n\n\nI will check the file.", streaming: true };
+    const out = await renderOnce(React.createElement(ChatItemView, { item }), 100);
+    assert.ok(out.includes("Working on it."), "content live");
+    assert.ok(out.includes("I will check the file.▋"), "cursor trails last text inline");
+    const lines = out.split("\n");
+    const wi = lines.findIndex((l) => l.includes("Working on it."));
+    let blanks = 0;
+    for (let k = wi + 1; k < lines.length && lines[k].trim() === ""; k++) blanks++;
+    assert.ok(blanks <= 1, `paragraph break = at most one blank row; raw source showed 3 (got ${blanks})`);
+  });
+
+  it("streaming assistant rỗng: chỉ cursor, không crash", async () => {
+    const out = await renderOnce(
+      React.createElement(ChatItemView, { item: { kind: "assistant", text: "", streaming: true } }),
+      100,
+    );
+    assert.match(out, /▋/);
+  });
+
+  it("streaming code fence đang mở: giữ nguyên dòng code, không nhảy dạng", async () => {
+    const out = await renderOnce(
+      React.createElement(
+        ChatItemView,
+        { item: { kind: "assistant", text: "Here:\n\n```js\nconst x = 1;\ncons", streaming: true } },
+        100,
+      ),
+    );
+    assert.match(out, /const x = 1;/);
+  });
+
   it("latestPlan là nguồn dữ liệu sidebar: last-wins", () => {
     const plan = latestPlan([
       { kind: "todo", items: [{ content: "old", status: "pending" }] },

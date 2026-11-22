@@ -291,13 +291,34 @@ export const ChatItemView = memo(function ChatItemView({ item, width }: { item: 
         </Box>
       );
     case "assistant": {
-      // Streaming: dim with pulsing cursor; finalized: markdown with agent mark.
-      if (item.streaming || !item.text) {
+      // P-stream: streaming renders the SAME markdown pipeline as the
+      // finalized view (with ▋ appended as trailing inline text). Raw source
+      // text used to be shown while generating — hard-wrapped paragraphs and
+      // runs of blank lines appeared exactly as the model typed them, then
+      // "snapped" into shape on completion (the reported "unnecessary line
+      // breaks during generation, normal when done"). The parser collapses
+      // blank-line runs into one spacer, so both phases now agree live.
+      if (item.streaming) {
+        if (!item.text) {
+          return (
+            <Box paddingLeft={2}>
+              <AgentMark />
+              <Text color={theme.accent} bold>▋</Text>
+            </Box>
+          );
+        }
         return (
-          <Box marginTop={item.text ? 1 : 0} paddingLeft={2}>
+          <Box marginTop={1} paddingLeft={2}>
             <AgentMark />
-            <Text dimColor={item.streaming}>{item.text || (item.streaming ? "" : "(no text)")}</Text>
-            {item.streaming && <Text color={theme.accent} bold>▋</Text>}
+            <Markdown text={`${item.text}▋`} width={width} />
+          </Box>
+        );
+      }
+      if (!item.text) {
+        return (
+          <Box paddingLeft={2}>
+            <AgentMark />
+            <Text dimColor={false}>{"(no text)"}</Text>
           </Box>
         );
       }
