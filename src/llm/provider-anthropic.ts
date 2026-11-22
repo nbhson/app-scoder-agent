@@ -10,7 +10,7 @@
  */
 import type { ChatMessage, ChatResult, TokenUsage, ToolCall, StreamChunk, ToolSpec } from "./llm.js";
 import { LlmError, LLM_REQUEST_TIMEOUT_MS, combinedSignal, redactSecrets } from "./llm.js";
-import { withRetry } from "./retry.js";
+import { formatRetryDelay, withRetry } from "./retry.js";
 import { parseToolArgsCached } from "./tool-args.js";
 
 // ---------------------------------------------------------------------------
@@ -279,10 +279,11 @@ export class AnthropicClient {
           if (!r.ok) throw await toAnthropicError(r, url);
           return r;
         },
-        {},
+        // caller signal only — the 120s request timeout must not cut quota backoffs
+        { signal: opts.signal },
         (attempt, delay, reason) =>
           console.error(
-            `⚠  Anthropic request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`,
+            `⚠  Anthropic request failed (${reason}), retrying in ${formatRetryDelay(delay)} (retry ${attempt})...`,
           ),
       );
     } finally {
@@ -331,9 +332,9 @@ export class AnthropicClient {
           if (!r.ok) throw await toAnthropicError(r, url);
           return r;
         },
-        {},
+        { signal: opts.signal },
         (attempt, delay, reason) =>
-          console.error(`⚠  Anthropic stream request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s...`),
+          console.error(`⚠  Anthropic stream request failed (${reason}), retrying in ${formatRetryDelay(delay)} (retry ${attempt})...`),
       );
     } catch (err) {
       cleanup(); // don't leak the 120s request timer — it would hang the process

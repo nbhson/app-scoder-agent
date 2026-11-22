@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unifiedDiff, diffCounts } from "../dist/workspace/diff.js";
-import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError } from "../dist/llm/retry.js";
+import { withRetry, isRetryableStatus, isRetryableNetworkError, NonRetryableError, RETRY_LADDER_MS, retryLadderMs, formatRetryDelay } from "../dist/llm/retry.js";
 import {
   trimHistory,
   summariseOutput,
@@ -174,6 +174,115 @@ describe("withRetry", () => {
       delays[0] >= 10_000 && delays[0] <= 10_500 && delays[1] === 12_000 && delays[2] === 12_000,
       `delays capped at maxDelayMs (got ${delays.join(",")})`,
     );
+  });
+
+  // ── escalating ladder (10s → 30s → 1m → 3m → 5m → 10m) ──────────────────
+
+  it("mặc định là ladder tăng dần 10s…10m, nghỉ đúng số bậc", async () => {
+    try {
+      process.env.SCODER_RETRY_LADDER_MS = "10,20,30,40";
+      const delays = [];
+      let calls = 0;
+      await assert.rejects(
+        withRetry(
+          async () => { calls++; throw Object.assign(new Error("down"), { status: 503 }); },
+          {},
+          (_a, d) => { delays.push(d); },
+        ),
+      );
+      assert.equal(calls, 5, "1 + một retry mỗi bậc (4)");
+      assert.ok(
+        delays.every((d, i) => d >= (i + 1) * 10 && d < (i + 1) * 10 + 500),
+        `bậc thang 10/20/30/40 (+jitter), got ${delays.join(",")}`,
+      );
+    } finally {
+      delete process.env.SCODER_RETRY_LADDER_MS;
+    }
+  });
+
+  it("Retry-After của server thắng ladder", async () => {
+    try {
+      process.env.SCODER_RETRY_LADDER_MS = "9999";
+      const delays = [];
+      let calls = 0;
+      await withRetry(
+        async () => {
+          calls++;
+          if (calls === 1) throw Object.assign(new Error("rate"), { status: 429, retryAfterMs: 1 });
+          return "ok";
+        },
+        {},
+        (_a, d) => { delays.push(d); },
+      );
+      assert.equal(delays[0], 1, "Retry-After=1ms, không phải ladder 9999ms");
+    } finally {
+      delete process.env.SCODER_RETRY_LADDER_MS;
+    }
+  });
+
+  it("Retry-After cực lớn vẫn bị cap 15m", async () => {
+    // already-aborted signal: sleep rejects instantly, but onRetry reports
+    // the COMPUTED (capped) delay first — that's what we assert.
+    const ac = new AbortController();
+    ac.abort();
+    const delays = [];
+    await assert.rejects(
+      withRetry(
+        async () => { throw Object.assign(new Error("rate"), { status: 429, retryAfterMs: 10_000_000 }); },
+        { signal: ac.signal },
+        (_a, d) => { delays.push(d); },
+      ),
+    );
+    assert.equal(delays[0], 15 * 60_000, "capped at 900000ms");
+  });
+
+  it("abort giữa chừng cắt ngắn sleep (không kẹt sau wait 10m)", async () => {
+    try {
+      process.env.SCODER_RETRY_LADDER_MS = "600000"; // one 10-minute step
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 30);
+      const t0 = Date.now();
+      await assert.rejects(
+        withRetry(
+          async () => { throw Object.assign(new Error("rate"), { status: 429 }); },
+          { signal: ac.signal },
+        ),
+        (err) => err.name === "AbortError",
+      );
+      assert.ok(Date.now() - t0 < 2000, "abort must cut the 10m wait in ms, not minutes");
+    } finally {
+      delete process.env.SCODER_RETRY_LADDER_MS;
+    }
+  });
+
+  it("caller AbortError không bao giờ được retry", async () => {
+    let calls = 0;
+    await assert.rejects(
+      withRetry(async () => {
+        calls++;
+        throw new DOMException("Aborted", "AbortError");
+      }, { signal: new AbortController().signal }),
+      (err) => err.name === "AbortError",
+    );
+    assert.equal(calls, 1, "interrupt là interrupt — không sleep rồi đánh lại");
+  });
+
+  it("SCODER_RETRY_LADDER_MS override + mặc định + format label", () => {
+    const saved = process.env.SCODER_RETRY_LADDER_MS;
+    try {
+      delete process.env.SCODER_RETRY_LADDER_MS;
+      assert.deepEqual(retryLadderMs(), [10_000, 30_000, 60_000, 180_000, 300_000, 600_000]);
+      process.env.SCODER_RETRY_LADDER_MS = "5, junk, , 15";
+      assert.deepEqual(retryLadderMs(), [5, 15], "mục không hợp lệ bị bỏ qua");
+      process.env.SCODER_RETRY_LADDER_MS = "garbage";
+      assert.deepEqual(retryLadderMs(), RETRY_LADDER_MS, "override vô nghĩa → mặc định");
+    } finally {
+      if (saved === undefined) delete process.env.SCODER_RETRY_LADDER_MS;
+      else process.env.SCODER_RETRY_LADDER_MS = saved;
+    }
+    assert.equal(formatRetryDelay(10_200), "10s");
+    assert.equal(formatRetryDelay(180_000), "3m");
+    assert.equal(formatRetryDelay(600_000), "10m");
   });
 });
 

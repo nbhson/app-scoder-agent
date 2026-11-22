@@ -167,6 +167,9 @@ describe("AnthropicClient.streamChat — SSE parsing", () => {
 
 describe("AnthropicClient.streamChat — error status", () => {
   it("429 -> LlmError với status", { timeout: 20_000 }, async () => {
+    // Default retry ladder is 10s..10m (quota windows); the test rides the
+    // whole cycle at millisecond scale via the documented override.
+    process.env.SCODER_RETRY_LADDER_MS = "5";
     const server = createServer((req, res) => {
       res.writeHead(429, { "Content-Type": "application/json", Connection: "close" });
       res.end('{"error":{"message":"rate limited"}}');
@@ -187,6 +190,7 @@ describe("AnthropicClient.streamChat — error status", () => {
         (err) => err.status === 429 || /rate|429/.test(err.message),
       );
     } finally {
+      delete process.env.SCODER_RETRY_LADDER_MS;
       server.closeAllConnections?.();
       await new Promise((res) => server.close(res));
     }

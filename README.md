@@ -111,6 +111,7 @@ Safety defaults:
 | `SCODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
 | `SCODER_THEME` | auto-detected | TUI palette: `mission` \| `paper` \| `mono` \| `light` \| `high-contrast` \| `solarized` |
 | `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
+| `SCODER_RETRY_LADDER_MS` | `10000,30000,60000,180000,300000,600000` | Comma-separated escalating retry waits for transient LLM failures |
 | `SCODER_SERVER_TOKEN` | auto-generated | `scoder serve` only: bearer token every request must send (auth is never optional) |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | Set to `1` to let `web_fetch` reach localhost/private addresses (local dev) |
 | `SCODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
@@ -445,7 +446,7 @@ scoder is designed for unattended use. Key guarantees:
 
 - **Request timeouts** — LLM calls have a 120s timeout; on timeout, the agent retries or fails gracefully (never hangs indefinitely).
 - **SIGINT handling** — pressing Ctrl+C cancels the in-flight LLM request immediately, kills the running shell command (SIGTERM → SIGKILL), saves the session, and exits with status 130. You can resume with `scoder resume last`.
-- **Graceful retries** — transient LLM API failures (HTTP 429/5xx, network errors) are retried with exponential backoff and jitter (up to 3 retries, honoring `Retry-After`). Client errors (401/403/404) fail fast.
+- **Graceful retries** — transient LLM API failures (HTTP 429/5xx, network errors) are retried on an escalating ladder of waits — 10s, 30s, 1m, 3m, 5m, 10m (+jitter) — so a rate-limit quota window is ridden out instead of failing the run. A server-supplied `Retry-After` wins (capped at 15m), aborts/Ctrl-C cut a pending wait immediately, and client errors (401/403/404) fail fast. Tune via `SCODER_RETRY_LADDER_MS`.
 - **Double-build prevention** — when the agent itself runs the build command, scoder reuses that result instead of running the build twice.
 - **Build diff preview** — run `scoder --permission ask` to see a unified diff before every file write/edit.
 

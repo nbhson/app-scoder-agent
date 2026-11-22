@@ -1,12 +1,55 @@
 /**
- * Retry with exponential backoff + jitter for transient failures.
+ * Retry with escalating waits for transient LLM/API failures.
+ *
+ * Default schedule is a FIXED LADDER of growing waits — 10s, 30s, 1m, 3m,
+ * 5m, 10m — so a rate-limited (429 quota window) or briefly overloaded
+ * provider is ridden out instead of failing the run after a few fast
+ * retries. Every wait is interruptible via `signal` (Ctrl-C / abort must
+ * never be stuck behind a pending sleep).
  */
 
 export interface RetryOptions {
-  maxRetries?: number; // default 4 (H-09: ≤4 attempts)
-  baseDelayMs?: number; // default 1000
-  maxDelayMs?: number; // default 30000
+  /** Default: one retry per RETRY_LADDER_MS step (6 retries, 7 attempts). */
+  maxRetries?: number;
+  /**
+   * Legacy exponential mode: setting this opts OUT of the ladder
+   * (delay = baseDelayMs * 2^attempt, capped at maxDelayMs). Used by tests
+   * and callers that need sub-second retries.
+   */
+  baseDelayMs?: number;
+  /** Cap for legacy exponential mode (default 30s). Ladder mode ignores it. */
+  maxDelayMs?: number;
+  /** Aborting this signal interrupts a pending backoff sleep immediately. */
+  signal?: AbortSignal;
 }
+
+/** Escalating retry waits: 10s → 30s → 1m → 3m → 5m → 10m. */
+export const RETRY_LADDER_MS = [10_000, 30_000, 60_000, 180_000, 300_000, 600_000];
+
+/**
+ * Effective ladder — SCODER_RETRY_LADDER_MS (comma-separated) overrides it so
+ * CI and tests can ride through a full retry cycle in milliseconds instead of
+ * minutes. Non-numeric / non-positive segments (including blanks) are ignored.
+ */
+export function retryLadderMs(): number[] {
+  const raw = process.env.SCODER_RETRY_LADDER_MS;
+  if (raw) {
+    const parts = raw
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (parts.length > 0) return parts;
+  }
+  return RETRY_LADDER_MS;
+}
+
+/** Human wait label for logs: 10s … 45s … 1m … 10m. */
+export function formatRetryDelay(ms: number): string {
+  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`;
+}
+
+/** Ceiling for a server-supplied Retry-After — never wait absurdly long. */
+const RETRY_AFTER_CAP_MS = 15 * 60_000;
 
 export class NonRetryableError extends Error {}
 
@@ -23,21 +66,39 @@ export function isRetryableNetworkError(err: unknown): boolean {
   );
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
+/** Sleep that rejects as soon as `signal` aborts (a 10m wait must end on Ctrl-C). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((res, rej) => {
+    if (signal?.aborted) {
+      rej(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      res();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(t);
+      rej(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /**
  * Run fn with retries. Retries on retryable HTTP statuses (thrown as errors
  * carrying `.status`) and network errors. Client errors (4xx except 429)
- * fail immediately via NonRetryableError semantics.
+ * fail immediately via NonRetryableError semantics. A real `Retry-After`
+ * header always beats the ladder (capped at 15m).
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   opts: RetryOptions = {},
   onRetry?: (attempt: number, delayMs: number, reason: string) => void,
 ): Promise<T> {
-  const maxRetries = opts.maxRetries ?? 4;
+  const legacy = opts.baseDelayMs !== undefined;
+  const ladder = legacy ? [] : retryLadderMs();
+  const maxRetries = opts.maxRetries ?? (legacy ? 4 : ladder.length);
   const baseDelayMs = opts.baseDelayMs ?? 1000;
   const maxDelayMs = opts.maxDelayMs ?? 30_000;
 
@@ -64,14 +125,19 @@ export async function withRetry<T>(
         throw err;
       }
 
-      // Respect Retry-After header if present (seconds)
+      // Escalating wait: server's Retry-After wins (capped); otherwise the
+      // ladder step (10s, 30s, 1m, 3m, 5m, 10m) or legacy 2^n backoff.
       const retryAfter = (err as { retryAfterMs?: number }).retryAfterMs;
-      const jitter = Math.floor(Math.random() * 500);
-      const rawDelay = retryAfter ?? baseDelayMs * 2 ** attempt + jitter;
-      const delay = Math.min(rawDelay, maxDelayMs);
+      const scheduled = legacy
+        ? Math.min(baseDelayMs * 2 ** attempt + Math.floor(Math.random() * 500), maxDelayMs)
+        : ladder[Math.min(attempt, ladder.length - 1)] + Math.floor(Math.random() * 500);
+      const delay =
+        retryAfter !== undefined && retryAfter > 0
+          ? Math.min(retryAfter, RETRY_AFTER_CAP_MS)
+          : scheduled;
 
       onRetry?.(attempt + 1, delay, status ? `HTTP ${status}` : String((err as Error).message).slice(0, 80));
-      await sleep(delay);
+      await sleep(delay, opts.signal);
     }
   }
   throw lastErr; // unreachable

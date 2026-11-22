@@ -2,7 +2,7 @@
  * Minimal OpenAI-compatible chat-completions client with function calling
  * and optional SSE streaming.
  */
-import { withRetry } from "./retry.js";
+import { formatRetryDelay, withRetry } from "./retry.js";
 
 // ---------------------------------------------------------------------------
 // Secrets redaction (H-13) — shared by LLM error bodies, MCP tool output,
@@ -311,9 +311,11 @@ export class LlmClient {
           if (!r.ok) throw await toLlmError(r, url);
           return r;
         },
-        {},
+        // the CALLER's signal (not the combined request-timeout one) — a
+        // 120s request timeout must not cut short a 10m quota backoff.
+        { signal: opts.signal },
         (attempt, delay, reason) =>
-          console.error(`⚠  LLM request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s (attempt ${attempt}/3)...`),
+          console.error(`⚠  LLM request failed (${reason}), retrying in ${formatRetryDelay(delay)} (retry ${attempt})...`),
       );
     } catch (err) {
       cleanup(); // timer must not survive a failed request
@@ -404,9 +406,9 @@ export class LlmClient {
           if (!r.ok) throw await toLlmError(r, url);
           return r;
         },
-        {},
+        { signal: opts.signal },
         (attempt, delay, reason) =>
-          console.error(`⚠  LLM stream request failed (${reason}), retrying in ${(delay / 1000).toFixed(1)}s...`),
+          console.error(`⚠  LLM stream request failed (${reason}), retrying in ${formatRetryDelay(delay)} (retry ${attempt})...`),
       );
     } catch (err) {
       cleanup(); // don't leak the 120s request timer — it would hang the process
