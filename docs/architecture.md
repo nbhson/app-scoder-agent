@@ -57,9 +57,11 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 | `agent.ts` | Public facade: `Agent`, `EVENT_SCHEMA_VERSION`, `resolvePrimaryConfig` |
 | `agent/run-loop.ts` | Autonomous loop (LLM → tools → build/verify → retry) |
 | `agent/tool-executor.ts` | Tool dispatch, permission/MCP routing, post-effects |
+| `agent/subagent-runner.ts` | Task tool: child Agent spawn, event relay, abort cascade, summary clamp |
 | `agent/mcp-bridge.ts` | MCP lifecycle + direct calls for the agent |
 | `agent/interaction.ts` | Permission/question broker |
 | `agent/prompt-context.ts` | Prompt composition + skill staging |
+| `agent/provider-runtime.ts` | Provider/client selection shared by construction and `/model` hot-swap |
 | `agent/session-persistence.ts` | Manifest/snapshot persistence + resume projection |
 | `agent/verification.ts` | Build/test/typecheck/lint verification |
 | `agent/guardrails.ts` | Guardrail Engine: doom-loop, text-only streak, wrap-up |
@@ -68,11 +70,13 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 | `llm/provider-anthropic.ts` | Native Anthropic Messages API + SSE streaming |
 | `llm/provider-registry.ts` | Provider resolution + custom provider registry |
 | `llm/model-catalog.ts` | Model catalog (context window, pricing) |
-| `llm/retry.ts` | Retry/backoff helpers |
+| `llm/retry.ts` | Escalating retry ladder (10s→10m); honors server `Retry-After` |
 | `tools/` | Tool contracts, file/search/command implementations, webfetch, ordered registry |
 | `workspace/build.ts` | Build command execution + exit code analysis |
-| `security/permissions.ts` | Permission checker, catastrophic deny list, rule engine |
+| `security/permissions.ts` | Permission checker, structural catastrophic-command analysis, rule engine |
+| `security/sandbox.ts` | OS sandbox wrappers (sandbox-exec/bwrap/docker), fail-closed resolution |
 | `config/config.ts` | Config loading: rc file, env vars, CLI overrides |
+| `config/trust.ts` | Project-directory trust gate for sensitive rc fields (`~/.scoder/trust.json`) |
 | `context/agents.ts` | Primary/subagent definitions (build/plan/review/custom) |
 | `context/agents-guide.ts` | AGENTS.md hierarchy collection |
 | `context/compaction.ts` | LLM-powered history summarization |

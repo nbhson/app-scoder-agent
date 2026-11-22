@@ -102,9 +102,14 @@ token comparison is constant-time.
 | `model` | Model name |
 | `provider` | `openai` or `anthropic` |
 | `maxSteps` | Max iterations |
-| `permission` | `auto`, `ask`, or `readonly` |
+| `permission` | `auto` or `readonly` — `ask` rejected: the server cannot prompt |
+
+Every field is validated at the request boundary (`validateRunRequest`): non-object
+bodies (`null`, arrays, scalars) and wrong types (e.g. `maxSteps: "abc"`, unknown
+`provider`) get `400` with a precise message — nothing unvalidated reaches config.
 
 ## Limits
 
+- POST bodies are size-capped and schema-checked (`400`), non-JSON content types get `415`, oversized bodies `413`
 - Max 4 concurrent runs (extra requests get `429`)
 - Runs are always non-interactive (`ask` mode rejected)

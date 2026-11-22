@@ -114,6 +114,7 @@ Safety defaults:
 | `SCODER_RETRY_LADDER_MS` | `10000,30000,60000,180000,300000,600000` | Comma-separated escalating retry waits for transient LLM failures |
 | `SCODER_SERVER_TOKEN` | auto-generated | `scoder serve` only: bearer token every request must send (auth is never optional) |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | Set to `1` to let `web_fetch` reach localhost/private addresses (local dev) |
+| `SCODER_TRUST_PROJECT` | — | Set to `1` to accept the current directory's project config for this run (CI/scripts) |
 | `SCODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
 
 ### Per-project config file (.scoderrc.json)
@@ -196,17 +197,36 @@ scoder ships with a layered permission system for `run_command`:
 |------|----------|
 | `auto` (default) | Autonomous — runs shell commands without confirmation (original behavior) |
 | `ask` | Prompts before each shell command not covered by `allowCommands` |
-| `readonly` | Shell commands are disabled entirely; the agent can only read/list files. MCP tools are also disabled (they bypass the permission policy) |
+| `readonly` | Shell commands are disabled entirely; the agent can only read/list files. Every `mcp__` call is denied outright |
 
 Layered checks, in order:
 
-1. **Catastrophic deny list** — `rm -rf /`, `dd of=/dev/...`, fork bombs, `curl | sh`, etc. are **always denied**, in every mode.
+1. **Catastrophic-command analysis** — structural argv inspection (quoting/obfuscation-proof, not a regex list): `rm -rf /`, `dd of=/dev/...`, fork bombs, `curl | sh` are **always denied**, in every mode.
 2. **`denyCommands`** (config) — always denied.
 3. **Session allowlist** — commands you approved with `[a] always allow` in this session.
 4. **`allowCommands`** (config) — auto-approved.
 5. **Mode** — `auto` runs everything else; `ask` prompts; `readonly` denies.
 
 In `ask` mode the prompt offers `[y] yes / [a] always allow "<prefix>" / [n] no / [q] quit`. With `-y` (non-interactive), commands needing confirmation are denied instead of hanging CI.
+
+### Project-config trust
+
+A `.scoderrc.json` inside a cloned repo is just another file from that repo —
+so sensitive fields (`baseUrl`, `apiKey`, `providers`, `mcpServers`,
+`buildCmd`, `verifyCmds`, `formatter`, `permission(s)`, `sandbox`,
+`shellEnvAllow`) are **dropped on first sight** of an unknown directory, with
+one warning explaining how to accept them. Global/user config is never
+filtered. Accepting is one-time and out-of-band:
+
+```bash
+scoder trust                 # trust this directory (~/.scoder/trust.json)
+scoder trust --list          # show accepted directories
+scoder trust --revoke <path> # withdraw
+SCODER_TRUST_PROJECT=1 …     # one-shot escape hatch (CI)
+```
+
+Committed `.scoder/permissions.local.json` ("commands the user already
+approved") is gated by the same trust.
 
 ## Skills (SKILL.md)
 
@@ -473,6 +493,8 @@ scoder                       Start interactive session
 scoder init                  Setup wizard — writes .scoderrc.json (+ connection test)
 scoder tui [task]            Full-screen terminal UI (Mission Control)
 scoder serve [--port] [--host]   HTTP server mode (see above)
+scoder trust [path|--list|--revoke <path>]   Manage project-config trust (~/.scoder/trust.json)
+scoder mcp <list|add|remove|test|import>   MCP server management
 scoder --help | --version     Help and version
 ```
 
@@ -571,7 +593,7 @@ Domain-oriented source layout — see [src/README.md](src/README.md), [docs/arch
 
 ```bash
 npm test          # runs: build → unit tests (node --test) → e2e closed-loop → MCP smoke
-npm run lint      # eslint flat config (typescript-eslint + eqeqeq, prefer-const...)
+npm run lint      # eslint flat config — warning-budget ratcheted (--max-warnings pinned in package.json)
 npm run typecheck # tsc --noEmit
 ```
 
@@ -580,7 +602,9 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/permission-prompt.test.mjs` — interactive prompt timeout behavior
 - `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list, live `run_command` output streaming
 - `test/webfetch.test.mjs` — HTML→text, JSON, redirects, SSRF guard, DNS-rebinding IP pinning, binary refusal, truncation
-- `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, live `tool_output` events
+- `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, request-boundary validation
+- `test/project-trust.test.mjs` — project-config trust gate: gated fields, `scoder trust` round-trip, CI escape hatch
+- `test/sandbox.test.mjs` — sandbox argv plans, fail-closed wrapper resolution, real macOS Seatbelt enforcement
 - `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + slash commands (`/help`, `/cost`) + clean exit
 - `test/tui-state.test.mjs` — event reducer unit tests: diff items, build lamp, abort marking, slash-command parsing & help formatting
 - `test/core.test.mjs` — unified diff, retry backoff, context trimming, @file mention expansion

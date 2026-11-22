@@ -14,6 +14,7 @@
 | `SCODER_RETRY_LADDER_MS` | `10000,30000,60000,180000,300000,600000` | Escalating retry waits (ms) for transient LLM failures |
 | `SCODER_SERVER_TOKEN` | auto-generated | `scoder serve` bearer token (auth is mandatory) |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | `1` to allow localhost/private in web_fetch |
+| `SCODER_TRUST_PROJECT` | — | `1` = accept this directory's project config for one run (see Project Config Trust) |
 | `SCODER_NO_APIKEY_WARNING` | — | `1` to suppress apiKey-in-rc warning |
 | `SCODER_AGENT` | — | Primary agent name (build/plan/review/custom) |
 | `SCODER_REASONING` | — | `1` to enable reasoning/thinking output |
@@ -54,6 +55,22 @@ Create `.scoderrc.json` in your project root:
 ```
 
 See [.scoderrc.example.json](../.scoderrc.example.json) for full config reference.
+
+## Project Config Trust
+
+A `.scoderrc.json` checked into a repo is honored ONLY after the directory is
+trusted (once, out-of-band) — otherwise its sensitive keys are dropped with a
+warning: `baseUrl`, `apiKey`, `providers`, `mcpServers`, `buildCmd`,
+`verifyCmds`, `formatter`, `permission`, `permissions`, `sandbox`,
+`shellEnvAllow`. `~/.scoder/config.json` and CLI flags are never filtered.
+
+```bash
+scoder trust [path|--list|--revoke <path>]   # ~/.scoder/trust.json
+SCODER_TRUST_PROJECT=1 scoder …               # one-shot (CI/scripts)
+```
+
+Committed `.scoder/permissions.local.json` (saved approvals) requires the same
+trust. See `docs/commands.md` for details.
 
 ## Sandbox (`sandbox`)
 

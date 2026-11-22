@@ -3,6 +3,102 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [1.1.0] — 2026-11-23
+
+Full audit of the codebase (`fix/all-review-findings`, 11 commits) — every
+P0/P1/P2 finding implemented with a regression test.
+
+### Security
+
+- **`web_fetch` SSRF closed at the socket level**: the guard used to resolve
+  DNS, validate the answers, then hand the URL to `fetch()` — which resolves
+  AGAIN (TOCTOU / DNS rebinding). web_fetch now resolves once, validates
+  every answer, and PINS the connection to the audited IP (`lookup`
+  override + `agent: false`, SNI/Host keep the original authority); every
+  redirect hop re-validates + re-pins. Drive-by: the IPv6 link-local regex
+  never matched `fe80::` — those addresses were treated as PUBLIC (live
+  bypass, not just TOCTOU).
+- **Sandbox fails CLOSED**: enabling `sandbox.mode` without its wrapper
+  binary (`sandbox-exec`/`bwrap`) previously warned and executed the command
+  COMPLETELY UNSANDBOXED. `run_command` now refuses with a tool error;
+  `sandbox.strict: false` restores the old warn-and-run knowingly.
+- **Project-config trust gate** (`config/trust.ts`): a cloned repo's
+  `.scoderrc.json` sensitive fields (`baseUrl`, `apiKey`, `providers`,
+  `mcpServers`, `buildCmd`, `verifyCmds`, `formatter`, `permission(s)`,
+  `sandbox`, `shellEnvAllow`) and committed
+  `.scoder/permissions.local.json` are DROPPED until the directory is
+  trusted once via `scoder trust` / `SCODER_TRUST_PROJECT=1`. Kills the
+  exfiltration + execution attacks of opening a hostile repo.
+- **`scoder serve` hardened**: auth is mandatory (constant-time token
+  compare, no unauthenticated mode), foreign `Host` (DNS rebinding) and
+  cross-site `Origin`/`Referer` (browser CSRF) rejected, JSON endpoints
+  require `application/json` (no CORS-simple POSTs).
+- **Catastrophic-command detection rebuilt**: regex list over the raw string
+  → structural analysis — quote-aware pipeline/sequence splitting, argv
+  parsing, real questions ("is this `rm` recursive AND does an operand name
+  a critical root or whole home?"). Obfuscations that slipped the regexes
+  (`rm -rf $HOME`, `curl x | zsh`, `find / -delete`) are caught; a regex
+  tail remains only for constructs argv cannot see (fork bombs, block-device
+  redirects, `--no-preserve-root`). Fuzz suite included.
+- **Request-boundary validation** (`validateRunRequest`): `POST /api/runs`
+  no longer trusts `JSON.parse` shapes — null/array/scalar bodies and wrong
+  field types get precise 400s instead of 500s or NaN riding into config.
+- **Session-id entropy**: random suffix moved from `Math.random()` (16 bits
+  in a same-second namespace → two launches could write ONE session dir) to
+  `randomBytes(2)`; id format unchanged (name-sort == time-sort).
+
+### Added
+
+- **Escalating retry ladder** for transient LLM failures: 10s → 30s → 1m →
+  3m → 5m → 10m (cap 15m when the server sends `Retry-After`), waits abort
+  with the run signal; `baseDelayMs` opts back into classic exponential,
+  `SCODER_RETRY_LADDER_MS` overrides the ladder (CI/tests).
+- `scoder trust [path|--list|--revoke <path>]` subcommand +
+  `SCODER_TRUST_PROJECT` escape hatch.
+- `sandbox.strict` config field; OS-sandbox section in the configuration
+  docs.
+- **CI gates the repo now promises**: `docs:check` + `check-secrets` in the
+  matrix, a macOS lane (Seatbelt enforcement tests actually run), a
+  coverage lane (`scripts/check-coverage.mjs`, floors 88 lines / 78 branch /
+  84 funcs), and `prepublishOnly` running lint + typecheck + FULL tests +
+  eval.
+
+### Fixed
+
+- **Permission + provider state across `/model` hot-swaps** — swapped agents
+  inherited stale permission checkers/provider runtimes.
+- **UTF-8 streamed output**: multi-byte characters split across chunk
+  boundaries decoded as one stream instead of producing replacement
+  characters in tool output and the TUI.
+- **Unnecessary line breaks while the agent generates** — the TUI renders
+  the markdown pipeline DURING streaming (headings/bold/lists/code appear
+  live with the ▋ cursor); the plain CLI normalizes newlines live (leading
+  blanks dropped, 3+ collapses to one paragraph break, `\r` stripped).
+- **Subagent output budget**: a child's summary is clamped to the parent's
+  `limits.maxOutputChars` with an explicit truncation marker — one chatty
+  explore run can no longer eat the parent's context.
+- **In-flight run guard**: `run()/runTurn()/resume()` on a busy Agent reset
+  the active run's signals and double-wrote the event log; overlap is now
+  refused at the entry, release owned by the run loop.
+- **Flaky test timers**: SIGKILL-vs-`exit`-event race in mcp-reconnect
+  (plus orphaned mock servers hanging the file), debounce-window strictness
+  in hot-reload, fixed ink-paint wait in tui-render — all deadline/poll
+  based now.
+
+### Changed
+
+- `agent.ts` decomposition continues: the task-tool subagent runner (spawn,
+  event relay, abort cascade, summary clamp) moved to
+  `agent/subagent-runner.ts` (runtime-injected, no import cycle).
+- Docs drift corrected: MCP tools are permission-checked by NAME (the old
+  "bypass the permission system" claim was false since `classifyMcpTool`),
+  readonly profile semantics, test-suite tables extended with the new
+  suites, `docs/testing.md` CI section rewritten.
+- Dev dependencies: eslint 10.15, typescript-eslint 8.73, `minimatch ^11`
+  override — `npm audit` 9 moderate ReDoS findings → 0 vulnerabilities.
+- `npm run lint` pinned to `--max-warnings=43`: a warning-budget ratchet —
+  the tracked long tail cannot grow unnoticed.
+
 ## [1.0.0] — 2026-11-22
 
 ### Added

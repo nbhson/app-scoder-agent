@@ -28,17 +28,22 @@ Tests are auto-discovered via `test/*.test.mjs`:
 | File | Coverage |
 |------|----------|
 | `test/permissions.test.mjs` | Catastrophic patterns, mode classification, allowlist word-boundary |
+| `test/catastrophic-structure.test.mjs` | Structural argv analysis: obfuscated/quoting variants of destructive commands |
+| `test/project-trust.test.mjs` | Trust gate: gated fields dropped until trusted, `scoder trust` round-trip, env escape hatch |
+| `test/sandbox.test.mjs` | Sandbox argv plans, fail-closed wrapper resolution, real macOS Seatbelt enforcement |
 | `test/permission-prompt.test.mjs` | Interactive prompt timeout |
 | `test/tools.test.mjs` | safePath, symlink escape, file-size cap, write/edit/list |
 | `test/webfetch.test.mjs` | HTML→text, JSON, redirects, SSRF guard, IP pinning (rebinding), binary refusal |
-| `test/server.test.mjs` | HTTP API: run lifecycle, abort, auth |
+| `test/utf8-stream.test.mjs` | Multi-byte UTF-8 split across chunk boundaries (streaming decode) |
+| `test/agents.test.mjs` | Subagent runner: depth limit, summary clamp, in-flight run guard |
+| `test/server.test.mjs` | HTTP API: run lifecycle, abort, auth, request-boundary validation |
 | `test/tui.test.mjs` | Full-screen TUI in real PTY |
 | `test/tui-state.test.mjs` | Event reducer unit tests |
-| `test/core.test.mjs` | Diff, retry, context trimming (`trimHistory` identity/hysteresis/orphan-safe cuts), @file mentions |
+| `test/core.test.mjs` | Diff, escalating retry ladder (env-capped waits, `Retry-After` precedence), context trimming (`trimHistory` identity/hysteresis/orphan-safe cuts), @file mentions |
 | `test/config.test.mjs` | Env/rc/cli precedence, logFile mapping |
 | `test/limits.test.mjs` | rc `limits` parse/validate + new keys (`toolOutputChars`, `mcpSchemaTokens`, `mcpTools`, `verifyCache`, `contextWindow`) + local model profile — hermetic via `SCODER_CONFIG` |
 | `test/perf-p0-p1.test.mjs` | Performance fixes: schema-aware token estimate, MCP tool filter + schema cap (incl. the window-aware share cap), `read_file` line-aware truncation, workspace fingerprint + verification cache, usage/prompt metrics, `probeContextWindow` against a real `node:http` mock (`/props`, `/api/show`, API key), `historyTokenBudget` clamping, fixed-cost calibration |
-| `test/session.test.mjs` | Session store, prune, resolve |
+| `test/session.test.mjs` | Session store, prune, resolve, crypto session-id entropy |
 | `test/cost.test.mjs` | Token usage & cost aggregation |
 | `test/guardrails.test.mjs` | Guardrail Engine: rule registry, thresholds |
 | `test/prompt.test.mjs` | System prompt versioning |

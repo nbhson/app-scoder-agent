@@ -13,6 +13,8 @@ scoder resume <id|last>      Resume a saved session
 scoder logs [id|last]        View session's JSONL log
 scoder cost [--last <n>]     Token usage & estimated cost
 scoder models [provider]     Model catalog (context window, pricing)
+scoder mcp <list|add|remove|test|import>   MCP server management
+scoder trust [path|--list|--revoke <path>]   Project-config trust
 scoder --version | --help    Version and help
 ```
 
@@ -35,6 +37,25 @@ scoder --version | --help    Version and help
 | `--host <addr>` | (`serve`) Bind address |
 | `-h, --help` | Show help |
 | `-v, --version` | Show version |
+
+## Project Config Trust (`scoder trust`)
+
+Project-local config (`.scoderrc.json`, `.scoder/permissions.local.json`) from
+an untrusted directory has its sensitive fields — `baseUrl`, `apiKey`,
+`providers`, `mcpServers`, `buildCmd`, `verifyCmds`, `formatter`,
+`permission`, `permissions`, `sandbox`, `shellEnvAllow` — dropped on first
+use, with a warning. Approve a directory once:
+
+```bash
+scoder trust                      # the current directory
+scoder trust ~/work/repo          # any path
+scoder trust --list               # list trusted directories
+scoder trust --revoke ~/x         # withdraw
+```
+
+Stored in `~/.scoder/trust.json`. For one-off automation, `SCODER_TRUST_PROJECT=1`
+accepts the current directory for a single run without persisting. Global/user
+config (`~/.scoder/config.json`) is never filtered.
 
 ## Examples
 
