@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Utf8Buffer } from "../shared/decode.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { DiffResult } from "../workspace/diff.js";
@@ -109,14 +110,16 @@ function spawnCapture(
       res({ status: null, stdout: "", stderr: "", error: `spawnSync ${file} ${(err as Error).message}` });
       return;
     }
-    let stdout = "";
-    let stderr = "";
+    // P1-15: decode across chunk boundaries (a formatter printing Vietnamese
+    // or emoji used to land U+FFFD when a multi-byte char was split).
+    const stdoutBuf = new Utf8Buffer(64_000);
+    const stderrBuf = new Utf8Buffer(64_000);
     let spawnError: string | undefined;
     child.stdout?.on("data", (c: Buffer) => {
-      if (stdout.length < 64_000) stdout += c.toString("utf8");
+      stdoutBuf.push(c);
     });
     child.stderr?.on("data", (c: Buffer) => {
-      if (stderr.length < 64_000) stderr += c.toString("utf8");
+      stderrBuf.push(c);
     });
     child.on("error", (err: NodeJS.ErrnoException) => {
       // Normalize to the sync wording so tool output is byte-identical:
@@ -127,7 +130,7 @@ function spawnCapture(
           : `spawnSync ${file} ${err.message.replace(/^spawn\s/, "spawnSync ")}`;
     });
     child.on("close", (code) => {
-      res({ status: code, stdout, stderr, ...(spawnError ? { error: spawnError } : {}) });
+      res({ status: code, stdout: stdoutBuf.text, stderr: stderrBuf.text, ...(spawnError ? { error: spawnError } : {}) });
     });
   });
 }

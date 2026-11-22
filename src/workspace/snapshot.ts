@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { Utf8Buffer } from "../shared/decode.js";
 
 /** Async git helper for the capture hot path (P-perf): `spawnSync` froze the
  * event loop for 100 ms–1 s+ on every write batch — TUI paint, SSE delivery
@@ -22,13 +23,13 @@ function gitAsync(workdir: string, gitDir: string, args: string[]): Promise<{ st
       cwd: workdir,
       env: { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: workdir },
     });
-    let stdout = "";
+    const stdoutBuf = new Utf8Buffer(1_000_000); // P1-15: multi-byte-safe chunks
     child.stdout?.on("data", (c: Buffer) => {
-      if (stdout.length < 1_000_000) stdout += c.toString("utf8").slice(0, 1_000_000 - stdout.length);
+      stdoutBuf.push(c);
     });
     child.stderr?.resume(); // drain so the child never blocks on a full pipe
     child.on("error", () => res({ status: -1, stdout: "" }));
-    child.on("close", (code) => res({ status: code ?? -1, stdout }));
+    child.on("close", (code) => res({ status: code ?? -1, stdout: stdoutBuf.text }));
   });
 }
 

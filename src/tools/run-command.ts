@@ -5,6 +5,7 @@ import { loadRcFile } from "../config/config.js";
 import { resolveSandbox, type SandboxConfig } from "../security/sandbox.js";
 import { consoleReporter } from "../io/console-reporter.js";
 import { clamp, MAX_OUTPUT_CHARS } from "./path-safety.js";
+import { Utf8Buffer } from "../shared/decode.js";
 import type { ToolResult } from "./types.js";
 import { redactSecrets } from "../llm/llm.js";
 
@@ -133,8 +134,13 @@ export async function toolRunCommand(
     });
 
     let exited = false;
-    let stdout = "";
-    let stderr = "";
+    // P1-15: accumulate through StringDecoder — a chunk boundary in the middle
+    // of a multi-byte character used to emit U+FFFD (Vietnamese output, emoji,
+    // JSON from an MCP server).
+    const stdoutBuf = new Utf8Buffer(() => MAX_OUTPUT_CHARS);
+    const stderrBuf = new Utf8Buffer(() => MAX_OUTPUT_CHARS);
+    const stdout = () => stdoutBuf.finish();
+    const stderr = () => stderrBuf.finish();
     let killedReason: "timeout" | "aborted" | null = null;
 
     // Linux/macOS: sh fork command con (sleep, make, npm…) rồi chết trước —
@@ -165,13 +171,11 @@ export async function toolRunCommand(
     else signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout?.on("data", (c: Buffer) => {
-      const s = c.toString("utf8");
-       if (stdout.length < MAX_OUTPUT_CHARS) stdout += s.slice(0, MAX_OUTPUT_CHARS - stdout.length);
+      const s = stdoutBuf.push(c);
       onOutput?.("stdout", redactSecrets(s)); // G3
     });
     child.stderr?.on("data", (c: Buffer) => {
-      const s = c.toString("utf8");
-       if (stderr.length < MAX_OUTPUT_CHARS) stderr += s.slice(0, MAX_OUTPUT_CHARS - stderr.length);
+      const s = stderrBuf.push(c);
       onOutput?.("stderr", redactSecrets(s)); // G3
     });
 
@@ -183,19 +187,19 @@ export async function toolRunCommand(
       if (killedReason === "timeout") {
         return {
           ok: false,
-          output: clamp(`${echoLine}\n(command timed out after ${Math.round(timeoutMs / 1000)}s and was killed)\n--- stdout ---\n${redactSecrets(stdout)}\n--- stderr ---\n${redactSecrets(stderr)}`),
+          output: clamp(`${echoLine}\n(command timed out after ${Math.round(timeoutMs / 1000)}s and was killed)\n--- stdout ---\n${redactSecrets(stdout())}\n--- stderr ---\n${redactSecrets(stderr())}`),
         };
       }
       if (killedReason === "aborted") {
         return {
           ok: false,
-          output: clamp(`${echoLine}\n(interrupted by user)\n--- stdout ---\n${redactSecrets(stdout)}\n--- stderr ---\n${redactSecrets(stderr)}`),
+          output: clamp(`${echoLine}\n(interrupted by user)\n--- stdout ---\n${redactSecrets(stdout())}\n--- stderr ---\n${redactSecrets(stderr())}`),
         };
       }
       const status = code ?? -1;
       // G3: redact trước khi output vào conversation/log/TUI.
-      const redacted = redactSecrets(stdout);
-      const redactedErr = redactSecrets(stderr);
+      const redacted = redactSecrets(stdout());
+      const redactedErr = redactSecrets(stderr());
       if (status === 0) {
         return { ok: true, output: clamp(`${echoLine}\n(exit 0)\n${redacted}`) };
       }

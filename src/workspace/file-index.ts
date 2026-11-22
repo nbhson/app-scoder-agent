@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import fuzzysort from "fuzzysort";
+import { Utf8Buffer } from "../shared/decode.js";
 
 const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "__pycache__", ".venv"]);
 
@@ -78,10 +79,13 @@ export function fileIndexStale(workdir: string): string[] {
 export function rgFilesAsync(workdir: string): Promise<string[] | null> {
   return new Promise((res) => {
     const child = spawn("rg", RG_FILES_ARGS(workdir));
-    let out = "";
+    // P1-15: rg prints raw path bytes; a chunk split inside a multi-byte
+    // directory name used to corrupt the index (and the split at "\n" then
+    // matched a replacement character instead of the real path).
+    const outBuf = new Utf8Buffer(16e6);
     let failed = false;
     child.stdout.on("data", (c: Buffer) => {
-      if (out.length < 16e6) out += c.toString("utf8");
+      outBuf.push(c);
     });
     child.stderr.resume();
     child.on("error", () => {
@@ -91,7 +95,7 @@ export function rgFilesAsync(workdir: string): Promise<string[] | null> {
     child.on("close", (code) => {
       if (failed || code !== 0) return res(null);
       const files: string[] = [];
-      for (const line of out.split("\n")) {
+      for (const line of outBuf.text.split("\n")) {
         if (line) files.push(relative(workdir, line) || line);
       }
       res(files);

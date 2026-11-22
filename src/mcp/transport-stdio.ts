@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { McpServerConfig, McpTransport } from "./types.js";
 import { expandEnv } from "./env.js";
+import { Utf8LineFramer, Utf8Stream } from "../shared/decode.js";
 
 /** stdio transport — spawn process, line-delimited JSON-RPC trên stdin/stdout. */
 export class StdioTransport implements McpTransport {
@@ -8,7 +9,15 @@ export class StdioTransport implements McpTransport {
   proc: ChildProcess | null = null;
   /** Tail of the server's stderr (last 4KB) — surfaced on connect failures. */
   stderrTail = "";
-  private buf = "";
+  /**
+   * P1-15: line framing + UTF-8 reassembly in one place. Decoding each stdout
+   * chunk on its own corrupted any JSON-RPC frame whose bytes straddled a
+   * chunk boundary (multi-byte characters in tool results) — the parse then
+   * produced mojibake or dropped a frame the manager kept waiting for.
+   */
+  private framer = new Utf8LineFramer();
+  /** stderr is diagnostics only — decoded as its own UTF-8 stream. */
+  private stderrDecoder = new Utf8Stream();
   private msgCb: ((msg: Record<string, unknown>) => void) | null = null;
   private downCb: ((err: Error) => void) | null = null;
 
@@ -36,10 +45,15 @@ export class StdioTransport implements McpTransport {
       shell: process.platform === "win32",
     });
     this.proc = p;
+    // Reconnect reuses this instance — a leftover half-frame from the dead
+    // process would corrupt the first message of the new one.
+    this.framer = new Utf8LineFramer();
+    this.stderrDecoder = new Utf8Stream();
     p.stderr?.on("data", (c: Buffer) => {
       // Keep the tail for diagnostics (server logs/help output on crash);
-      // otherwise stderr is intentionally ignored.
-      this.stderrTail = (this.stderrTail + c.toString("utf8")).slice(-4096);
+      // otherwise stderr is intentionally ignored. P1-15: decode through the
+      // stream decoder so a split multi-byte character cannot garble it.
+      this.stderrTail = (this.stderrTail + this.stderrDecoder.write(c)).slice(-4096);
     });
     p.on("error", (e) => this.downCb?.(new Error(`spawn: ${e.message}`)));
     p.on("exit", (code) => this.downCb?.(new Error(`process exited (code ${code ?? "?"})`)));
@@ -71,20 +85,10 @@ export class StdioTransport implements McpTransport {
   }
 
   private onChunk(chunk: Buffer): void {
-    this.buf += chunk.toString("utf8");
-    // P-perf: parse by moving an offset — the old per-line
-    // `this.buf = this.buf.slice(i + 1)` re-copied the WHOLE remainder for
-    // every line in a burst (N lines × M bytes = quadratic). One trailing
-    // slice per chunk now. msgCb runs after `start` advances, so a reentrant
-    // append to this.buf cannot corrupt the scan.
-    let start = 0;
-    let i: number;
-    while ((i = this.buf.indexOf("\n", start)) !== -1) {
-      const line = this.buf.slice(start, i).trim();
-      start = i + 1;
+    for (const raw of this.framer.feed(chunk)) {
+      const line = raw.trim();
       if (!line) continue;
       try { this.msgCb?.(JSON.parse(line) as Record<string, unknown>); } catch { /* skip malformed */ }
     }
-    if (start > 0) this.buf = this.buf.slice(start);
   }
 }

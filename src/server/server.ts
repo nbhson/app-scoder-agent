@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
+import { Utf8Buffer } from "../shared/decode.js";
 import { Agent, type AgentEvent, type AgentRunResult } from "../agent.js";
 import type { AgentConfig } from "../config/config.js";
 
@@ -84,7 +85,10 @@ function pushEvent(record: RunRecord, ev: AgentEvent): void {
 
 function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
-    let body = "";
+    // P1-15: the body is UTF-8 JSON (task prompts are Vietnamese + emoji);
+    // decoding each socket chunk on its own turned a split multi-byte
+    // character into U+FFFD inside the user's own task text.
+    const body = new Utf8Buffer();
     let size = 0;
     req.on("data", (c: Buffer) => {
       size += c.byteLength;
@@ -93,9 +97,9 @@ function readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<stri
         req.destroy();
         return;
       }
-      body += c.toString("utf8");
+      body.push(c);
     });
-    req.on("end", () => resolve(body));
+    req.on("end", () => resolve(body.finish()));
     req.on("error", reject);
   });
 }
@@ -343,24 +347,26 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
           sendJson(res, 409, { error: `run is not running (status: ${record.status})` });
           return;
         }
-        let body = "";
-        req.on("data", (c: Buffer) => {
-          body += c.toString();
-          if (body.length > 1_000_000) req.destroy(); // 1MB cap
-        });
-        req.on("end", () => {
-          try {
-            const text = (JSON.parse(body) as { text?: unknown }).text;
-            if (typeof text !== "string" || !text.trim()) {
-              sendJson(res, 400, { error: "body must be {text: string}" });
-              return;
-            }
-            record.agent?.steer(text);
-            sendJson(res, 200, { ok: true, delivered: "next step boundary" });
-          } catch {
-            sendJson(res, 400, { error: "invalid JSON body" });
+        // P1-15: shared reader (multi-byte safe + size-capped) instead of an
+        // ad-hoc per-chunk decode here.
+        let body: string;
+        try {
+          body = await readBody(req, 1_000_000);
+        } catch {
+          sendJson(res, 413, { error: "request body too large" });
+          return;
+        }
+        try {
+          const text = (JSON.parse(body) as { text?: unknown }).text;
+          if (typeof text !== "string" || !text.trim()) {
+            sendJson(res, 400, { error: "body must be {text: string}" });
+            return;
           }
-        });
+          record.agent?.steer(text);
+          sendJson(res, 200, { ok: true, delivered: "next step boundary" });
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+        }
         return;
       }
       if (!runMatch[2] && req.method === "GET") {

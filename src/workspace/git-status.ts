@@ -8,6 +8,7 @@
  * best-effort: any failure yields `null` and the UI simply hides the chip.
  */
 import { spawn } from "node:child_process";
+import { Utf8Buffer } from "../shared/decode.js";
 
 export interface GitContext {
   /** Current branch name; "HEAD" when detached, "no commits yet" for a fresh repo. */
@@ -57,7 +58,9 @@ export function probeGitContext(workdir: string, timeoutMs = 1500): Promise<GitC
       resolve(null);
       return;
     }
-    let stdout = "";
+    // P1-15: git paths/branch names are UTF-8 (Vietnamese branches); decoding
+    // per chunk used to corrupt them at a boundary.
+    const stdoutBuf = new Utf8Buffer(512_000);
     let done = false;
     const finish = (value: GitContext | null): void => {
       if (done) return;
@@ -72,12 +75,12 @@ export function probeGitContext(workdir: string, timeoutMs = 1500): Promise<GitC
     };
     const timer = setTimeout(() => finish(null), timeoutMs);
     child.stdout?.on("data", (c: Buffer) => {
-      stdout += c.toString("utf8");
-      if (stdout.length > 512_000) finish(null); // absurd output size — bail
+      stdoutBuf.push(c);
+      if (stdoutBuf.length > 512_000) finish(null); // absurd output size — bail
     });
     child.stderr?.resume();
     child.on("error", () => finish(null));
-    child.on("close", (code) => finish(code === 0 ? parseGitStatusOut(stdout) : null));
+    child.on("close", (code) => finish(code === 0 ? parseGitStatusOut(stdoutBuf.text) : null));
   });
 }
 
