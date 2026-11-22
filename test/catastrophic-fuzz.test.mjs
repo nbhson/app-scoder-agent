@@ -12,7 +12,8 @@ const checker = new PermissionChecker({ mode: "auto", allowCommands: [], denyCom
 /** MUST deny — destructive/catastrophic (any mode). */
 const MUST_DENY = [
   "rm -rf /", "rm -rf ~", "rm -rf /*", "rm  -rf /", "rm -fr /", "rm -r -f /",
-  "rm --recursive --force /", "rm -rvf /", "rm -rf ~/", "rm -rf '~/x'",
+  "rm --recursive --force /", "rm -rvf /", "rm -rf ~/", "rm -rf ~/*", "rm -rf '~/x'",
+  "rm -rf $HOME", "rm -rf ${HOME}", "find / -delete", "find /usr -delete",
   "sudo rm -rf /usr", "sudo rm -fr /etc", "rm -rf --no-preserve-root /",
   "mkfs.ext4 /dev/sda1", "mkfs /dev/sdb", "dd if=/dev/zero of=/dev/sda",
   "dd bs=4M if=image.iso of=/dev/nvme0n1", "chmod -R 777 /", "chmod -R 777 ~",
