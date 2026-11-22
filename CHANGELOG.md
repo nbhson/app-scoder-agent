@@ -3,7 +3,10 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] — 2026-11-23
+
+Two user-facing changes: a `/btw` side-question channel, and every keybinding
+written out in words instead of symbols across the TUI.
 
 ### Added
 
@@ -31,6 +34,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   `session-picker`/`input`/`permission-modal` (`.tsx`) and
   `src/commands/definitions.ts`; regression tests in `test/tui-shortcuts.test.mjs`
   and `test/tui-render.test.mjs`.
+
+### Fixed
+
+- **The `?` help panel tore the screen** — it was taller than the terminal (the
+  command list alone is 23 rows), so Ink's diff paint spliced rows across the
+  whole frame. The panel is now bounded by `maxHeight = rows - 8` with
+  `overflow="hidden"`: the keys stay on top, the command list clips, and the
+  subtitle points at `/shortcut` + `/help` for the full lists.
+- **The git chip disappeared at 100 columns** — the status bar handed the hint
+  line a fixed 0.72 budget no matter what the left side needed, so `⎇ main` got
+  squeezed out entirely. The left side (status · model · git chip · queue
+  badge) now reserves its width before the hints take the remainder
+  (`test/tui.test.mjs`, P7).
 
 ## [1.1.0] — 2026-11-23
 
