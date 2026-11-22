@@ -6,7 +6,7 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,13 +68,31 @@ const cfg = {
 
 const srv = await startServer(cfg, { port: 0 });
 const API = `http://127.0.0.1:${srv.port}`;
+// P0-serve: auth is mandatory — the token is auto-generated without
+// SCODER_SERVER_TOKEN, so the harness reads it off the RunningServer.
+const AUTH = { Authorization: `Bearer ${srv.token}` };
+const authOf = (running) => ({ Authorization: `Bearer ${running.token}` });
+
+/** Raw http.request — lets tests spoof Host/Origin headers fetch forbids. */
+function rawHttp(port, { path = "/api/health", method = "GET", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path, method, headers }, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 /** Collect SSE `data:` events from an /events URL until the stream closes. */
-async function collectEvents(eventsUrl, timeoutMs = 40_000) {
+async function collectEvents(eventsUrl, timeoutMs = 40_000, headers = AUTH) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(new Error("SSE collect timeout")), timeoutMs);
   try {
-    const res = await fetch(eventsUrl.startsWith("http") ? eventsUrl : `${API}${eventsUrl}`, { signal: ac.signal });
+    const res = await fetch(eventsUrl.startsWith("http") ? eventsUrl : `${API}${eventsUrl}`, { signal: ac.signal, headers });
     assert.equal(res.status, 200);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -110,7 +128,7 @@ after(async () => {
 
 describe("scoder serve — HTTP API", () => {
   it("GET /api/health -> ok", async () => {
-    const res = await fetch(`${API}/api/health`);
+    const res = await fetch(`${API}/api/health`, { headers: AUTH });
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.ok, true);
@@ -119,7 +137,7 @@ describe("scoder serve — HTTP API", () => {
   it("POST /api/runs -> 400 khi thiếu task", async () => {
     const res = await fetch(`${API}/api/runs`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { ...AUTH, "Content-Type": "application/json" },
       body: JSON.stringify({ task: "" }),
     });
     assert.equal(res.status, 400);
@@ -128,7 +146,7 @@ describe("scoder serve — HTTP API", () => {
   it("POST /api/runs -> 400 khi permission=ask (server không prompt được)", async () => {
     const res = await fetch(`${API}/api/runs`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { ...AUTH, "Content-Type": "application/json" },
       body: JSON.stringify({ task: "x", permission: "ask" }),
     });
     assert.equal(res.status, 400);
@@ -138,7 +156,7 @@ describe("scoder serve — HTTP API", () => {
   it("closed loop qua SSE: run_start -> tool_call -> tool_output -> build -> finish(success)", async () => {
     const postRes = await fetch(`${API}/api/runs`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { ...AUTH, "Content-Type": "application/json" },
       body: JSON.stringify({ task: "Add an add function to lib.js that returns a + b" }),
     });
     assert.equal(postRes.status, 202);
@@ -169,7 +187,7 @@ describe("scoder serve — HTTP API", () => {
     assert.equal(finish.success, true, `task phải thành công (summary: ${finish.summary})`);
 
     // Run status sau khi xong
-    const statusRes = await fetch(`${API}/api/runs/${created.id}`);
+    const statusRes = await fetch(`${API}/api/runs/${created.id}`, { headers: AUTH });
     assert.equal(statusRes.status, 200);
     const status = await statusRes.json();
     assert.equal(status.status, "success");
@@ -177,7 +195,7 @@ describe("scoder serve — HTTP API", () => {
   }, 60_000);
 
   it("GET /api/runs liệt kê run đã hoàn thành", async () => {
-    const res = await fetch(`${API}/api/runs`);
+    const res = await fetch(`${API}/api/runs`, { headers: AUTH });
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.ok(body.runs.length >= 1);
@@ -186,9 +204,9 @@ describe("scoder serve — HTTP API", () => {
   });
 
   it("GET /api/runs/<id> lạ -> 404; method lạ -> 405", async () => {
-    const notFound = await fetch(`${API}/api/runs/00000000-0000-4000-8000-000000000000`);
+    const notFound = await fetch(`${API}/api/runs/00000000-0000-4000-8000-000000000000`, { headers: AUTH });
     assert.equal(notFound.status, 404);
-    const res405 = await fetch(`${API}/api/runs`, { method: "DELETE" });
+    const res405 = await fetch(`${API}/api/runs`, { method: "DELETE", headers: AUTH });
     assert.equal(res405.status, 405);
   });
 
@@ -228,16 +246,16 @@ describe("scoder serve — HTTP API", () => {
     try {
       const postRes = await fetch(`http://127.0.0.1:${srv2.port}/api/runs`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...authOf(srv2), "Content-Type": "application/json" },
         body: JSON.stringify({ task: "abort me" }),
       });
       assert.equal(postRes.status, 202);
       const created = await postRes.json();
 
-      const eventsPromise = collectEvents(`http://127.0.0.1:${srv2.port}${created.eventsUrl}`, 30_000);
+      const eventsPromise = collectEvents(`http://127.0.0.1:${srv2.port}${created.eventsUrl}`, 30_000, authOf(srv2));
       // Đợi run_command (sleep 30) đang chạy rồi mới abort
       await new Promise((res) => setTimeout(res, 500));
-      const abortRes = await fetch(`http://127.0.0.1:${srv2.port}/api/runs/${created.id}/abort`, { method: "POST" });
+      const abortRes = await fetch(`http://127.0.0.1:${srv2.port}/api/runs/${created.id}/abort`, { method: "POST", headers: authOf(srv2) });
       assert.equal(abortRes.status, 200);
 
       const events = await eventsPromise;
@@ -245,13 +263,54 @@ describe("scoder serve — HTTP API", () => {
       assert.ok(finish, "abort phải sinh finish event");
       assert.equal(finish.success, false, `abort phải kết thúc không thành công (summary: ${finish.summary})`);
 
-      const status = await (await fetch(`http://127.0.0.1:${srv2.port}/api/runs/${created.id}`)).json();
+      const status = await (await fetch(`http://127.0.0.1:${srv2.port}/api/runs/${created.id}`, { headers: authOf(srv2) })).json();
       assert.equal(status.status, "aborted");
     } finally {
       await srv2.close();
       slowMock.close();
     }
   }, 30_000);
+});
+
+describe("scoder serve — request hardening (P0-serve)", () => {
+  it("auto-generates a strong token when SCODER_SERVER_TOKEN is unset", () => {
+    assert.ok(!srv.tokenFromEnv);
+    assert.ok(srv.token.length >= 32, "generated token has entropy");
+  });
+
+  it("rejects a wrong token and a missing scheme", async () => {
+    const wrong = await fetch(`${API}/api/health`, { headers: { Authorization: "Bearer not-the-token" } });
+    assert.equal(wrong.status, 401);
+    const bare = await fetch(`${API}/api/health`, { headers: { Authorization: srv.token } });
+    assert.equal(bare.status, 401, "scheme prefix required");
+  });
+
+  it("blocks a DNS-rebinding Host header even with the right token", async () => {
+    const r = await rawHttp(srv.port, { headers: { Host: "evil.example", Authorization: `Bearer ${srv.token}` } });
+    assert.equal(r.status, 403);
+    assert.match(r.body, /host not allowed/);
+  });
+
+  it("blocks a cross-site Origin (browser CSRF) even with the right token", async () => {
+    const r = await rawHttp(srv.port, { headers: { Origin: "http://evil.example", Authorization: `Bearer ${srv.token}` } });
+    assert.equal(r.status, 403);
+    assert.match(r.body, /cross-origin/);
+  });
+
+  it("accepts the loopback Origin a real dashboard would send", async () => {
+    const r = await rawHttp(srv.port, { headers: { Origin: `http://127.0.0.1:${srv.port}`, Authorization: `Bearer ${srv.token}` } });
+    assert.equal(r.status, 200);
+  });
+
+  it("POST /api/runs refuses CORS-simple text/plain bodies", async () => {
+    const r = await rawHttp(srv.port, {
+      method: "POST",
+      path: "/api/runs",
+      headers: { Authorization: `Bearer ${srv.token}`, "Content-Type": "text/plain", "Content-Length": 12 },
+      body: '{"task":"x"}\n\n',
+    });
+    assert.equal(r.status, 415);
+  });
 });
 
 describe("scoder serve — token auth", () => {

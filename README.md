@@ -111,7 +111,7 @@ Safety defaults:
 | `SCODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
 | `SCODER_THEME` | auto-detected | TUI palette: `mission` \| `paper` \| `mono` \| `light` \| `high-contrast` \| `solarized` |
 | `SCODER_STREAM` | `1` | `0` to disable streaming LLM output |
-| `SCODER_SERVER_TOKEN` | — | `scoder serve` only: require `Authorization: Bearer <token>` |
+| `SCODER_SERVER_TOKEN` | auto-generated | `scoder serve` only: bearer token every request must send (auth is never optional) |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | Set to `1` to let `web_fetch` reach localhost/private addresses (local dev) |
 | `SCODER_NO_APIKEY_WARNING` | — | Set to `1` to suppress the apiKey-in-rc warning |
 
@@ -425,7 +425,7 @@ SSE event types: `run_start`, `step`, `llm_delta` (assistant text), `tool_call`,
 Notes:
 
 - Runs are always non-interactive; `permission: "ask"` is rejected — use `auto` or `readonly`.
-- Binds `127.0.0.1` by default. Set `SCODER_SERVER_TOKEN` to require `Authorization: Bearer <token>` on every request.
+- Binds `127.0.0.1` by default. Every request must send `Authorization: Bearer <token>` — `SCODER_SERVER_TOKEN` sets it, otherwise a random one is generated and printed. Requests with a foreign `Host` (DNS rebinding) or non-loopback `Origin` (browser CSRF) are rejected, and JSON endpoints require `Content-Type: application/json`.
 - Max 4 concurrent runs (extra requests get `429`); per-run overrides: `workdir`, `buildCmd`, `model`, `provider`, `maxSteps`, `permission`.
 
 ## Logging

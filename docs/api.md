@@ -5,9 +5,9 @@ Run scoder as an HTTP service — submit tasks programmatically and consume prog
 ## Starting Server
 
 ```bash
-scoder serve                     # random port (printed at startup)
+scoder serve                     # random port + auto-generated auth token (printed)
 scoder serve --port 4114         # fixed port
-SCODER_SERVER_TOKEN=secret scoder serve --host 127.0.0.1
+SCODER_SERVER_TOKEN=secret scoder serve --host 127.0.0.1   # deterministic token
 ```
 
 ## Endpoints
@@ -75,13 +75,22 @@ curl -X POST localhost:4114/api/runs/<id>/abort
 
 ## Authentication
 
-Set `SCODER_SERVER_TOKEN` to require `Authorization: Bearer <token>` on every request:
+Every request must send `Authorization: Bearer <token>` — there is no
+unauthenticated mode (an agent server is remote code execution by design).
+The token is `SCODER_SERVER_TOKEN` when set; otherwise one is generated at
+startup and printed by `scoder serve`.
 
 ```bash
 SCODER_SERVER_TOKEN=secret scoder serve --port 4114
 
 curl -H 'Authorization: Bearer secret' localhost:4114/api/runs
 ```
+
+Browser drive-by defenses (on top of the token): a loopback bind rejects
+foreign `Host:` headers (DNS rebinding), any `Origin`/`Referer` must be
+loopback (cross-site form CSRF), and the JSON endpoints demand
+`Content-Type: application/json` (no CORS-simple `text/plain` POSTs). The
+token comparison is constant-time.
 
 ## Per-Run Overrides
 

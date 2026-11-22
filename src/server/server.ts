@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
@@ -21,8 +21,14 @@ import type { AgentConfig } from "../config/config.js";
  *   POST /api/runs/:id/abort      -> abort a running run (like SIGINT)
  *   POST /api/runs/:id/steer      -> steer a running run { text } (delivered at next step boundary)
  *
- * Auth: when SCODER_SERVER_TOKEN is set, every request must send
- * `Authorization: Bearer <token>`. The server binds 127.0.0.1 by default.
+ * Auth: EVERY request must send `Authorization: Bearer <token>`. The token
+ * is SCODER_SERVER_TOKEN when set, otherwise one is generated at startup and
+ * printed by `scoder serve` — an unauthenticated agent server is remote code
+ * execution, so there is no "no auth" default. Browser drive-by defenses:
+ * a loopback bind rejects foreign Host headers (DNS rebinding), requests
+ * carrying an Origin/Referer must be same-origin (CSRF), and JSON endpoints
+ * demand `Content-Type: application/json` (no CORS-simple text/plain form
+ * POSTs). Token compare is constant-time.
  * Runs are always non-interactive; permission "ask" is rejected because a
  * server cannot prompt.
  */
@@ -32,6 +38,12 @@ export interface ServeOptions {
   port?: number;
   /** Max concurrently running agent tasks (extra requests get 429). */
   maxConcurrent?: number;
+  /**
+   * Authorization token override. Defaults to SCODER_SERVER_TOKEN, then to a
+   * freshly generated random token — authentication is never optional in the
+   * default path. Pass a value in tests/embedding to make it deterministic.
+   */
+  token?: string;
 }
 
 export interface RunRequest {
@@ -110,14 +122,68 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
 }
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {
-  if (!token) return true;
+  if (!token) return true; // only via explicit ServeOptions.token override
   const header = req.headers.authorization ?? "";
-  return header === `Bearer ${token}`;
+  const prefix = "Bearer ";
+  if (!header.startsWith(prefix)) return false;
+  const got = Buffer.from(header.slice(prefix.length), "utf8");
+  const want = Buffer.from(token, "utf8");
+  // Constant-time: a `===` here leaks the token's length + common prefix to
+  // an attacker probing timing across the network (however unlikely on LAN).
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
+/** Hostnames a loopback bind will accept in Host/Origin headers. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function stripPort(hostHeader: string): string {
+  const h = hostHeader.trim().toLowerCase();
+  if (h.startsWith("[")) {
+    const close = h.indexOf("]");
+    return close >= 0 ? h.slice(0, close + 1) : h; // [::1] or [::1]:port
+  }
+  const colon = h.indexOf(":");
+  return colon > 0 ? h.slice(0, colon) : h; // host:port
+}
+
+/**
+ * DNS-rebinding / CSRF guard. Loopback binds accept only loopback Hostnames
+ * (an attacker page re-resolving evil.com → 127.0.0.1 arrives with
+ * Host: evil.com). Origin/Referer, when present, must use a loopback scheme
+ * +hostname too — browsers always send Origin on cross-origin POSTs, so this
+ * closes the form-drive-by hole even if a token leaks into a referrable URL.
+ */
+function browserGuard(req: IncomingMessage, loopbackBind: boolean): string | null {
+  const hostHdr = stripPort(req.headers.host ?? "");
+  if (loopbackBind && !LOOPBACK_HOSTS.has(hostHdr)) {
+    return `host not allowed: ${hostHdr} (this server binds to loopback)`;
+  }
+  const originHdr = req.headers.origin ?? req.headers.referer ?? "";
+  if (!originHdr) return null;
+  let o: string;
+  try {
+    const u = new URL(originHdr);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "origin scheme not allowed";
+    o = u.hostname.toLowerCase() === "::1" ? "[::1]" : u.hostname.toLowerCase();
+  } catch {
+    return "malformed Origin header";
+  }
+  if (loopbackBind && !LOOPBACK_HOSTS.has(o)) return `cross-origin request blocked: ${originHdr}`;
+  return null;
+}
+
+/** JSON endpoints refuse text/plain — a no-preflight "simple" CORS body. */
+function isJsonRequest(req: IncomingMessage): boolean {
+  return /^application\/json/i.test(req.headers["content-type"] ?? "");
 }
 
 export interface RunningServer {
   server: Server;
   port: number;
+  /** The token every request must present (generated when unset). */
+  token: string;
+  /** True when the token came from SCODER_SERVER_TOKEN (else generated). */
+  tokenFromEnv: boolean;
   /** Stop the HTTP server and abort any in-flight runs. */
   close: () => Promise<void>;
 }
@@ -125,7 +191,9 @@ export interface RunningServer {
 export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): Promise<RunningServer> {
   const host = opts.host ?? "127.0.0.1";
   const maxConcurrent = opts.maxConcurrent ?? 4;
-  const token = process.env.SCODER_SERVER_TOKEN || "";
+  const envToken = process.env.SCODER_SERVER_TOKEN || "";
+  const token = opts.token ?? (envToken || randomBytes(24).toString("base64url"));
+  const loopbackBind = LOOPBACK_HOSTS.has(host === "0.0.0.0" ? "" : host === "::1" ? "[::1]" : host.toLowerCase());
 
   /** id -> run record; Map preserves insertion order (= creation order). */
   const runs = new Map<string, RunRecord>();
@@ -231,6 +299,15 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const path = url.pathname;
 
+    // Rebinding/CSRF guard runs BEFORE auth: it must reject even correctly
+    // tokened requests arriving via a rogue Host/Origin (token + attacker
+    // page means nothing if the browser is being driven cross-site).
+    const guard = browserGuard(req, loopbackBind);
+    if (guard) {
+      sendJson(res, 403, { error: guard });
+      return;
+    }
+
     if (!isAuthorized(req, token)) {
       sendJson(res, 401, { error: "unauthorized (set Authorization: Bearer <SCODER_SERVER_TOKEN>)" });
       return;
@@ -251,6 +328,10 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
       if (req.method === "POST") {
         if (runningCount() >= maxConcurrent) {
           sendJson(res, 429, { error: `too many concurrent runs (max ${maxConcurrent}) — retry later` });
+          return;
+        }
+        if (!isJsonRequest(req)) {
+          sendJson(res, 415, { error: "Content-Type must be application/json" });
           return;
         }
         let body: RunRequest;
@@ -347,6 +428,10 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
           sendJson(res, 409, { error: `run is not running (status: ${record.status})` });
           return;
         }
+        if (!isJsonRequest(req)) {
+          sendJson(res, 415, { error: "Content-Type must be application/json" });
+          return;
+        }
         // P1-15: shared reader (multi-byte safe + size-capped) instead of an
         // ad-hoc per-chunk decode here.
         let body: string;
@@ -392,6 +477,8 @@ export function startServer(baseConfig: AgentConfig, opts: ServeOptions = {}): P
       resolve({
         server,
         port,
+        token,
+        tokenFromEnv: opts.token === undefined && envToken !== "",
         close: () =>
           new Promise<void>((res) => {
             // Abort in-flight runs so background work does not keep the loop alive.

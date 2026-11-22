@@ -11,7 +11,7 @@
 | `SCODER_MAX_STEPS` | `40` | Max loop iterations |
 | `SCODER_PERMISSION` | `auto` | Permission mode: `auto` \| `ask` \| `readonly` |
 | `SCODER_STREAM` | `1` | `0` to disable streaming |
-| `SCODER_SERVER_TOKEN` | — | `scoder serve` auth token |
+| `SCODER_SERVER_TOKEN` | auto-generated | `scoder serve` bearer token (auth is mandatory) |
 | `SCODER_WEB_ALLOW_PRIVATE` | — | `1` to allow localhost/private in web_fetch |
 | `SCODER_NO_APIKEY_WARNING` | — | `1` to suppress apiKey-in-rc warning |
 | `SCODER_AGENT` | — | Primary agent name (build/plan/review/custom) |

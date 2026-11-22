@@ -199,8 +199,14 @@ async function main(): Promise<void> {
       ui.warn("No API key configured — runs will fail until SCODER_API_KEY (or OPENAI_API_KEY) is set.");
     }
     const srv = await startServer(cfg, { host: args.serveHost, port: args.servePort });
-    const token = process.env.SCODER_SERVER_TOKEN ? " · token auth" : "";
-    ui.banner(`scoder serve @ http://${args.serveHost ?? "127.0.0.1"}:${srv.port}${token}`, [
+    // P0-serve: authentication is never optional. The token is
+    // SCODER_SERVER_TOKEN or, when unset, freshly generated and shown here
+    // (only the operator's terminal sees it).
+    const auth = srv.tokenFromEnv
+      ? "SCODER_SERVER_TOKEN · requests must send Authorization: Bearer <token>"
+      : `auto-generated token (set SCODER_SERVER_TOKEN to fix it): Authorization: Bearer ${srv.token}`;
+    ui.banner(`scoder serve @ http://${args.serveHost ?? "127.0.0.1"}:${srv.port}`, [
+      ["auth", auth],
       ["task", `POST /api/runs { "task": "..." } → 202 { id, eventsUrl }`],
       ["events", `GET /api/runs/<id>/events → SSE stream`],
       ["list", `GET /api/runs`],
