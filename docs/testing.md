@@ -29,7 +29,7 @@ Tests are auto-discovered via `test/*.test.mjs`:
 | `test/permissions.test.mjs` | Catastrophic patterns, mode classification, allowlist word-boundary |
 | `test/permission-prompt.test.mjs` | Interactive prompt timeout |
 | `test/tools.test.mjs` | safePath, symlink escape, file-size cap, write/edit/list |
-| `test/webfetch.test.mjs` | HTML→text, JSON, redirects, SSRF guard, binary refusal |
+| `test/webfetch.test.mjs` | HTML→text, JSON, redirects, SSRF guard, IP pinning (rebinding), binary refusal |
 | `test/server.test.mjs` | HTTP API: run lifecycle, abort, auth |
 | `test/tui.test.mjs` | Full-screen TUI in real PTY |
 | `test/tui-state.test.mjs` | Event reducer unit tests |

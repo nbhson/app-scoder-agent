@@ -87,7 +87,7 @@ File writes (`write_file` / `edit_file`) are symlink-safe: paths are resolved vi
 
 ### Web access (`web_fetch`)
 
-The agent can read the internet through the built-in `web_fetch` tool — it fetches exact URLs (it cannot search) and returns readable plain text: HTML is converted to text (scripts/styles stripped, entities decoded, title extracted), JSON is pretty-printed, binary content is refused. The system prompt instructs the agent *when to fetch* (external/API docs, URLs in error messages, current versions, changelogs) and when not to (answer available locally).
+The agent can read the internet through the built-in `web_fetch` tool — it fetches exact URLs (it cannot search) and returns readable plain text: HTML is converted to text (scripts/styles stripped, entities decoded, title extracted), JSON is pretty-printed, binary content is refused. SSRF is closed at the socket level: DNS is resolved once, every returned address is validated, and the connection is then **pinned to that audited IP** — a hostile nameserver rotating records after the check (DNS rebinding) can no longer redirect the request to `127.0.0.1` or cloud metadata (`169.254.169.254`). The system prompt instructs the agent *when to fetch* (external/API docs, URLs in error messages, current versions, changelogs) and when not to (answer available locally).
 
 Safety defaults:
 
@@ -579,7 +579,7 @@ Test suites (run with `npm test` — auto-discovers `test/*.test.mjs`):
 - `test/permissions.test.mjs` — catastrophic patterns, mode classification, allowlist word-boundary, timeout-denies
 - `test/permission-prompt.test.mjs` — interactive prompt timeout behavior
 - `test/tools.test.mjs` — safePath traversal, symlink escape, file-size cap, write/edit/list, live `run_command` output streaming
-- `test/webfetch.test.mjs` — HTML→text, JSON, redirects, SSRF guard, binary refusal, truncation
+- `test/webfetch.test.mjs` — HTML→text, JSON, redirects, SSRF guard, DNS-rebinding IP pinning, binary refusal, truncation
 - `test/server.test.mjs` — HTTP API: run lifecycle via SSE, abort, auth, live `tool_output` events
 - `test/tui.test.mjs` — full-screen TUI in a real PTY (via `test/pty-run.py`): closed loop render + slash commands (`/help`, `/cost`) + clean exit
 - `test/tui-state.test.mjs` — event reducer unit tests: diff items, build lamp, abort marking, slash-command parsing & help formatting

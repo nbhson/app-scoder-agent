@@ -5,8 +5,9 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import {getTool} from "../dist/tools/registry.js";
-import { htmlToText, toolWebFetch } from "../dist/tools/webfetch.js";
+import { htmlToText, toolWebFetch, isPrivateAddress, pinnedRequest, resolvePinnedAddress } from "../dist/tools/webfetch.js";
 
 // Test server chạy trên 127.0.0.1 (private) — cho phép trong env test
 process.env.SCODER_WEB_ALLOW_PRIVATE = "1";
@@ -31,6 +32,14 @@ const server = createServer((req, res) => {
     case "/plain":
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("just plain text");
+      return;
+    case "/gz": // pinned transport must decode content-encoding itself (no fetch)
+      res.writeHead(200, { "Content-Type": "text/plain", "Content-Encoding": "gzip" });
+      res.end(gzipSync(Buffer.from("gzip plain body")));
+      return;
+    case "/host": // echoes Host header — proves SNI/authority keeps the original name
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end(String(req.headers.host));
       return;
     case "/binary":
       res.writeHead(200, { "Content-Type": "image/png" });
@@ -160,6 +169,54 @@ describe("web_fetch — SSRF guard", () => {
 
   it("chặn file:// và các scheme lạ ngay cả khi allowPrivate", () => {
     // đã test ở trên — guard scheme chạy trước assertPublicHost
+  });
+});
+
+describe("web_fetch — SSRF IP pinning (TOCTOU closure)", () => {
+  it("socket nối thẳng tới IP đã audit — hostname không resolve được vẫn chạy (rebinding bất lực)", async () => {
+    // Pre-fix, fetch() re-resolved "…invalid" itself → ENOTFOUND. Passing
+    // proves the transport no longer performs its own DNS at connect time.
+    const url = new URL(`${base.replace("127.0.0.1", "attacker-rebind.invalid")}/plain`);
+    const res = await pinnedRequest(url, { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(5000));
+    assert.equal(res.status, 200);
+    assert.match(res.text, /just plain text/);
+  });
+
+  it("Host header giữ tên gốc dù kết nối tới IP pin (SNI/authority không đổi)", async () => {
+    const url = new URL(`${base.replace("127.0.0.1", "victim.example")}/host`);
+    const res = await pinnedRequest(url, { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(5000));
+    assert.equal(res.text, `victim.example:${port}`);
+  });
+
+  it("content-encoding gzip được giải trên đường dẫn pinned", async () => {
+    const res = await pinnedRequest(new URL(`${base}/gz`), { address: "127.0.0.1", family: 4 }, AbortSignal.timeout(5000));
+    assert.equal(res.status, 200);
+    assert.match(res.text, /gzip plain body/);
+  });
+
+  it("resolvePinnedAddress: literal IP được validate trước khi pin", async () => {
+    delete process.env.SCODER_WEB_ALLOW_PRIVATE;
+    try {
+      await assert.rejects(resolvePinnedAddress("127.0.0.1"), /private\/loopback address/);
+      await assert.rejects(resolvePinnedAddress("[::1]"), /private\/loopback address/);
+      await assert.rejects(resolvePinnedAddress("localhost"), /private\/loopback address/);
+      process.env.SCODER_WEB_ALLOW_PRIVATE = "1";
+      assert.deepEqual(await resolvePinnedAddress("127.0.0.1"), { address: "127.0.0.1", family: 4 });
+      assert.deepEqual(await resolvePinnedAddress("[::1]"), { address: "::1", family: 6 });
+    } finally {
+      process.env.SCODER_WEB_ALLOW_PRIVATE = "1";
+    }
+  });
+
+  it("isPrivateAddress phủ metadata 169.254, CGNAT, ::ffff:, fail-closed", () => {
+    for (const ip of ["10.1.2.3", "127.0.0.1", "0.0.0.0", "169.254.169.254", "172.16.0.1", "172.31.255.255",
+      "192.168.1.1", "100.64.0.1", "100.127.255.255", "::1", "::", "fc00::1", "fd12::34", "fe80::1",
+      "::ffff:10.0.0.1", "not-an-ip"]) {
+      assert.ok(isPrivateAddress(ip), `${ip} phải bị coi là private/fail-closed`);
+    }
+    for (const ip of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "100.128.0.1", "203.0.113.7"]) {
+      assert.ok(!isPrivateAddress(ip), `${ip} là public`);
+    }
   });
 });
 
