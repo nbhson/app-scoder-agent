@@ -24,8 +24,42 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run check:layers
+      # Docs drift is a build break too: usage/help tables must match argv
+      # and dist paths referenced in README/docs must exist.
+      - run: npm run docs:check
+      # No committed secrets: scans the repo's .scoderrc.json for API keys.
+      - run: node scripts/check-secrets.mjs
       - run: npm run build
       - run: npm test
       # Eval gate (Phase 3): deterministic mock-LLM scenarios. Any regression
       # fails the build — stricter than the plan's >5% threshold.
       - run: npm run eval
+
+  macos:
+    # The darwin-only gates silently no-op on the Linux matrix: sandbox-exec
+    # (Seatbelt) enforcement tests, macOS paths in args/tools. One lane, one
+    # LTS — coverage of platform behavior, not of Node versions.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run eval
+
+  coverage:
+    # Regression gate on test quality itself: fails below the floor set in
+    # scripts/check-coverage.mjs (measured baseline minus a small margin).
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run coverage:check

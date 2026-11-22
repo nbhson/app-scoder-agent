@@ -347,7 +347,7 @@ scoder can use tools from [MCP](https://modelcontextprotocol.io) servers configu
 - **Transports**: `command` → stdio (line-delimited JSON-RPC); `url` → Streamable HTTP (POST JSON-RPC, JSON or SSE responses, `Mcp-Session-Id` echo). Force with `"type": "stdio" | "http"`
 - **Resilience**: a dead stdio server reconnects with exponential backoff (max 5 attempts) and refreshes its tool list; HTTP calls are stateless and retry on the next call
 - Built-in tools always take priority over MCP tools with colliding names
-- ⚠️ **MCP tools bypass the built-in permission system** (no command classification, no diff preview). In `readonly` mode they are therefore disabled entirely; in `auto`/`ask` mode they run unsandboxed — only add MCP servers you trust.
+- ⚠️ **MCP tools are permission-checked by NAME, not content**: permission rules can match `mcp__<server>__<tool>`, `readonly` mode denies every MCP call, and `ask` mode prompts per call — but there is no command classification or diff preview of what a server does internally, and server processes run outside the OS sandbox. Only add MCP servers you trust.
 
 ### MCP governance
 

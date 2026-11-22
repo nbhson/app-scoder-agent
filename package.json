@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run lint && npm run typecheck",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run eval",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",
@@ -20,7 +20,8 @@
     "docs:check": "node scripts/check-docs.mjs",
     "coverage": "npm run build && node --test --experimental-test-coverage test/*.test.mjs",
     "eval": "node test/run-eval.mjs",
-    "test": "npm run build && node --test test/*.test.mjs && node test/run-e2e.mjs && node test/run-mcp-test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs && node test/run-e2e.mjs && node test/run-mcp-test.mjs",
+    "coverage:check": "node scripts/check-coverage.mjs"
   },
   "engines": {
     "node": ">=20"

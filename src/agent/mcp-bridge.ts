@@ -150,7 +150,7 @@ export async function connectMcp(
   if (Object.keys(servers as Record<string, unknown>).length === 0) return;
   if (runtime.getMcp()) return;
   if (runtime.config.permissionMode === "readonly") {
-    runtime.reporter.warn("readonly mode: MCP tools are disabled (they bypass the permission system)");
+    runtime.reporter.warn("readonly mode: MCP tools are disabled (every mcp__ call is denied by the permission system)");
   }
   const manager = new McpManager(servers);
   runtime.setMcp(manager);

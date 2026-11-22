@@ -63,7 +63,7 @@ Example: `mcp__filesystem__read_file`
 
 ## Security Notes
 
-⚠️ **MCP tools bypass the built-in permission system** (no command classification, no diff preview). They run unsandboxed in `auto`/`ask` mode.
+⚠️ **MCP tools are permission-checked by name, not content**: `readonly` mode denies every MCP call, `ask` prompts per call, and rules can match `mcp__<server>__<tool>` — but there is no command classification or diff preview inside a server, and server processes run outside the OS sandbox.
 
 - In `readonly` mode, MCP tools are **disabled entirely**
 - Only add MCP servers you trust

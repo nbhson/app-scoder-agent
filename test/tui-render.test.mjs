@@ -28,7 +28,19 @@ async function renderOnce(element, columns = 100) {
   let out = "";
   stream.on("data", (c) => (out += String(c)));
   const app = render(element, { stdout: stream, stderr: stream, patchConsole: false, exitOnCtrlC: false });
-  await new Promise((r) => setTimeout(r, 80));
+  // Ink paint bất đồng bộ: fixed 80ms là nguồn flaky trên CI chậm (frame tới
+  // muộn) và lãng phí trên máy nhanh. Poll tới khi output ổn định (3 mẫu
+  // liên tiếp không đổi), cap 3s.
+  {
+    let stable = 0;
+    let last = out;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 3_000 && stable < 3) {
+      await new Promise((r) => setTimeout(r, 15));
+      if (out === last) stable++;
+      else { stable = 0; last = out; }
+    }
+  }
   app.unmount();
   await app.waitUntilExit();
   return stripAnsi(out);

@@ -3,14 +3,15 @@
 ## Run Tests
 
 ```bash
-npm test          # build + full unit suite + e2e + MCP smoke (959 tests)
+npm test          # build + full unit suite + e2e + MCP smoke (prints its totals)
 npm run lint      # ESLint flat config
 npm run typecheck # tsc --noEmit
 npm run build     # tsc
 npm run coverage  # build + coverage report
 npm run check:layers       # architecture dependency guard
 npm run check:layers:graph # regenerate docs/architecture-graph.md
-npm run eval               # 11 scripted end-to-end scenarios (mock LLM)
+npm run eval               # scripted end-to-end scenarios (mock LLM)
+npm run coverage:check     # coverage gate — floors enforced in CI
 node scripts/bench.mjs     # performance benchmark (see docs/performance.md)
 node scripts/bench-context.mjs       # wasted prefill: legacy vs current trim strategy
 node scripts/measure-mcp-schema.mjs  # tool-schema token cost
@@ -48,16 +49,23 @@ Tests are auto-discovered via `test/*.test.mjs`:
 
 ## CI Pipeline
 
+Three lanes (`.github/workflows/ci.yml`):
+
 ```
-  lint (eslint)
-  → typecheck (tsc --noEmit)
-    → layer check
-      → build (tsc)
-      → unit tests (node --test test/*.test.mjs)
-        → e2e closed-loop (mock LLM server)
-          → MCP smoke (mock stdio server)
+ubuntu matrix (Node 20/22/24)     macOS (Node 22)             ubuntu (Node 22)
+  lint → typecheck → layer check    build → npm test → eval      npm run coverage:check
+  → docs:check → secrets              (Seatbelt enforcement       (floors: 88 lines /
+  → build → test → eval                tests actually run)         78 branch / 84 funcs)
 ```
 
-## Node Version Matrix
-
-CI tests on: **Node.js 20, 22, 24**
+- `docs:check` fails the build when README/docs drift from argv tables or
+  reference `src`/`dist` paths that no longer exist.
+- `scripts/check-secrets.mjs` scans the committed `.scoderrc.json` for API
+  keys (also wired as a pre-commit hook recipe in README).
+- `coverage:check` runs the suite with node's built-in coverage and fails
+  below the floors in `scripts/check-coverage.mjs` (override locally with
+  `SCODER_COVERAGE_MIN="lines,branch,funcs"`).
+- macOS lane exists because darwin-only gates (sandbox-exec/Seatbelt)
+  silently skip on Linux.
+- `prepublishOnly` runs lint + typecheck + FULL test + eval — publishing
+  cannot bypass the gates anymore.
