@@ -55,6 +55,23 @@ Create `.scoderrc.json` in your project root:
 
 See [.scoderrc.example.json](../.scoderrc.example.json) for full config reference.
 
+## Sandbox (`sandbox`)
+
+`run_command` can execute inside an OS-level sandbox: `readonly` (no writes
+anywhere) or `workspace-write` (writes allowed only in the workspace + `/tmp`):
+
+```json
+{ "sandbox": { "mode": "workspace-write", "wrapper": "sandbox-exec", "strict": true } }
+```
+
+- The wrapper is auto-detected per platform (`sandbox-exec` on macOS, `bwrap`
+  on Linux; `docker` can be forced).
+- **Fail closed by default:** an explicitly-enabled mode whose wrapper binary
+  is missing makes `run_command` REFUSE to run rather than silently executing
+  unsandboxed — a requested sandbox is a security promise. Set
+  `strict: false` to get the old warn-and-run behavior.
+- `mode: "off"` (the default when unset) runs commands directly, unchanged.
+
 ## Config Precedence
 
 1. **CLI flags** — `-m`, `--base-url`, `-k`, `--provider`, `-B`, `--theme`

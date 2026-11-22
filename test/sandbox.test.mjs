@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildSandboxArgv, planSandbox, sandboxWritePaths } from "../dist/security/sandbox.js";
+import { buildSandboxArgv, planSandbox, resolveSandbox, sandboxWritePaths } from "../dist/security/sandbox.js";
 import {toolRunCommand} from "../dist/tools/run-command.js";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,6 +90,97 @@ describe("toolRunCommand sandbox wiring (G4, e2e nhẹ)", () => {
       assert.match(readFileSync(join(dir, "inside.txt"), "utf8"), /hi/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── P0-sandbox: fail CLOSED khi wrapper của một mode bật tường minh thiếu ───
+
+describe("sandbox fail-closed (P0-sandbox)", () => {
+  it("mode bật + wrapper thiếu → failClosed, reason nói rõ refusal", async () => {
+    // bwrap không tồn tại trên darwin dev/CI — ép nó làm wrapper vắng mặt.
+    const missing = process.platform === "darwin" ? "bwrap" : "sandbox-exec";
+    const r = await resolveSandbox({ mode: "workspace-write", wrapper: missing }, "/ws", "echo x");
+    assert.equal(r.argv, null);
+    assert.equal(r.failClosed, true);
+    assert.match(r.reason, /refusing to run unsandboxed/);
+  });
+
+  it("strict:false khôi phục warn-and-run", async () => {
+    const missing = process.platform === "darwin" ? "bwrap" : "sandbox-exec";
+    const r = await resolveSandbox({ mode: "readonly", wrapper: missing, strict: false }, "/ws", "echo x");
+    assert.equal(r.argv, null);
+    assert.equal(r.failClosed, false);
+    assert.match(r.reason, /running unsandboxed/);
+  });
+
+  it("toolRunCommand từ chối chạy trần khi sandbox không khả dụng", async () => {
+    const missing = process.platform === "darwin" ? "bwrap" : "sandbox-exec";
+    const r = await toolRunCommand(
+      process.cwd(),
+      { command: "echo should-not-run" },
+      undefined,
+      undefined,
+      { mode: "workspace-write", wrapper: missing },
+    );
+    assert.equal(r.ok, false);
+    assert.match(r.output, /sandbox enforced/);
+    assert.match(r.output, /refusing to run unsandboxed/);
+  });
+
+  it("toolRunCommand strict=false → warn + chạy (hành vi cũ)", async () => {
+    const missing = process.platform === "darwin" ? "bwrap" : "sandbox-exec";
+    const warns = [];
+    const r = await toolRunCommand(
+      process.cwd(),
+      { command: "echo legacy-ok" },
+      undefined,
+      undefined,
+      { mode: "workspace-write", wrapper: missing, strict: false },
+      { info: () => {}, warn: (m) => warns.push(String(m)), error: () => {} },
+    );
+    assert.equal(r.ok, true, `output: ${r.output}`);
+    assert.match(r.output, /legacy-ok/);
+    assert.ok(warns.some((w) => /running unsandboxed/.test(w)));
+  });
+
+  it("mode off → không liên quan tới failClosed (chạy trực tiếp)", async () => {
+    const r = await resolveSandbox({}, "/ws", "x");
+    assert.equal(r.failClosed, false);
+    assert.equal(r.reason, "sandbox off");
+  });
+});
+
+describe("sandbox-exec enforcement THỰC (macOS Seatbelt)", () => {
+  const canEnforce = process.platform === "darwin";
+  it("readonly: ghi vào workspace bị chặn, file không tồn tại sau lệnh", { skip: !canEnforce }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sbx-ro-"));
+    try {
+      const r = await toolRunCommand(dir, { command: "echo pwn > blocked.txt" }, undefined, undefined, { mode: "readonly" });
+      assert.equal(r.ok, false, `Seatbelt phải chặn write: ${r.output}`);
+      let exists = true;
+      try { readFileSync(join(dir, "blocked.txt")); } catch { exists = false; }
+      assert.equal(exists, false, "readonly sandbox phải vô hiệu hoá write");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("workspace-write: ghi NGOÀI workspace bị chặn, trong workspace + /tmp OK", { skip: !canEnforce }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sbx-ww-"));
+    const outside = mkdtempSync(join(tmpdir(), "sbx-out-"));
+    try {
+      const inside = await toolRunCommand(dir, { command: "echo ok > inside.txt && echo t > /tmp/scoder-sbx-probe.txt" }, undefined, undefined, { mode: "workspace-write" });
+      assert.equal(inside.ok, true, inside.output);
+      const out = await toolRunCommand(dir, { command: `echo pwn > ${outside}/blocked.txt` }, undefined, undefined, { mode: "workspace-write" });
+      assert.equal(out.ok, false, `write ngoài workspace phải bị chặn: ${out.output}`);
+      let exists = true;
+      try { readFileSync(join(outside, "blocked.txt")); } catch { exists = false; }
+      assert.equal(exists, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      try { rmSync(join("/tmp", "scoder-sbx-probe.txt")); } catch { /* sandboxed write may have left nothing */ }
     }
   });
 });

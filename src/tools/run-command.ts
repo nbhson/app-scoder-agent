@@ -106,11 +106,15 @@ export async function toolRunCommand(
   // (the child gets the raw command).
   const echoLine = `$ ${redactSecrets(args.command)}`;
 
-  // G4: sandbox wrap khi config bật. Wrapper thiếu → warn + chạy trực tiếp.
+  // G4: sandbox wrap khi config bật. Wrapper thiếu + mode bật tường minh →
+  // P0-sandbox: fail CLOSED (từ chối chạy trần), chỉ warn khi strict=false.
   const sandboxed = await resolveSandbox(sandbox ?? {}, workdir, args.command);
   if (sandboxed.argv) {
     reporter.info(`sandbox: ${sandboxed.wrapper} (${(sandbox ?? {}).mode})`);
   } else if ((sandbox ?? {}).mode && (sandbox ?? {}).mode !== "off") {
+    if (sandboxed.failClosed) {
+      return { ok: false, output: `ERROR: sandbox enforced: ${sandboxed.reason}` };
+    }
     reporter.warn(`sandbox: ${sandboxed.reason}`);
   }
   const spawnArgv = sandboxed.argv ?? defaultShellArgv(args.command);

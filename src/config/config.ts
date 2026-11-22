@@ -90,7 +90,7 @@ export interface AgentConfig {
   /** I-11: post-edit formatter (rc `formatter`). */
   formatter?: boolean | string;
   /** G4: sandbox profile for run_command (rc `sandbox`). */
-  sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
+  sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker"; strict?: boolean };
   /** G7: runtime thresholds — thay magic number rải trong code. */
   limits?: {
     /** LLM request timeout ms (default 120_000). */
@@ -210,7 +210,7 @@ interface RcFile {
   /** G3: extra env vars passed through to run_command children (names only; values from process.env). */
   shellEnvAllow?: string[];
   /** G4: sandbox profile for run_command — "off" (default) | "readonly" | "workspace-write"; optional wrapper override. */
-  sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker" };
+  sandbox?: { mode?: "readonly" | "workspace-write" | "off"; wrapper?: "sandbox-exec" | "bwrap" | "docker"; strict?: boolean };
   /** G7: runtime thresholds (rc "limits"). */
   limits?: AgentConfig["limits"];
   /** Auto-compaction (H-10): false = off, object = overrides. */

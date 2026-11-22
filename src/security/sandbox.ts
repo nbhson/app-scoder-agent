@@ -3,13 +3,15 @@
  * detection-first, không hard-depend).
  *
  * Profiles:
- *  - "readonly"        — đọc được mọi nơi, ghi chỉ trong workspace
- *  - "workspace-write" — ghi trong workspace (+TMPDIR), mạng vẫn mở
+ *  - "readonly"        — đọc mọi nơi, KHÔNG ghi được ở đâu (deny file-write*)
+ *  - "workspace-write" — ghi trong workspace (+/tmp), đọc vẫn mở, mạng vẫn mở
  *
- * Có wrapper binary (sandbox-exec / bwrap / docker) → wrap lệnh. Không có →
- * trả về null (caller chạy trực tiếp + warn). ponytail: docker wrap chỉ build
- * args cơ bản (volume workspace, không network flag) — nâng cấp image/network
- * khi có nhu cầu thực.
+ * Có wrapper binary (sandbox-exec / bwrap / docker) → wrap lệnh. Wrapper thiếu
+ * mà user đã BẬT sandbox một cách tường minh → fail CLOSED (từ chối chạy):
+ * "sandbox bật" là một security promise, âm thầm chạy trần là promise giả.
+ * Opt-out tường minh: sandbox.strict=false (warn + chạy trực tiếp như cũ).
+ * ponytail: docker wrap chỉ build args cơ bản (volume workspace, không network
+ * flag) — nâng cấp image/network khi có nhu cầu thực.
  */
 
 export type SandboxProfile = "readonly" | "workspace-write";
@@ -27,6 +29,11 @@ export interface SandboxConfig {
   wrapper?: SandboxWrapper;
   /** "off" disables sandboxing entirely (default khi không set). */
   mode?: "readonly" | "workspace-write" | "off";
+  /**
+   * When a mode is explicitly on but its wrapper is missing: refuse to run the
+   * command (default). Set false to warn and run unsandboxed instead.
+   */
+  strict?: boolean;
 }
 
 /** Workspace + temp dirs a command may always touch. */
@@ -91,8 +98,8 @@ export function buildSandboxArgv(
 }
 
 /**
- * Detect available wrapper và trả plan, hoặc null khi không sandbox được
- * (caller: chạy trực tiếp + warn — never hard-fail).
+ * Detect available wrapper và trả plan, hoặc null khi không bật sandbox
+ * (mode off/không set). Wrapper thiếu được xử ở resolveSandbox (fail closed).
  */
 export function planSandbox(cfg: SandboxConfig, workdir: string, command: string): SandboxPlan | null {
   const mode = cfg.mode ?? "off";
@@ -102,8 +109,9 @@ export function planSandbox(cfg: SandboxConfig, workdir: string, command: string
 }
 
 /**
- * Spawn argv qua sandbox khi có plan; nếu wrapper binary thiếu trên máy →
- * null (fallback chạy trực tiếp). Async để dùng which-like check nhẹ.
+ * Spawn argv qua sandbox khi có plan; wrapper binary thiếu trên máy →
+ * argv null + failClosed (mode được bật tường minh → caller phải từ chối
+ * chạy; strict:false → warn-and-run như trước).
  */
 // P-perf (item 24): wrapper presence is a machine property, not a command
 // property — `spawnSync which` used to launch a child process (5–20 ms) on
@@ -114,9 +122,12 @@ export async function resolveSandbox(
   cfg: SandboxConfig,
   workdir: string,
   command: string,
-): Promise<{ argv: string[]; wrapper: SandboxWrapper } | { argv: null; wrapper: null; reason: string }> {
+): Promise<
+  | { argv: string[]; wrapper: SandboxWrapper; failClosed: false }
+  | { argv: null; wrapper: null; reason: string; failClosed: boolean }
+> {
   const plan = planSandbox(cfg, workdir, command);
-  if (!plan) return { argv: null, wrapper: null, reason: "sandbox off" };
+  if (!plan) return { argv: null, wrapper: null, reason: "sandbox off", failClosed: false };
   let present = wrapperPresent.get(plan.wrapper);
   if (present === undefined) {
     // `which` không có trên Windows — dùng `where`.
@@ -125,9 +136,19 @@ export async function resolveSandbox(
     wrapperPresent.set(plan.wrapper, present);
   }
   if (!present) {
-    return { argv: null, wrapper: null, reason: `${plan.wrapper} not found — running unsandboxed` };
+    // P0-sandbox: an explicitly-requested sandbox that silently vanishes is a
+    // false promise — fail closed unless the user opted out via strict:false.
+    const failClosed = cfg.strict !== false;
+    return {
+      argv: null,
+      wrapper: null,
+      reason: failClosed
+        ? `${plan.wrapper} not found — refusing to run unsandboxed (sandbox.strict=false to override)`
+        : `${plan.wrapper} not found — running unsandboxed`,
+      failClosed,
+    };
   }
-  return { argv: plan.argv.map(String), wrapper: plan.wrapper };
+  return { argv: plan.argv.map(String), wrapper: plan.wrapper, failClosed: false };
 }
 
 import { spawnSync } from "node:child_process";
