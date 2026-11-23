@@ -17,6 +17,9 @@ export interface UsageEvent {
   sessionId: string;
   model: string;
   provider?: string;
+  /** P2.2: router attribution — absent when the router was off (v1 logs). */
+  ref?: string;
+  tier?: "small" | "large";
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
@@ -43,6 +46,9 @@ export function extractUsageEvents(sessionId: string, events: Array<Record<strin
       sessionId,
       model: typeof ev.model === "string" ? ev.model : "unknown",
       provider: typeof ev.provider === "string" ? ev.provider : undefined,
+      // P2.2: optional router attribution (absent in pre-router logs).
+      ref: typeof ev.ref === "string" ? ev.ref : undefined,
+      tier: ev.tier === "small" || ev.tier === "large" ? ev.tier : undefined,
       inputTokens: num(usage.input_tokens ?? usage.prompt_tokens),
       outputTokens: num(usage.output_tokens ?? usage.completion_tokens),
       cachedTokens: num(usage.cached_tokens),
@@ -111,6 +117,80 @@ export function loadSessionUsage(workdir: string, sessionId: string): UsageEvent
   const path = resolve(workdir, ".scoder/logs", `${sessionId}.jsonl`);
   const events = readJsonlLog(path);
   return events ? extractUsageEvents(sessionId, events) : [];
+}
+
+// ── P2.2: router decisions from JSONL (`route_decision` events) ─────────────
+
+/** One `route_decision` event (emitted only in AUTO mode). */
+export interface RouteEvent {
+  ts?: string;
+  sessionId: string;
+  step: number;
+  tier: "small" | "large";
+  ref: string;
+  model: string;
+  provider?: string;
+  reason: string;
+  switched: boolean;
+  judgeVerdict?: string;
+}
+
+/** Extract `route_decision` events from raw log lines (empty if no router). */
+export function extractRouteEvents(sessionId: string, events: Array<Record<string, unknown>>): RouteEvent[] {
+  const out: RouteEvent[] = [];
+  for (const ev of events) {
+    if (ev.type !== "route_decision") continue;
+    if (ev.tier !== "small" && ev.tier !== "large") continue;
+    const judge = (ev.judge ?? {}) as Record<string, unknown>;
+    out.push({
+      ts: typeof ev.ts === "string" ? ev.ts : undefined,
+      sessionId,
+      step: typeof ev.step === "number" ? ev.step : 0,
+      tier: ev.tier,
+      ref: typeof ev.ref === "string" ? ev.ref : "unknown",
+      model: typeof ev.model === "string" ? ev.model : "unknown",
+      provider: typeof ev.provider === "string" ? ev.provider : undefined,
+      reason: typeof ev.reason === "string" ? ev.reason : "",
+      switched: ev.switched === true,
+      judgeVerdict: typeof judge.verdict === "string" ? judge.verdict : undefined,
+    });
+  }
+  return out;
+}
+
+/** Per-model breakdown of usage events (keyed by ref when present, else model id). */
+export interface ModelBreakdown {
+  key: string;
+  tier?: "small" | "large";
+  aggregate: UsageAggregate;
+}
+
+/** Group usage events by model (ref if the router attributed it, else model id). */
+export function breakdownByModel(events: UsageEvent[], overrides: Record<string, ModelPricing> = {}): ModelBreakdown[] {
+  const byKey = new Map<string, { tier?: "small" | "large"; evs: UsageEvent[] }>();
+  for (const ev of events) {
+    const key = ev.ref ?? ev.model;
+    const bucket = byKey.get(key) ?? { tier: ev.tier, evs: [] };
+    bucket.evs.push(ev);
+    byKey.set(key, bucket);
+  }
+  return [...byKey.entries()]
+    .map(([key, { tier, evs }]) => ({ key, tier, aggregate: aggregateUsage(evs, overrides) }))
+    .sort((a, b) => b.aggregate.costUsd - a.aggregate.costUsd);
+}
+
+/** Render a per-model cost table (used by `scoder cost --router`, plan §6). */
+export function formatModelBreakdown(breaks: ModelBreakdown[]): string {
+  if (breaks.length === 0) return "No routed usage recorded.";
+  const lines = ["  MODEL  calls   in        out       cost"];
+  for (const b of breaks) {
+    const t = b.tier ? ` (${b.tier})` : "";
+    lines.push(
+      `  ${b.key}${t}  ${b.aggregate.calls}  ${b.aggregate.inputTokens.toLocaleString("en-US")}  ` +
+        `${b.aggregate.outputTokens.toLocaleString("en-US")}  $${b.aggregate.costUsd.toFixed(4)}`,
+    );
+  }
+  return lines.join("\n");
 }
 
 // ── Session metrics (latency / success / guardrails) ────────────────────────
@@ -242,5 +322,112 @@ export function formatCostReport(sessionCosts: SessionCost[]): string {
 /** Join a path under the workdir's log dir (exported for tests). */
 export function logFilePath(workdir: string, sessionId: string): string {
   return join(workdir, ".scoder/logs", `${sessionId}.jsonl`);
+}
+
+/**
+ * P2.2 `scoder cost --router`: collect per-model breakdown, route-decision
+ * counts and a "would have cost at large" savings estimate for the selection.
+ */
+export interface RouterReport {
+  models: ModelBreakdown[];
+  decisions: number;
+  small: number;
+  large: number;
+  switched: number;
+  judge: number;
+  /** actual cost of routed calls */
+  actualUsd: number;
+  /** same tokens priced at the most expensive large model actually used */
+  hypotheticalUsd: number;
+}
+
+const EMPTY_ROUTER_REPORT: Omit<RouterReport, "models"> = {
+  decisions: 0,
+  small: 0,
+  large: 0,
+  switched: 0,
+  judge: 0,
+  actualUsd: 0,
+  hypotheticalUsd: 0,
+};
+
+export function buildRouterReport(
+  workdir: string,
+  opts: { sessionId?: string; last?: number; pricingOverrides?: Record<string, ModelPricing> } = {},
+): RouterReport {
+  const ids = resolveSessionIds(workdir, opts);
+  const allUsage: UsageEvent[] = [];
+  const allRoutes: RouteEvent[] = [];
+  for (const id of ids) {
+    const events = readJsonlLog(resolve(workdir, ".scoder/logs", `${id}.jsonl`)) ?? [];
+    allUsage.push(...extractUsageEvents(id, events));
+    allRoutes.push(...extractRouteEvents(id, events));
+  }
+  const models = breakdownByModel(allUsage, opts.pricingOverrides);
+  if (allRoutes.length === 0) return { models, ...EMPTY_ROUTER_REPORT };
+
+  let small = 0;
+  let large = 0;
+  let switched = 0;
+  let judge = 0;
+  for (const r of allRoutes) {
+    if (r.tier === "small") small++;
+    else large++;
+    if (r.switched) switched++;
+    if (r.judgeVerdict) judge++;
+  }
+  // The dearest large model actually used becomes the "always-large" baseline.
+  const worst = pickWorstPriced(models.filter((m) => m.tier === "large"), opts.pricingOverrides);
+  const routed = allUsage.filter((u) => u.tier !== undefined);
+  const actualUsd = aggregateUsage(routed, opts.pricingOverrides).costUsd;
+  let hypotheticalUsd = 0;
+  if (worst) {
+    for (const u of routed) {
+      hypotheticalUsd += (u.inputTokens / 1_000_000) * worst.input + (u.outputTokens / 1_000_000) * worst.output;
+    }
+  }
+  return {
+    models,
+    decisions: allRoutes.length,
+    small,
+    large,
+    switched,
+    judge,
+    actualUsd: Math.round(actualUsd * 10_000) / 10_000,
+    hypotheticalUsd: Math.round(hypotheticalUsd * 10_000) / 10_000,
+  };
+}
+
+function resolveSessionIds(
+  workdir: string,
+  opts: { sessionId?: string; last?: number },
+): string[] {
+  if (opts.sessionId) return [opts.sessionId];
+  const all = listLogSessions(workdir);
+  if (typeof opts.last === "number") return all.slice(0, Math.max(0, opts.last));
+  return all;
+}
+
+function pickWorstPriced(largeModels: ModelBreakdown[], overrides: Record<string, ModelPricing> = {}): ModelPricing | null {
+  let worst: ModelPricing | null = null;
+  for (const m of largeModels) {
+    const p = resolveModelPricing(m.key.split("/").pop() ?? m.key, overrides);
+    if (!worst || p.output > worst.output) worst = p;
+  }
+  return worst;
+}
+
+/** Render the `--router` report block (plan §6). */
+export function formatRouterReport(r: RouterReport): string {
+  if (r.decisions === 0) {
+    return "ROUTER: no route_decision events in these sessions (router off or PINNED mode).";
+  }
+  const saved = r.hypotheticalUsd - r.actualUsd;
+  const pct = r.hypotheticalUsd > 0 ? Math.round((saved / r.hypotheticalUsd) * 100) : 0;
+  return [
+    `ROUTER (${r.decisions} decisions)  small=${r.small}  large=${r.large}  switches=${r.switched}  judge=${r.judge}`,
+    formatModelBreakdown(r.models),
+    `  routed cost≈$${r.actualUsd.toFixed(4)}  always-large≈$${r.hypotheticalUsd.toFixed(4)}  saved≈$${saved.toFixed(4)} (${pct}%)`,
+  ].join("\n");
 }
 

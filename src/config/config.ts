@@ -11,6 +11,8 @@ import {
   type ProviderDef,
 } from "../llm/provider-registry.js";
 import { registerConfigModels, type ModelInfo } from "../llm/model-catalog.js";
+import { resolveRouterTiers } from "../router/tiers.js";
+import type { RouteDecisionListener, RouterConfig, RouterJudgeConfig, RouterRule, TurnContext } from "../router/types.js";
 import { applyProjectTrust, guardSavedApprovals } from "./trust.js";
 import type { Reporter } from "../io/reporter.js";
 
@@ -49,6 +51,26 @@ export interface AgentConfig {
   agent?: string;
   /** v2: model routing per primary agent — { plan, build, review } (rc "routing"). */
   routing?: { plan?: string; build?: string; review?: string };
+  /**
+   * P2.2: rc `router` block (validated). The runtime is only built when
+   * `enabled` — otherwise behavior is byte-identical to a router-less build.
+   */
+  router?: RouterConfig;
+  /**
+   * P2.2 §4c: startup mode. "auto" only when `"model": "auto"` resolved to
+   * valid tiers; "pinned" = the human picked a model and the router idles.
+   */
+  routerMode?: "auto" | "pinned";
+  /**
+   * Internal seam (like `clientFactory`): the Agent injects its event sink so
+   * the RouterRuntime can emit `route_decision` without importing agent code.
+   */
+  onRoute?: RouteDecisionListener;
+  /**
+   * Internal seam: live turn signals (step/phase/build streaks) pulled by
+   * the RouterRuntime right before each routed call.
+   */
+  routerSensors?: () => TurnContext;
   /** v2: false disables the repo-map injection into the system prompt (default on). */
   repoMap?: boolean;
   /**
@@ -190,6 +212,8 @@ interface RcFile {
   agent?: string;
   /** v2: model routing per agent name — { "plan": "provider/model", "build": …, "review": … }. */
   routing?: { plan?: string; build?: string; review?: string };
+  /** P2.2: opencode-flavoured router block (validated by `parseRouter`). */
+  router?: unknown;
   /** v2: false disables repo-map injection into the system prompt (default on). */
   repoMap?: boolean;
   /** WARMUP (plan/WARMUP-PLAN.md): false = không gửi request prefill nền khi mở REPL/TUI. */
@@ -543,6 +567,137 @@ export function loadMergedProviders(workdir: string): Record<string, ProviderDef
   return { ...parseCustomProviders(rc.providers), ...parseProviderConfig(rc.provider) };
 }
 
+// ── P2.2 (plan/P2-02 §5): rc `router` — validate like parseLimits ──────────
+
+const asObj = (v: unknown): Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
+/** `signals` / `escalate`: whitelisted non-negative ints; junk values dropped. */
+function parseRouterNumbers(
+  raw: unknown,
+  keys: readonly string[],
+  label: string,
+): Record<string, number> | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    console.error(`⚠  router.${label} must be an object — ignored`);
+    return undefined;
+  }
+  const out: Record<string, number> = {};
+  for (const k of keys) {
+    const v = (raw as Record<string, unknown>)[k];
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) out[k] = Math.floor(v);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseRouterTiers(raw: unknown): { small?: string[]; large?: string[] } | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    console.error("⚠  router.tiers must be an object of arrays — ignored");
+    return undefined;
+  }
+  const t: { small?: string[]; large?: string[] } = {};
+  for (const k of ["small", "large"] as const) {
+    const arr = (raw as Record<string, unknown>)[k];
+    if (arr === undefined) continue;
+    if (!Array.isArray(arr)) {
+      console.error(`⚠  router.tiers.${k} must be an array of "provider/model" — ignored`);
+      continue;
+    }
+    const kept = arr.filter((x): x is string => typeof x === "string" && x.trim() !== "");
+    if (kept.length !== arr.length) console.error(`⚠  router.tiers.${k}: non-string entries dropped`);
+    if (kept.length > 0) t[k] = kept.map((x) => x.trim());
+  }
+  return Object.keys(t).length > 0 ? t : undefined;
+}
+
+function parseRouterRules(raw: unknown): RouterRule[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    console.error("⚠  router.rules must be an array — ignored");
+    return undefined;
+  }
+  const out: RouterRule[] = [];
+  for (const item of raw) {
+    const o = asObj(item);
+    if (typeof o.when === "string" && o.when.trim() && (o.use === "small" || o.use === "large")) {
+      out.push({ when: o.when.trim(), use: o.use });
+    } else {
+      console.error("⚠  ignoring router rule — need { when: \"phase == edit\", use: \"small\"|\"large\" }");
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** `judge: null` → 3-layer pipeline (default); object → 4-layer; missing `model`
+ *  = cheapest small (resolved by the runtime in Phase E). */
+function parseRouterJudge(raw: unknown, parent: Record<string, unknown>): RouterJudgeConfig | null | undefined {
+  if (raw === null) return null;
+  if (raw === undefined) {
+    if (parent.classifier === true) {
+      // Migration (plan §3): the legacy boolean means "gray judge on the cheap small".
+      console.error('⚠  router.classifier is deprecated — use "judge": { "scope": "gray" } (mapped automatically)');
+      return { model: "", scope: "gray" };
+    }
+    return undefined;
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    console.error("⚠  router.judge must be null or an object — ignored");
+    return undefined;
+  }
+  const j = raw as Record<string, unknown>;
+  const out: RouterJudgeConfig = { model: typeof j.model === "string" ? j.model.trim() : "" };
+  if (j.scope === "gray" || j.scope === "first" || j.scope === "always") out.scope = j.scope;
+  const ms = j.timeoutMs;
+  if (typeof ms === "number" && Number.isFinite(ms) && ms > 0) out.timeoutMs = Math.floor(ms);
+  const c = j.minConfidence;
+  if (typeof c === "number" && Number.isFinite(c) && c >= 0 && c <= 1) out.minConfidence = c;
+  return out;
+}
+
+export function parseRouter(raw: unknown): RouterConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    console.error('⚠  rc "router" must be an object — ignored');
+    return undefined;
+  }
+  const r = raw as Record<string, unknown>;
+  const cfg: RouterConfig = {};
+  if (typeof r.enabled === "boolean") cfg.enabled = r.enabled;
+  if (typeof r.fallback === "string" && r.fallback.trim()) cfg.fallback = r.fallback.trim();
+  const tiers = parseRouterTiers(r.tiers);
+  if (tiers) cfg.tiers = tiers;
+  const rules = parseRouterRules(r.rules);
+  if (rules) cfg.rules = rules;
+  const signals = parseRouterNumbers(r.signals, ["smallMaxCtxTokens", "largeToolSchemaChars"], "signals");
+  if (signals) cfg.signals = signals as RouterConfig["signals"];
+  const escalate = parseRouterNumbers(r.escalate, ["buildFails", "stickyMinSteps"], "escalate");
+  if (escalate) cfg.escalate = escalate as RouterConfig["escalate"];
+  const judge = parseRouterJudge(r.judge, r);
+  if (judge !== undefined) cfg.judge = judge;
+  return cfg;
+}
+
+/** Turn `"model": "auto"` into the fallback ref — or into nothing (warn). */
+function resolveAutoStart(
+  routerCfg: RouterConfig | undefined,
+  custom: Record<string, ProviderDef>,
+  activeId: string,
+): string | undefined {
+  if (!routerCfg?.enabled) {
+    console.error('⚠  model "auto" needs "router": { "enabled": true } — routing off, keeping the default model');
+    return undefined;
+  }
+  const t = resolveRouterTiers(routerCfg, custom, activeId);
+  for (const w of t.warnings) console.error(`⚠  ${w}`);
+  if (!t.fallback) {
+    console.error('⚠  router: "model": "auto" needs router.enabled + valid tier models — routing off, keeping the default model');
+    return undefined;
+  }
+  return t.fallback.ref;
+}
+
 /** Flatten rc-config model metadata into catalog-shaped entries (P2.1 §5). */
 function buildConfigModels(custom: Record<string, ProviderDef>): Record<string, ModelInfo> {
   const out: Record<string, ModelInfo> = {};
@@ -612,7 +767,22 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   // declared in a configured `models` map, legacy `providers.<id>` and the
   // new opencode `provider` block all merge into one map.
   const customProviders = { ...parseCustomProviders(rc.providers), ...parseProviderConfig(rcProviderBlock) };
-  const rawModel = overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? "";
+  // P2.2 §4c: `"model": "auto"` + enabled router + valid tiers → AUTO mode.
+  // The sentinel is rewritten to the tier fallback ref BEFORE the normal
+  // resolution chain so baseUrl/key/context behave exactly as if the user had
+  // typed that ref. If auto cannot be honored it becomes "" (provider default)
+  // with a visible warning — there is never a model literally named "auto".
+  const routerCfg = parseRouter(rc.router);
+  const rawModel0 = overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? "";
+  let rawModel = rawModel0;
+  let routerMode: AgentConfig["routerMode"];
+  if (rawModel0 === "auto") {
+    const autoRef = resolveAutoStart(routerCfg, customProviders, rcProviderSelector ?? (isAnthropic ? "anthropic" : "openai"));
+    rawModel = autoRef ?? "";
+    routerMode = autoRef ? "auto" : undefined;
+  } else if (routerCfg?.enabled) {
+    routerMode = "pinned"; // router armed but the human pinned a model — idle until `/model auto`
+  }
   const [providerPrefix, modelFromSlash] = splitProviderModel(rawModel);
   let refExplicit = providerPrefix !== null;
   let providerId =
@@ -730,6 +900,8 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     snapshots: rc.snapshots,
     agent: overrides.agent ?? process.env.SCODER_AGENT ?? rc.agent,
     routing: rc.routing,
+    router: routerCfg,
+    routerMode,
     repoMap: rc.repoMap,
     warmup: rc.warmup,
     promptVersion: rc.promptVersion,

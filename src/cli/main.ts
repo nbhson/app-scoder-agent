@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { loadConfig } from "../config/config.js";
 import { listSessions, resolveSessionId } from "../session/session.js";
 import { JsonlLogger } from "../session/logger.js";
-import { collectUsage, formatCostReport } from "../session/cost.js";
+import { collectUsage, formatCostReport, buildRouterReport, formatRouterReport } from "../session/cost.js";
 import { getVersion as getPackageVersion } from "../shared/version.js";
 import { selectableAgents } from "../context/agents.js";
 import * as ui from "../io/terminal.js";
@@ -151,6 +151,15 @@ async function main(): Promise<void> {
       pricingOverrides: cfg.modelPricing,
     });
     console.log(formatCostReport(sessionCosts));
+    // P2.2: `--router` adds the per-model/tier breakdown + savings estimate.
+    if (args.costRouter) {
+      const report = buildRouterReport(cfg.workdir, {
+        sessionId: args.costSession,
+        last: args.costLast,
+        pricingOverrides: cfg.modelPricing,
+      });
+      console.log(formatRouterReport(report));
+    }
     return;
   }
 

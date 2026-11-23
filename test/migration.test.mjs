@@ -69,8 +69,8 @@ describe("config migration — 0.8.x → 0.9.0", () => {
 });
 
 describe("event schema backward compat", () => {
-  it("EVENT_SCHEMA_VERSION is 2", () => {
-    assert.equal(EVENT_SCHEMA_VERSION, 2);
+  it("EVENT_SCHEMA_VERSION is 3", () => {
+    assert.equal(EVENT_SCHEMA_VERSION, 3);
   });
 
   it("old run_start without v2 fields (no agent, no schemaVersion) still folds", () => {

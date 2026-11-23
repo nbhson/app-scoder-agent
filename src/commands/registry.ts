@@ -231,10 +231,32 @@ export function coreCommands(): CommandEntry[] {
         const label = def?.models?.[cfg.model]?.name ?? def?.displayName;
         const ctx = lookupModel(def?.id ?? cfg.provider, cfg.model)?.contextWindow ?? lookupModel(cfg.provider, cfg.model)?.contextWindow;
         const ctxStr = ctx ? ` · ctx ${Math.round(ctx / 1000)}k` : "";
+        // P2.2: with a live router, say which MODE owns the next turn.
+        const rs = host.agent()?.routerStatus?.();
+        const routerLine = rs ? `router: ${rs.mode} · active ${rs.activeRef}\n` : "";
         notice(
-          `model: ${cfg.model}${label ? ` (${label})` : ""}${ctxStr} · provider: ${def?.id ?? cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}\n` +
-          `swap: /model <provider/model> · list: scoder models`,
+          `${routerLine}model: ${cfg.model}${label ? ` (${label})` : ""}${ctxStr} · provider: ${def?.id ?? cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}\n` +
+          `swap: /model <provider/model> · auto: /model auto · list: scoder models`,
         );
+      },
+    },
+    {
+      name: "/router",
+      description: "model router status — mode, tiers and the last decision",
+      run(_slash, host, notice) {
+        const rs = host.agent()?.routerStatus?.();
+        if (!rs) {
+          notice('router inactive — enable with rc "router": { "enabled": true } (see plan/P2-02)', "warn");
+          return;
+        }
+        const tiers = rs.candidates.map((m) => {
+          const c = m.contextWindow ? ` · ctx ${Math.round(m.contextWindow / 1000)}k` : "";
+          return `  ${m.tier.padEnd(5)} ${m.ref}${c}${m.toolCall ? "" : " · no tool calls"}`;
+        });
+        const last = rs.last
+          ? `last: step ${rs.last.step} → ${rs.last.tier} (${rs.last.ref})\n  ${rs.last.reason}`
+          : "last: none yet (auto routes on the next turn)";
+        notice([`mode: ${rs.mode} · active: ${rs.activeRef}`, ...tiers, last].join("\n"));
       },
     },
     {

@@ -125,5 +125,18 @@
 
   "modelPricing": {
     "gpt-4.1-nano": { "input": 0.075, "output": 0.15 }
+  },
+
+  "router": {
+    "enabled": false,
+    "tiers": {
+      "small": ["box-api/qwen3.8-flash", "box-api/kimi-k2.7-code"],
+      "large": ["box-api/kimi-k3"]
+    },
+    "fallback": "box-api/kimi-k3",
+    "signals": { "smallMaxCtxTokens": 16000, "largeToolSchemaChars": 30000 },
+    "rules": [{ "when": "phase == edit", "use": "large" }],
+    "escalate": { "buildFails": 2, "stickyMinSteps": 2 },
+    "judge": null
   }
 }

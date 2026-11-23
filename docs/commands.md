@@ -11,7 +11,7 @@ scoder serve [--port]        HTTP server mode — POST tasks, stream progress vi
 scoder list                  List saved sessions
 scoder resume <id|last>      Resume a saved session
 scoder logs [id|last]        View session's JSONL log
-scoder cost [--last <n>]     Token usage & estimated cost
+scoder cost [--last <n>] [--router]  Token usage & estimated cost
 scoder models [provider]     Model catalog (context window, pricing)
 scoder mcp <list|add|remove|test|import>   MCP server management
 scoder trust [path|--list|--revoke <path>]   Project-config trust
@@ -105,7 +105,8 @@ scoder --no-save -y "run the migration"
 | `/compact` | Summarize older history now (manual compaction) |
 | `/btw <question>` | Side question answered from session context — no tools, kept out of history; works while a task runs |
 | `/cost` | Session token usage |
-| `/model` | Active model/provider/build |
+| `/model` | Active model/provider/build; `/model auto` enables routing, `/model <provider/model>` pins |
+| `/router` | Model router status: mode, tiers, last decision (needs `router.enabled`) |
 | `/skill [name]` | List discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
 | `/permission <mode>` | Switch permission mode — **Shift+P** cycles auto/ask/readonly in the TUI (input empty) |

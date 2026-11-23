@@ -31,6 +31,8 @@ export interface CliArgs {
   modelsProvider?: string;
   modelsRefresh?: boolean;
   costLast?: number;
+  /** P2.2: `scoder cost --router` — per-model/tier breakdown + route summary. */
+  costRouter?: boolean;
   serveHost?: string;
   servePort?: number;
   help: boolean;
@@ -53,7 +55,7 @@ USAGE
                                     synced from models.dev, cached 24h
   scoder resume <id|last> [task]   Resume a saved session (optionally with a follow-up task)
   scoder logs [id|last] [filter]   Print a session's JSONL log (requires --log-file runs)
-  scoder cost [--session <id>] [--last <n>]
+  scoder cost [--session <id>] [--last <n>] [--router]
                                     Token usage & estimated cost from JSONL logs
   scoder serve [--port <n>] [--host <addr>]
                                     Run as an HTTP server: POST tasks, stream
@@ -78,6 +80,7 @@ OPTIONS
                             (or set SCODER_LOG_FILE=1 / =/path/to/log.jsonl)
   --session <id>            (cost) Aggregate usage of one specific session
   --last <n>                (cost) Aggregate usage of the n most recent sessions
+  --router                  (cost) Per-model breakdown + routing savings (P2.2)
   -h, --help                Show this help
   -v, --version             Show version
 
@@ -165,6 +168,9 @@ export function parseArgs(argv: string[]): CliArgs {
       }
       case "--log-file":
         args.logFile = true;
+        break;
+      case "--router":
+        args.costRouter = true;
         break;
       case "--session":
         args.costSession = next();

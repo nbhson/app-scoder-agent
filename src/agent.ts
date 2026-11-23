@@ -21,7 +21,11 @@ import { probeContextWindow, type ProbedWindow } from "./llm/context-probe.js";
 import { promptMetrics, type PromptMetrics } from "./llm/prompt-metrics.js";
 import { JsonlLogger } from "./session/logger.js";
 import { resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
-import { loadRcFile, isLocalBaseUrl, loadMergedProviders } from "./config/config.js";
+import { loadRcFile, isLocalBaseUrl, loadMergedProviders, parseRouter } from "./config/config.js";
+import { RouterRuntime } from "./router/router-runtime.js";
+import { TurnSensors } from "./router/sensors.js";
+import { resolveRouterTiers } from "./router/tiers.js";
+import type { RouteDecision, RouterModel } from "./router/types.js";
 import type { McpManager } from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./context/skills.js";
@@ -122,6 +126,15 @@ export class Agent {
   /** Steering inbox — user input delivered at safe step boundaries (H-08, I5 module). */
   private steerInbox = new SteeringInbox();
   private runSignal = new AbortController();
+  /**
+   * P2.2: turn signals for the RouterRuntime (step/phase/build-fail streaks),
+   * fed by snooping this agent's own event stream — `routerLive` only when a
+   * RouterRuntime was actually constructed.
+   */
+  private turnSensors = new TurnSensors();
+  private routerLive = false;
+  /** When set, `/model <x>` and `/model auto` go through it — never rebuild. */
+  private router: RouterRuntime | null = null;
   /** Optional structured-event sink (used by the HTTP/SSE server frontend). */
   onEvent: ((ev: AgentEvent) => void) | null = null;
   /** Live subagent children by id — routes tagged permission answers back (task relay, T-03). */
@@ -326,7 +339,14 @@ export class Agent {
     this.guardrails = createGuardrailEngine(config.guardrails ?? {}, (d) => this.logGuardrailDecision(d));
     // I-01/I-05/I-12: runtime selection lives in agent/provider-runtime.ts so
     // `/model` hot-swap and construction cannot drift apart.
+    // P2.2: the router's seams must be on the config BEFORE construction —
+    // RouterRuntime captures them in its options. Subagent children re-wire
+    // them in their own constructors, so each Agent owns its sensors.
+    config.routerSensors = () => this.turnSensors.context();
+    config.onRoute = (d) => this.handleRouteDecision(d);
     this.client = createClientRuntime(config);
+    this.router = this.client instanceof RouterRuntime ? this.client : null;
+    this.routerLive = this.router !== null;
     this.permissions = this.buildPermissionChecker(config.permissionMode);
     this.ctx = {
       workdir: config.workdir,
@@ -393,6 +413,18 @@ export class Agent {
           this.config.mcpServers = servers;
           if (this.mcp) {
             void this.mcp.applyConfig(servers).catch(() => {});
+          }
+          // P2.2: sửa `router.tiers` giữa session → decision lượt kế dùng
+          // tier mới (setTiers giữa nguyên hysteresis + client cache).
+          const nextRouter = parseRouter(rc.router);
+          this.config.router = nextRouter;
+          if (this.router && nextRouter?.enabled) {
+            const t = resolveRouterTiers(
+              nextRouter,
+              loadMergedProviders(config.workdir),
+              this.config.providerDef?.id ?? this.config.provider,
+            );
+            if (t.fallback) this.router.setTiers(t.models, t.fallback.ref);
           }
         }
       });
@@ -530,7 +562,21 @@ export class Agent {
 
   /** Emit one structured run event to the sink (if attached). */
   private emit(ev: AgentEvent): void {
+    // P2.2: the router's turn signals are derived by *listening* to the very
+    // events this agent already emits (step/tool_call/build/…) — no parallel
+    // bookkeeping. PINNED mode skips even the switch statement: zero overhead.
+    if (this.routerLive) this.turnSensors.track(ev);
     this.onEvent?.(ev);
+  }
+
+  /**
+   * P2.2 §6: one router decision for the turn about to run → AgentEvent +
+   * JSONL. `route_decision` is additive in schema v3; readers ignore unknown
+   * types, so old sessions replay unchanged.
+   */
+  private handleRouteDecision(d: RouteDecision): void {
+    this.emit({ type: "route_decision", ...d });
+    this.logger.log({ type: "route_decision", ...d });
   }
 
   /**
@@ -727,6 +773,12 @@ export class Agent {
       type: "llm_usage",
       model: this.client.model,
       provider: this.config.provider,
+      // P2.2: with routing live, the LAST decision is this call's route —
+      // persist ref/tier so `scoder cost --router` can attribute per-model
+      // without correlating timestamps (which drift between judge/aux calls).
+      ...(this.router?.lastRouteDecision
+        ? { ref: this.router.lastRouteDecision.ref, tier: this.router.lastRouteDecision.tier }
+        : {}),
       usage: {
         input_tokens: input,
         output_tokens: output,
@@ -1245,6 +1297,7 @@ export class Agent {
       schemaVersion: EVENT_SCHEMA_VERSION,
       agent: this.config.agent ?? "build",
       ...(quiet ? { quiet: true } : {}),
+      ...(this.router?.routerMode === "auto" ? { routingMode: "auto" as const } : {}),
     });
   }
 
@@ -1712,6 +1765,10 @@ export class Agent {
    * syntax) → rebuild the runtime from the registry. Returns a notice line.
    */
   setModel(model: string): string {
+    // P2.2: a live RouterRuntime OWNS the client cache + routing state —
+    // rebuilding the runtime here would silently drop both. Delegate:
+    // "auto" turns routing on, anything else pins (router's own warm path).
+    if (this.router) return this.setRouterModel(this.router, model);
     const [prov, id] = splitProviderModel(model);
     if (!prov || prov === this.config.provider) {
       const m = id ?? model;
@@ -1746,6 +1803,43 @@ export class Agent {
     const declared = resolved.def.models;
     const undeclared = declared && Object.keys(declared).length > 0 && !declared[id] ? ` · warn: "${id}" not declared in provider "${prov}"` : "";
     return `model → ${id} (provider ${prov}${endpoint})${undeclared}`;
+  }
+
+  /**
+   * P2.2 §4c: `/model` while a RouterRuntime is live. "auto" hands control to
+   * the pipeline; a tier ref (or bare unique id) pins it; anything else pins
+   * as an external model — all inside the runtime, no rebuild.
+   */
+  private setRouterModel(router: RouterRuntime, model: string): string {
+    const before = router.candidates.length;
+    router.setModel(model);
+    this.dropProbedWindow();
+    if (model === "auto") {
+      const tiers = router.candidates.map((m) => `${m.tier[0]}:${m.ref}`).join(" ");
+      return `routing → auto · ${tiers}`;
+    }
+    const external = router.candidates.length > before ? " · warn: not a tier model" : "";
+    return `model → ${router.activeRef} · pinned${external} · "/model auto" resumes routing`;
+  }
+
+  /**
+   * P2.2: `/router` + `/model` introspection — null when no RouterRuntime
+   * exists (router off), the live snapshot (mode/active/tiers/last decision)
+   * otherwise. Read-only: commands must not be able to mutate routing.
+   */
+  routerStatus(): {
+    mode: "auto" | "pinned";
+    activeRef: string;
+    candidates: readonly RouterModel[];
+    last: RouteDecision | null;
+  } | null {
+    if (!this.router) return null;
+    return {
+      mode: this.router.routerMode,
+      activeRef: this.router.activeRef,
+      candidates: this.router.candidates,
+      last: this.router.lastRouteDecision,
+    };
   }
 
   private finish(

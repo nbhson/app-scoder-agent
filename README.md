@@ -52,7 +52,7 @@ export OPENAI_BASE_URL=https://api.openai.com/v1  # optional, for custom endpoin
 # Run a task
 scoder "add a ping function to src/network.ts"
 
-# Interactive REPL (supports /help, /clear, /compact, /btw, /cost, /model, /skill, /mcp, /permission)
+# Interactive REPL (supports /help, /clear, /compact, /btw, /cost, /model, /router, /skill, /mcp, /permission)
 scoder
 
 # Full-screen TUI with rich agent display
@@ -268,7 +268,8 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | `/compact` | summarize older history now (manual compaction) |
 | `/btw <question>` | side question answered from session context — no tools, never added to history; works while a task runs (bare `/btw` replays the last answer) |
 | `/cost` | session token usage |
-| `/model` | active model/provider/build |
+| `/model` | active model/provider/build; `/model auto` turns on routing, `/model <provider/model>` pins |
+| `/router` | model router status — mode, tiers, last decision (needs `router.enabled`) |
 | `/skill [name]` | list discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers + tools; exec one directly: `/mcp <server> <tool> [json\|text]` or `/mcp mcp__server__tool [json\|text]` — non-JSON text binds to the tool's first string parameter |
 | `/permission <auto\|ask\|readonly>` | switch permission mode at runtime — **Shift+P** cycles the 3 modes in the TUI (input empty) |
@@ -345,6 +346,10 @@ Thresholds are configurable via `GuardrailOptions` (`textOnlyStreakLimit`, `doom
   20261031-110353-d034  calls=1  in=4,042  out=88  cost≈$0.0022  |  steps=1 llm-avg=7.5s tools=1 guardrails=1 ✓success
 TOTAL (1 session(s))  ...  |  success-rate=1/1
 ```
+
+With the model router (see `docs/configuration.md`), every routed turn also logs a
+`route_decision` event; `scoder cost --router` adds a per-model cost breakdown and an
+estimated saving vs. running everything on the large tier.
 
 The system prompt is versioned (`PROMPT_VERSION` in `src/prompt.ts`) and stamped into every session log (`type: "prompt_version"`) so prompt quality can be compared across versions.
 
@@ -426,7 +431,7 @@ Features:
 - **Header row 2** — (no longer present; phase breadcrumb + metrics moved into the sidebar / status bar to avoid duplication)
 - **Diff cards** (`✎`) — every file write/edit renders as a unified diff (`+` green / `-` red / `@@` cyan hunk headers); the same diff also flows out of the HTTP SSE stream
 - **Status bar** — model, token usage (input/output/cached), scroll position, keybind hints
-- **Slash commands** — `/help`, `/clear`, `/compact`, `/btw`, `/cost`, `/model`, `/skill`, `/mcp`, `/permission` (identical to the REPL; `/theme`, `/log` and `/shortcut` are TUI-only). `/theme` switches for the current session only — to persist a palette, set `theme` in `.scoderrc.json` / `~/.scoder/config.json`, `SCODER_THEME`, or `.scoder/theme.json`
+- **Slash commands** — `/help`, `/clear`, `/compact`, `/btw`, `/cost`, `/model`, `/router`, `/skill`, `/mcp`, `/permission` (identical to the REPL; `/theme`, `/log` and `/shortcut` are TUI-only). `/theme` switches for the current session only — to persist a palette, set `theme` in `.scoderrc.json` / `~/.scoder/config.json`, `SCODER_THEME`, or `.scoder/theme.json`
 - **Multi-turn** — keep typing follow-ups after a task finishes; the conversation context carries over (same as the REPL)
 - **Scrollback** — `PageUp`/`PageDown` page in 0.8-viewport steps, `Home`/`End` jump to top/bottom, `Esc` returns to the live tail (press again to abort); rendering is capped at the last 200 items for smooth scrolling on long runs
 - **Keybinds** — `Enter` send · `Shift+Enter` newline (multi-line input) · `Shift+Tab` cycle agent build→plan→review · `Shift+P` cycle permission auto→ask→readonly (input empty) · `PageUp`/`PageDown` scroll · `Esc` reset scroll / abort · `Ctrl+O` toggle select mode (releases mouse tracking so you can drag-highlight chat text and copy it with `Cmd+C`/`Ctrl+C`) · `Ctrl+C` quit. `Shift+Enter` needs a terminal that reports modified Enter (kitty keyboard protocol — auto-detected at startup; iTerm2-style `\n`, `Alt+Enter` and `Ctrl+J` work everywhere)

@@ -247,6 +247,63 @@ model list — same shape as opencode's config:
   wins on id collisions). In untrusted directories the whole `provider` block
   is dropped until you run `scoder trust`.
 
+## Model Router (`router`)
+
+With several models configured, the router picks one **per agent turn** —
+cheap models for lookups, the large model for edits/builds. Disabled by
+default; enabling it changes nothing until you opt in to routing:
+
+```json
+{
+  "provider": { "...": "see above" },
+  "router": {
+    "enabled": true,
+    "tiers": {
+      "small": ["box-api/qwen3.8-flash", "box-api/kimi-k2.7-code"],
+      "large": ["box-api/kimi-k3"]
+    },
+    "fallback": "box-api/kimi-k3",
+    "signals": { "smallMaxCtxTokens": 16000, "largeToolSchemaChars": 30000 },
+    "rules": [{ "when": "phase == edit", "use": "large" }],
+    "escalate": { "buildFails": 2, "stickyMinSteps": 2 },
+    "judge": null
+  },
+  "model": "auto"
+}
+```
+
+- **Two switches, deliberately.** `"enabled": true` builds the router;
+  routing only runs when the model is `"auto"` (rc / `-m auto` /
+  `/model auto`). A concrete `"model"` = PINNED — byte-identical to the
+  old behavior, zero router overhead, zero `route_decision` events.
+  `/model <provider/model>` pins again mid-session; `/model auto`
+  resumes routing. No restart needed either way.
+- **Decision layers** (win order: pin > rules > judge > score > hysteresis):
+  L1 scores the turn (history size, phase from the last tool call, tool
+  schema weight, plan/wrap-up steps); L2 `rules` are "khi" expressions
+  (`phase|step|tokens|tools` with `== != >= <=`) that force a tier;
+  L3 hysteresis escalates small→large after `buildFails` consecutive build
+  failures (and locks large until the build passes), resists tier
+  flapping within `stickyMinSteps`, and demotes only after 3 clean steps;
+  L4 `judge` (optional, see below) asks a cheap model to name the exact
+  target when L1 is undecided.
+- **Tiers**: refs must be declared in your `provider` block (stricter than
+  `/model` — a tier typo would silently route half your traffic). Bad refs
+  print a warning and are dropped. Without `tiers`, models with declared
+  `cost` auto-split (cheapest half → small). `fallback` (default: the
+  largest-context large model) is the deterministic way home whenever the
+  router is undecided or errors — routing can never fail a run.
+- **`judge`**: `null` (default) = pure 3-layer pipeline, ZERO extra
+  requests. An object `{"model": "box-api/qwen3.8-flash", "scope":
+  "gray", "timeoutMs": 2000, "minConfidence": 0.6}` adds a 4th layer that
+  picks the exact model inside gray-band turns only (`scope`: `gray` |
+  `first` | `always`). Hallucinated refs, low confidence and timeouts fall
+  back to the L1+L2 decision with the verdict audited.
+- **Observability**: every routed turn appends a `route_decision` event to
+  the session JSONL (schema v3). `/router` shows mode, tiers and the last
+  decision; `scoder cost --router` prints the per-model cost breakdown and
+  estimated savings vs. running everything on the large tier.
+
 ## Security Notes
 
 - Never commit `apiKey` in `.scoderrc.json` — add to `.gitignore`

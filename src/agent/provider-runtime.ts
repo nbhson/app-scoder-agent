@@ -12,9 +12,13 @@
  * `apiKey`), which is provider-agnostic and therefore kept.
  */
 import type { AgentConfig } from "../config/config.js";
+import { loadMergedProviders } from "../config/config.js";
 import { LlmClient } from "../llm/llm.js";
 import { AnthropicClient } from "../llm/provider-anthropic.js";
 import type { ProviderDef, ProviderRuntimeContract } from "../llm/provider-registry.js";
+import { RouterRuntime } from "../router/router-runtime.js";
+import { resolveRouterTiers } from "../router/tiers.js";
+import { ROUTER_DEFAULTS, type ResolvedRouterConfig, type RouterModel } from "../router/types.js";
 
 /** I-05: Anthropic reasoning budget = 25% of maxTokens, floor 1024. */
 export function thinkingBudgetFor(config: Pick<AgentConfig, "reasoning" | "maxTokens">): number {
@@ -31,11 +35,20 @@ export function isAnthropicRuntime(config: AgentConfig): boolean {
 /**
  * Build the client for a config. `config.clientFactory` (eval harness, I-12)
  * short-circuits the real providers; it is a factory (not an instance) so
- * subagents each get their own scripted transcript.
+ * subagents each get their own scripted transcript. The factory short-circuits
+ * BEFORE the router too — eval transcripts stay deterministic even with
+ * `router.enabled` (plan P2.2 §1).
  */
 export function createClientRuntime(config: AgentConfig): ProviderRuntimeContract {
   const override = config.clientFactory?.();
   if (override) return override;
+  const router = makeRouterRuntime(config);
+  if (router) return router;
+  return buildClientForConfig(config);
+}
+
+/** Plain single-model client — the pre-P2.2 path, unchanged. */
+function buildClientForConfig(config: AgentConfig): ProviderRuntimeContract {
   return buildClient({
     isAnthropic: isAnthropicRuntime(config),
     baseUrl: config.baseUrl,
@@ -49,6 +62,81 @@ export function createClientRuntime(config: AgentConfig): ProviderRuntimeContrac
     requestTimeoutMs: config.limits?.requestTimeoutMs,
     headers: config.providerDef?.headers,
   });
+}
+
+/**
+ * P2.2 §1: the runtime for ONE tier candidate. With a provider def it goes
+ * through the exact hot-swap path (endpoint + provider-specific key are
+ * re-resolved — P0-5 rules); without one it's the current transport with a
+ * new model id, i.e. the old same-provider `setModel` semantics.
+ */
+export function makeRuntimeForRef(m: RouterModel, config: AgentConfig): ProviderRuntimeContract {
+  if (m.def) {
+    const conn = resolveSwapConnection(config, m.def);
+    return createSwappedRuntime({ ...config, model: m.model }, m.def, conn);
+  }
+  return buildClient({
+    isAnthropic: isAnthropicRuntime(config),
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    model: m.model,
+    maxTokens: config.maxTokens,
+    temperature: config.temperature,
+    stream: config.stream,
+    supportCache: config.providerDef?.supportCache ?? true,
+    reasoning: config.reasoning,
+    requestTimeoutMs: config.limits?.requestTimeoutMs,
+    headers: config.providerDef?.headers,
+  });
+}
+
+/** rc block → fully defaulted runtime config (plan §5: junk → defaults). */
+export function resolveRouterRuntimeConfig(r: NonNullable<AgentConfig["router"]>): ResolvedRouterConfig {
+  return {
+    signals: {
+      smallMaxCtxTokens: r.signals?.smallMaxCtxTokens ?? ROUTER_DEFAULTS.smallMaxCtxTokens,
+      largeToolSchemaChars: r.signals?.largeToolSchemaChars ?? ROUTER_DEFAULTS.largeToolSchemaChars,
+    },
+    rules: r.rules ?? [],
+    escalate: {
+      buildFails: r.escalate?.buildFails ?? ROUTER_DEFAULTS.buildFails,
+      stickyMinSteps: r.escalate?.stickyMinSteps ?? ROUTER_DEFAULTS.stickyMinSteps,
+    },
+    ...(r.judge ? { judge: r.judge } : {}),
+  };
+}
+
+/**
+ * P2.2: build the RouterRuntime for a config with `router.enabled` — or null
+ * when the tiers cannot be honored (caller silently keeps the plain path,
+ * the warning already printed by resolveRouterTiers at startup).
+ *
+ * Startup mode is PINNED unless loadConfig proved `"model": "auto"` resolved
+ * (§4c: enabling is a config act, turning on is a user act).
+ */
+export function makeRouterRuntime(config: AgentConfig): ProviderRuntimeContract | null {
+  if (!config.router?.enabled) return null;
+  const t = resolveRouterTiers(
+    config.router,
+    loadMergedProviders(config.workdir),
+    config.providerDef?.id ?? config.provider,
+  );
+  if (!t.fallback) return null;
+  const rt = new RouterRuntime({
+    models: t.models,
+    fallbackRef: t.fallback.ref,
+    config: resolveRouterRuntimeConfig(config.router),
+    makeClient: (m) => makeRuntimeForRef(m, config),
+    sensors: config.routerSensors,
+    onRoute: config.onRoute,
+    mode: "auto",
+  });
+  if (config.routerMode !== "auto") {
+    // Pin to the startup model — reuses the `/model` path so bare/qualified/
+    // external ids all land on the right transport.
+    rt.setModel(config.providerDef ? `${config.providerDef.id}/${config.model}` : config.model);
+  }
+  return rt;
 }
 
 /**

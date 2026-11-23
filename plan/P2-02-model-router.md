@@ -360,7 +360,12 @@ Thứ tự có thể ship dần: A–B chạy đầu-cuối được với `enab
 - [ ] `router.enabled: false` (default) — mọi test cũ pass nguyên trạng, 0 byte overhead trong hot path.
 - [ ] `typecheck`, `lint`, `check:layers` (module `src/router` sạch layer), coverage ≥ ngưỡng `coverage:check`.
 
-## Risks & mitigations
+## Tiến độ implementation
+
+- **Phase A (xong):** `src/router/{types,classifier,hysteresis,router-runtime,tiers}.ts` — pipeline L1–L3 + Runtime seam (client cache, pin↔auto, external pin). 4 test files (`router-classify/runtime/hysteresis/mode`) = 56 case.
+- **Phase B (xong):** rc `router` parse/validate (`parseRouter`) + startup `"model":"auto"` → `routerMode` (config.ts); `resolveRouterTiers` strict-ref + auto-derive theo `cost.output`; `createClientRuntime` branch RouterRuntime (clientFactory thắng trước — eval không đổi); Agent sensors nghe chính event stream (`TurnSensors`), `onRoute` → event `route_decision` (schema v3) + JSONL + attribution `ref/tier` vào `llm_usage`; `/router` + `/model auto`; `scoder cost --router` per-model/tier + savings estimate; hot-reload `router.tiers` qua `setTiers`. Test: `router-config.test.mjs` (23), `event-v2`/`cost` mở rộng.
+- **Còn lại:** Phase C (tab ROUTER + Ctrl+B cycle + fold `route_decision` vào `state.ts`/`log.ts`), Phase D (animation RoutePacket), Phase E (`router/judge.ts` L4 + eval 4-config + baseline).
+- **Green at HEAD:** `npm run build` clean, toàn suite `node --test test/*.test.mjs` pass, `lint` ≤ 43 warning, `typecheck`/`check:layers`/`docs:check`/`coverage:check` pass.
 
 | Risk | Mitigation |
 |---|---|

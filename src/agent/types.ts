@@ -19,9 +19,10 @@ export interface AgentRunResult {
  * v2 (additive): `run_start` gains schemaVersion/agent, `finish` gains
  * usage/verification, new event types: compaction, agent_start, agent_end,
  * tool_progress, question_request, queue, context.
- * Consumers on v1 ignore events/fields they don't know.
+ * v3 (additive, P2.2): new `route_decision` event; `run_start` gains
+ * optional `routingMode: "auto"`. Consumers on v2 ignore the unknown type.
  */
-export const EVENT_SCHEMA_VERSION = 2;
+export const EVENT_SCHEMA_VERSION = 3;
 
 /** Verification outcome attached to `finish` — the completion gate's verdict. */
 export interface VerificationInfo {
@@ -58,8 +59,34 @@ export type AgentEvent =
        * dòng user, để task cũ không xuất hiện hai lần.
        */
       quiet?: boolean;
+      /** P2.2 §4c: "auto" when the run started with routing live (session
+       *  transcripts then show `model: auto` instead of the fallback ref). */
+      routingMode?: "auto";
     }
   | { type: "step"; step: number; maxSteps: number }
+  /**
+   * P2.2: one router decision for the turn about to execute (only emitted in
+   * AUTO mode; PINNED = router idle = zero of these). Mirrors RouteDecision.
+   */
+  | {
+      type: "route_decision";
+      step: number;
+      tier: "small" | "large";
+      model: string;
+      provider: string;
+      /** Canonical `provider/model` ref chosen (display/audit key). */
+      ref: string;
+      reason: string;
+      signals: Record<string, number | string>;
+      switched: boolean;
+      judge?: {
+        model: string;
+        confidence: number;
+        ms: number;
+        tokens: number;
+        verdict: "accept" | "reject-hallucinated" | "reject-confidence" | "timeout" | "fallback";
+      };
+    }
   | { type: "llm_delta"; delta: string }
   /** I-05: reasoning/thinking stream delta (rendered dim, toggleable). */
   | { type: "llm_reasoning"; delta: string }

@@ -247,3 +247,81 @@ describe("session metrics (latency / success / guardrails)", () => {
     assert.ok(report.includes("success-rate=1/1"), `phải có success-rate:\n${report}`);
   });
 });
+
+describe("P2.2 — router attribution: ref/tier trong llm_usage + route_decision", () => {
+  it("extractUsageEvents giữ ref/tier; log cũ không có → undefined (backward compat)", async () => {
+    const { extractUsageEvents } = await import("../dist/session/cost.js");
+    const evs = extractUsageEvents("s1", [
+      { type: "llm_usage", model: "qwen3.8-flash", ref: "box-api/qwen3.8-flash", tier: "small", usage: { input_tokens: 10, output_tokens: 2 } },
+      { type: "llm_usage", model: "gpt-4o-mini", usage: { input_tokens: 5, output_tokens: 1 } },
+    ]);
+    assert.equal(evs[0].ref, "box-api/qwen3.8-flash");
+    assert.equal(evs[0].tier, "small");
+    assert.equal(evs[1].ref, undefined);
+    assert.equal(evs[1].tier, undefined);
+  });
+
+  it("extractRouteEvents parse route_decision (kể cả judge verdict)", async () => {
+    const { extractRouteEvents } = await import("../dist/session/cost.js");
+    const rs = extractRouteEvents("s1", [
+      { type: "llm_usage", model: "x" },
+      { type: "route_decision", step: 3, tier: "large", ref: "box-api/k3", model: "k3", provider: "box-api", reason: "score +2", switched: true, judge: { verdict: "accept", model: "box-api/k3", confidence: 0.9, ms: 40, tokens: 60 } },
+      { type: "route_decision", step: 4, tier: "tiny", ref: "x/y" }, // tier rác → bỏ
+    ]);
+    assert.equal(rs.length, 1);
+    assert.equal(rs[0].tier, "large");
+    assert.equal(rs[0].switched, true);
+    assert.equal(rs[0].judgeVerdict, "accept");
+  });
+
+  it("breakdownByModel nhóm theo ref (router) hoặc model id (không router), sort theo cost", async () => {
+    const { extractUsageEvents, breakdownByModel } = await import("../dist/session/cost.js");
+    const evs = extractUsageEvents("s1", [
+      { type: "llm_usage", model: "qwen3.8-flash", ref: "p/small", tier: "small", usage: { input_tokens: 1000, output_tokens: 0 } },
+      { type: "llm_usage", model: "kimi-k3", ref: "p/big", tier: "large", usage: { input_tokens: 0, output_tokens: 1000 } },
+      { type: "llm_usage", model: "kimi-k3", ref: "p/big", tier: "large", usage: { input_tokens: 0, output_tokens: 2000 } },
+    ]);
+    const overrides = { "kimi-k3": { input: 3, output: 15 }, "qwen3.8-flash": { input: 0.2, output: 0.8 } };
+    const b = breakdownByModel(evs, overrides);
+    assert.deepEqual(b.map((x) => x.key), ["p/big", "p/small"]); // cost giảm dần
+    assert.equal(b[0].aggregate.calls, 2);
+    assert.equal(b[0].tier, "large");
+  });
+
+  it("buildRouterReport + formatRouterReport: tiết kiệm so với always-large", async () => {
+    const { buildRouterReport, formatRouterReport } = await import("../dist/session/cost.js");
+    const sid = "20260101-120000-rt01";
+    writeLog(sid, [
+      { type: "route_decision", step: 1, tier: "large", ref: "p/big", model: "big", reason: "score +3", switched: true },
+      { type: "route_decision", step: 2, tier: "small", ref: "p/small", model: "small", reason: "flat", switched: true, judge: { verdict: "accept" } },
+      { type: "llm_usage", model: "big", provider: "p", ref: "p/big", tier: "large", usage: { input_tokens: 1000, output_tokens: 100 } },
+      { type: "llm_usage", model: "small", provider: "p", ref: "p/small", tier: "small", usage: { input_tokens: 1000, output_tokens: 100 } },
+    ]);
+    const overrides = { big: { input: 3, output: 15 }, small: { input: 0.2, output: 0.8 } };
+    const r = buildRouterReport(TMP, { sessionId: sid, pricingOverrides: overrides });
+    assert.equal(r.decisions, 2);
+    assert.equal(r.small, 1);
+    assert.equal(r.large, 1);
+    assert.equal(r.switched, 2);
+    assert.equal(r.judge, 1);
+    // actual: big(in1000,out100)=0.0045 + small(in1000,out100)=0.00028 = 0.00478→0.0048
+    // hypothetical: cả 2 theo big price → (0.0045+0.0045)=0.009
+    assert.ok(Math.abs(r.actualUsd - 0.0048) < 1e-6, String(r.actualUsd));
+    assert.ok(Math.abs(r.hypotheticalUsd - 0.009) < 1e-6, String(r.hypotheticalUsd));
+    const out = formatRouterReport(r);
+    assert.match(out, /ROUTER \(2 decisions\)  small=1  large=1  switches=2  judge=1/);
+    assert.match(out, /p\/small \(small\)/);
+    assert.match(out, /saved≈\$0.0042 \(47%\)/);
+  });
+
+  it("session không có router → báo rõ, không nổ; llm_usage thường không bị tính savings", async () => {
+    const { buildRouterReport, formatRouterReport } = await import("../dist/session/cost.js");
+    const sid = "20260101-120000-rt02";
+    writeLog(sid, [{ type: "llm_usage", model: "gpt-4o-mini", usage: { input_tokens: 100, output_tokens: 10 } }]);
+    const r = buildRouterReport(TMP, { sessionId: sid });
+    assert.equal(r.decisions, 0);
+    assert.equal(r.actualUsd, 0);
+    assert.match(formatRouterReport(r), /no route_decision/);
+    assert.equal(r.models.length, 1); // breakdown vẫn có model không-router
+  });
+});

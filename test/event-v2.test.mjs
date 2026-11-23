@@ -9,8 +9,8 @@ import { initialState, applyEvent } from "../dist/tui/state.js";
 import { EVENT_SCHEMA_VERSION } from "../dist/agent.js";
 
 describe("event schema v2", () => {
-  it("EVENT_SCHEMA_VERSION is 2", () => {
-    assert.equal(EVENT_SCHEMA_VERSION, 2);
+  it("EVENT_SCHEMA_VERSION is 3", () => {
+    assert.equal(EVENT_SCHEMA_VERSION, 3);
   });
 
   it("run_start resets v2 state and records agent/schemaVersion", () => {
@@ -88,5 +88,44 @@ describe("event schema v2", () => {
     s = applyEvent(s, { type: "tool_call", step: 1, id: "t1", name: "run_command", args: {} });
     s = applyEvent(s, { type: "tool_progress", id: "t1", name: "run_command", current: 3, total: 10, message: "downloading" });
     assert.match(s.items.find((i) => i.kind === "tool").output, /downloading/);
+  });
+});
+
+describe("event schema v3 — route_decision (P2.2, additive)", () => {
+  it("reducer hiện tại fold an toàn (Phase C mới tô UI — không crash, không đổi state)", () => {
+    let s = initialState();
+    s = applyEvent(s, { type: "run_start", task: "t", model: "m", provider: "p", workdir: "/w", buildCmd: "b", permission: "auto", schemaVersion: 3, routingMode: "auto" });
+    const before = JSON.stringify(s.items);
+    s = applyEvent(s, {
+      type: "route_decision", step: 2, tier: "small", model: "qwen", provider: "box-api",
+      ref: "box-api/qwen", reason: "score -2: flat history", signals: { score: -2 }, switched: false,
+    });
+    assert.equal(s.status, "running"); // run_start vẫn bình thường
+    assert.equal(JSON.stringify(s.items), before); // transcript chưa đổi (Phase C/D)
+  });
+
+  it("route_decision serialize/deserialize round-trip qua JSONL + extract", async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { readJsonlLog, extractRouteEvents } = await import("../dist/session/cost.js");
+    const dir = join("/tmp", `ev3-route-${process.pid}`);
+    mkdirSync(dir, { recursive: true });
+    const ev = {
+      type: "route_decision", step: 5, tier: "large", model: "k3", provider: "box-api",
+      ref: "box-api/k3", reason: "judge: sửa 1 dòng", signals: { score: 2, judgeRef: "box-api/k3" },
+      switched: true, judge: { model: "box-api/k3", confidence: 0.8, ms: 220, tokens: 340, verdict: "accept" },
+    };
+    try {
+      const p = join(dir, "s.jsonl");
+      writeFileSync(p, JSON.stringify(ev) + "\n", "utf8");
+      const [back] = readJsonlLog(p);
+      assert.deepEqual(back, ev);
+      const [r] = extractRouteEvents("s", [back]);
+      assert.equal(r.tier, "large");
+      assert.equal(r.judgeVerdict, "accept");
+      assert.deepEqual(r.signals, undefined); // signals sống trong JSONL, không vào RouteEvent
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
