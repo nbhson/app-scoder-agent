@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../config/config.js";
-import { loadRcFile } from "../config/config.js";
-import { parseCustomProviders, resolveProvider, splitProviderModel } from "../llm/provider-registry.js";
+import { loadMergedProviders } from "../config/config.js";
+import { resolveModelRef } from "../llm/provider-registry.js";
 import type { ToolSpec } from "../llm/llm.js";
 import type { ToolDiff, TodoItem } from "../tools/types.js";
 import { findAgent, filterToolNamesForDef, type AgentDef } from "../context/agents.js";
@@ -163,21 +163,25 @@ export function resolvePrimaryConfig(config: AgentConfig, reporter: Reporter = c
   const out: AgentConfig = { ...config, agent: def.name };
   const modelRef = config.routing?.[def.name as "plan" | "build" | "review"] ?? def.model;
   if (modelRef && modelRef.trim()) {
-    const [prov, id] = splitProviderModel(modelRef.trim());
-    if (prov && prov !== out.provider) {
-      const rcProviders = parseCustomProviders(loadRcFile(out.workdir).providers);
-      const resolved = resolveProvider(prov, rcProviders);
-      if ("def" in resolved) {
-        out.provider = prov as "openai" | "anthropic";
-        out.providerDef = resolved.def;
-        out.model = id;
-        out.baseUrl = resolved.def.baseUrl || out.baseUrl;
-        out.apiKey = process.env[resolved.def.apiKeyEnv] || out.apiKey;
-      } else {
-        reporter.warn(`agent "${def.name}": provider "${prov}" not resolvable (${resolved.error}) — keeping ${out.model}`);
-      }
+    // P2.1 §7: ONE shared resolution path (resolveModelRef) for startup,
+    // `/model`, routing here and the P2.2 router — bare ids route to their
+    // unique declaring provider, "provider/model" refs resolve as before.
+    const r = resolveModelRef(modelRef.trim(), loadMergedProviders(out.workdir));
+    if ("error" in r) {
+      reporter.warn(`agent "${def.name}": model "${modelRef}" not resolvable (${r.error}) — keeping ${out.model}`);
+    } else if (r.def) {
+      out.provider = r.def.kind === "anthropic" ? "anthropic" : "openai";
+      out.providerDef = r.def;
+      out.model = r.model;
+      out.baseUrl = r.def.baseUrl || out.baseUrl;
+      // Re-resolve the key against the TARGET provider only (P0-5): env var of
+      // the def, then the def's own rc inline key, then whatever is in use.
+      const envKey = r.def.apiKeyEnv ? process.env[r.def.apiKeyEnv] : undefined;
+      out.apiKey = envKey || r.def.apiKeyInline || out.apiKey;
+      if (envKey) out.apiKeySource = "env";
+      else if (r.def.apiKeyInline) out.apiKeySource = "provider-rc";
     } else {
-      out.model = id ?? modelRef.trim();
+      out.model = r.model;
     }
   }
   if (def.temperature !== undefined) out.temperature = def.temperature;

@@ -15,6 +15,27 @@
 import { LlmClient, type ChatMessage, type ToolCall, type ToolSpec } from "./llm.js";
 import { AnthropicClient } from "./provider-anthropic.js";
 
+/**
+ * P2.1 (plan/P2-01-provider-config.md): per-model metadata from the rc
+ * `provider.<id>.models` block — opencode config shape (`limit`, `cost`,
+ * `reasoning`, `tool_call`) mapped onto runtime fields.
+ */
+export interface ModelConfig {
+  /** Display name for UI (opencode `name`); defaults to the model id. */
+  name?: string;
+  /** opencode `limit.context` — tokens the model can hold. */
+  contextWindow?: number;
+  /** opencode `limit.output` — max completion tokens. */
+  maxTokens?: number;
+  /** opencode `cost.{input,output}` — USD per 1M tokens. */
+  pricing?: { input: number; output: number };
+  supportCache?: boolean;
+  /** opencode `reasoning` — thinking/reasoning blocks supported. */
+  supportReasoning?: boolean;
+  /** opencode `tool_call` — false → never pick for tool loops (router). */
+  toolCall?: boolean;
+}
+
 export interface ProviderDef {
   id: string;
   baseUrl: string;
@@ -22,6 +43,12 @@ export interface ProviderDef {
   apiKeyEnv: string;
   /** Built-in runtime kind. */
   kind: "openai" | "anthropic";
+  /** rc `name` — human label for `/model`, `scoder models`, sidebar. */
+  displayName?: string;
+  /** Inline key from rc `options.apiKey` ({env:VAR} expanded). Lowest env, higher rc.apiKey. */
+  apiKeyInline?: string;
+  /** opencode `models` map — id → metadata; undefined when not declared. */
+  models?: Record<string, ModelConfig>;
   /** Optional extra headers merged into every request. */
   headers?: Record<string, string>;
   /** True when this provider supports Anthropic prompt caching. */
@@ -84,6 +111,8 @@ export interface ProviderRuntimeOptions {
   stream?: boolean;
   /** I-04: enable Anthropic prompt caching (providerDef.supportCache). */
   enableCache?: boolean;
+  /** P2.1: extra headers from the provider def, merged into every request. */
+  headers?: Record<string, string>;
 }
 
 /** Create the concrete runtime for a provider def. */
@@ -95,6 +124,7 @@ export function createRuntime(def: ProviderDef, opts: ProviderRuntimeOptions): P
     maxTokens: opts.maxTokens,
     temperature: opts.temperature,
     enableCache: opts.enableCache ?? def.supportCache,
+    headers: opts.headers ?? def.headers,
   };
   if (def.kind === "anthropic") return new AnthropicClient(common);
   return new LlmClient({ ...common, stream: opts.stream });
@@ -140,7 +170,241 @@ export function splitProviderModel(model: string): [string | null, string] {
   const idx = model.indexOf("/");
   if (idx <= 0) return [null, model];
   // anthropic/claude-x, openai/gpt-4o, groq/llama-3…
+  // Only the FIRST slash splits — ids with dots ("kimi-k2.7-code") or later
+  // slashes ("meta-llama/llama-3" inside a provider) survive intact.
   return [model.slice(0, idx), model.slice(idx + 1)];
+}
+
+// ---------------------------------------------------------------------------
+// P2.1 (plan/P2-01-provider-config.md): opencode-style `provider` block.
+// ---------------------------------------------------------------------------
+
+/** `npm` → runtime kind. Repo has 0 runtime deps: npm is only a HINT, the
+ *  plugin is never imported. Unknown → "openai" (compatible) + warn once. */
+const NPM_KIND: Record<string, "openai" | "anthropic"> = {
+  "@ai-sdk/openai-compatible": "openai",
+  "@ai-sdk/openai": "openai",
+  openai: "openai",
+  "@ai-sdk/anthropic": "anthropic",
+  anthropic: "anthropic",
+};
+const warnedNpm = new Set<string>();
+
+/** Expand `{env:VAR}` in one string (same syntax as src/mcp/env.ts). */
+export function expandEnvValue(value: string): string {
+  return value.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, n: string) => process.env[n] ?? "");
+}
+
+const positiveInt = (v: unknown): number | undefined =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
+
+/** First boolean found among the given (alias) values. */
+const boolOf = (...vals: unknown[]): boolean | undefined => {
+  for (const v of vals) if (typeof v === "boolean") return v;
+  return undefined;
+};
+
+/** First non-empty string among the given values. */
+const strOf = (...vals: unknown[]): string | undefined => {
+  for (const v of vals) if (typeof v === "string" && v) return v;
+  return undefined;
+};
+
+/** `models.<id>.cost.{input,output}` (opencode) or flat `pricing` → USD/1M pair. */
+function parseCost(cost: unknown, pricing: unknown): { input: number; output: number } | undefined {
+  const src = (typeof pricing === "object" && pricing !== null ? pricing : cost) as Record<string, unknown> | undefined;
+  if (!src || typeof src !== "object") return undefined;
+  const i = src.input;
+  const o = src.output;
+  return typeof i === "number" && Number.isFinite(i) && typeof o === "number" && Number.isFinite(o)
+    ? { input: i, output: o }
+    : undefined;
+}
+
+/** Parse one `models.<id>` entry (opencode `limit`/`cost`/`reasoning`/`tool_call`,
+ *  flat aliases accepted too). Bad entry → undefined (caller warns + skips). */
+function parseModelEntry(raw: unknown): ModelConfig | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const m = raw as Record<string, unknown>;
+  const limit = (typeof m.limit === "object" && m.limit !== null ? m.limit : {}) as Record<string, unknown>;
+  const cfg: ModelConfig = {};
+  const name = strOf(m.name);
+  if (name) cfg.name = name;
+  const ctx = positiveInt(m.contextWindow ?? limit.context);
+  if (ctx !== undefined) cfg.contextWindow = ctx;
+  const max = positiveInt(m.maxTokens ?? limit.output);
+  if (max !== undefined) cfg.maxTokens = max;
+  const pricing = parseCost(m.cost, m.pricing);
+  if (pricing) cfg.pricing = pricing;
+  const cache = boolOf(m.supportCache, m.cache);
+  if (cache !== undefined) cfg.supportCache = cache;
+  const reason = boolOf(m.supportReasoning, m.reasoning);
+  if (reason !== undefined) cfg.supportReasoning = reason;
+  const tools = boolOf(m.toolCall, m.tool_call);
+  if (tools !== undefined) cfg.toolCall = tools;
+  return cfg;
+}
+
+/** npm → runtime kind + one-time warn on unknown hints (no plugin loading). */
+function kindFromNpm(
+  npm: unknown,
+  fallback: "openai" | "anthropic",
+  providerId: string,
+): "openai" | "anthropic" {
+  if (typeof npm !== "string" || !npm) return fallback;
+  const mapped = NPM_KIND[npm];
+  if (mapped) return mapped;
+  if (!warnedNpm.has(npm)) {
+    warnedNpm.add(npm);
+    console.error(`⚠  ignoring unknown npm "${npm}" for provider "${providerId}" — using openai-compatible runtime`);
+  }
+  return "openai";
+}
+
+/** Record view of a possibly-missing/non-object JSON field. */
+const objOf = (v: unknown): Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {};
+
+/** `options.headers` — string values only, {env:} expanded. */
+function parseHeaderMap(raw: unknown): Record<string, string> | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, hv] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof hv === "string") out[k] = expandEnvValue(hv);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** `models` map — per-entry validate, warn + drop the bad ones. */
+function parseModelsMap(raw: unknown, providerId: string): Record<string, ModelConfig> | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const models: Record<string, ModelConfig> = {};
+  for (const [mid, mv] of Object.entries(raw as Record<string, unknown>)) {
+    const cfg = parseModelEntry(mv);
+    if (cfg) models[mid] = cfg;
+    else console.error(`⚠  ignoring invalid model "${mid}" in provider "${providerId}" (expected an object)`);
+  }
+  return Object.keys(models).length > 0 ? models : undefined;
+}
+
+/** Optional fields of a provider entry, written onto `def` in place. */
+function applyProviderExtras(
+  d: Record<string, unknown>,
+  options: Record<string, unknown>,
+  builtin: ProviderDef | undefined,
+  def: ProviderDef,
+): void {
+  const name = strOf(d.name);
+  if (name) def.displayName = name;
+  const inline = strOf(options.apiKey);
+  const expanded = inline ? expandEnvValue(inline) : "";
+  if (expanded) def.apiKeyInline = expanded;
+  const headers = parseHeaderMap(options.headers);
+  if (headers) def.headers = headers;
+  const cache = boolOf(d.supportCache, builtin?.supportCache);
+  if (cache !== undefined) def.supportCache = cache;
+  const reasoning = boolOf(d.supportReasoning, builtin?.supportReasoning);
+  if (reasoning !== undefined) def.supportReasoning = reasoning;
+  const models = parseModelsMap(d.models, def.id);
+  if (models) def.models = models;
+}
+
+/** One `provider.<id>` entry → ProviderDef; invalid → undefined + console.error. */
+function parseProviderEntry(id: string, v: unknown, builtin: ProviderDef | undefined): ProviderDef | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) {
+    console.error(`⚠  ignoring invalid provider "${id}" (expected an object)`);
+    return undefined;
+  }
+  const d = v as Record<string, unknown>;
+  const options = objOf(d.options);
+  const baseUrl = strOf(options.baseURL) ?? builtin?.baseUrl ?? "";
+  if (!baseUrl) {
+    console.error(`⚠  ignoring provider "${id}" — options.baseURL is required`);
+    return undefined;
+  }
+  const def: ProviderDef = {
+    id,
+    baseUrl,
+    apiKeyEnv: strOf(options.apiKeyEnv, d.apiKeyEnv, builtin?.apiKeyEnv) ?? "SCODER_API_KEY",
+    kind: kindFromNpm(d.npm, builtin?.kind ?? "openai", id),
+  };
+  applyProviderExtras(d, options, builtin, def);
+  return def;
+}
+
+/**
+ * Parse the NEW rc `provider` block (opencode shape): id → {npm, name,
+ * options:{baseURL, apiKey, headers}, models}. `loadConfig` distinguishes by
+ * SHAPE — a STRING `rc.provider` is the legacy active-provider selector and
+ * must be routed to `undefined` here, not to this parser.
+ *
+ * Validation mirrors parseCustomProviders: bad entry → console.error + skip,
+ * never throw. Ids containing "/" are dropped (they break the provider/model
+ * split). Missing baseURL: inherit the builtin of the same id, else skip.
+ */
+export function parseProviderConfig(raw: unknown): Record<string, ProviderDef> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: Record<string, ProviderDef> = {};
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (id.includes("/")) {
+      console.error(`⚠  provider id "${id}" contains "/" — skipped (it would break provider/model refs)`);
+      continue;
+    }
+    const def = parseProviderEntry(id, v, BUILTIN_PROVIDERS[id]);
+    if (def) out[id] = def;
+  }
+  return out;
+}
+
+/** Every configured provider that declares `id` in its `models` map. */
+export function findModelOwners(
+  id: string,
+  providers: Record<string, ProviderDef>,
+): Array<{ provider: ProviderDef; model: ModelConfig }> {
+  const out: Array<{ provider: ProviderDef; model: ModelConfig }> = [];
+  for (const def of Object.values(providers)) {
+    const m = def.models?.[id];
+    if (m) out.push({ provider: def, model: m });
+  }
+  return out;
+}
+
+/** Unique owner of a bare model id among configured providers; null when 0 or >1. */
+export function findModelOwner(
+  id: string,
+  providers: Record<string, ProviderDef>,
+): { provider: string; model: ModelConfig } | null {
+  const owners = findModelOwners(id, providers);
+  if (owners.length !== 1) return null;
+  return { provider: owners[0].provider.id, model: owners[0].model };
+}
+
+export type ModelRefResolution =
+  | { def: ProviderDef | null; model: string }
+  | { error: string };
+
+/**
+ * P2.1 §7: ONE resolution path for every "model ref" a user can write —
+ * startup config, `scoder -m`, `/model`, rc `routing`, agent def `model:`,
+ * and the P2.2 router. `def === null` means "bare id with no unique owner —
+ * keep the current provider". `providers` = custom defs merged over builtins
+ * (loadConfig / loadMergedProviders build that map).
+ */
+export function resolveModelRef(
+  ref: string,
+  providers: Record<string, ProviderDef> = {},
+): ModelRefResolution {
+  const trimmed = ref.trim();
+  if (!trimmed) return { error: "empty model ref" };
+  const [prov, id] = splitProviderModel(trimmed);
+  if (prov) {
+    const r = resolveProvider(prov, providers);
+    if ("def" in r) return { def: r.def, model: id };
+    return r;
+  }
+  const owners = findModelOwners(trimmed, providers);
+  if (owners.length === 1) return { def: owners[0].provider, model: trimmed };
+  return { def: null, model: trimmed };
 }
 
 // ---------------------------------------------------------------------------

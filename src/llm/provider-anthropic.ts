@@ -170,8 +170,20 @@ export class AnthropicClient {
       thinkingBudgetTokens?: number;
       /** G7: per-request timeout ms (default LLM_REQUEST_TIMEOUT_MS). */
       requestTimeoutMs?: number;
+      /** P2.1: extra headers from the provider def (auth headers below always win). */
+      headers?: Record<string, string>;
     },
   ) {}
+
+  /** P2.1: custom headers merged first; x-api-key / version / content-type win. */
+  private requestHeaders(): Record<string, string> {
+    return {
+      ...(this.opts.headers ?? {}),
+      "Content-Type": "application/json",
+      "x-api-key": this.opts.apiKey,
+      "anthropic-version": ANTHROPIC_VERSION,
+    };
+  }
 
   private get timeoutMs(): number {
     return this.opts.requestTimeoutMs ?? LLM_REQUEST_TIMEOUT_MS;
@@ -268,11 +280,7 @@ export class AnthropicClient {
         async () => {
           const r = await fetch(url, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": this.opts.apiKey,
-              "anthropic-version": ANTHROPIC_VERSION,
-            },
+            headers: this.requestHeaders(),
             body,
             signal,
           });
@@ -321,11 +329,7 @@ export class AnthropicClient {
         async () => {
           const r = await fetch(url, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": this.opts.apiKey,
-              "anthropic-version": ANTHROPIC_VERSION,
-            },
+            headers: this.requestHeaders(),
             body,
             signal,
           });

@@ -62,6 +62,25 @@ function key(provider: string, id: string): string {
   return `${provider}/${id}`;
 }
 
+/**
+ * P2.1 (plan/P2-01-provider-config.md §5): models declared in rc config —
+ * ALWAYS win over the models.dev cache/fallback. `loadConfig` registers the
+ * full set on every run (replace semantics), keyed BOTH by provider id and
+ * by runtime kind (Agent code looks up `config.provider`, which is the kind
+ * "openai" | "anthropic", not the provider id). Aliases share the canonical
+ * `provider` field so `scoder models` can deduplicate rows.
+ */
+let configModels: Record<string, ModelInfo> = {};
+
+export function registerConfigModels(models: Record<string, ModelInfo>): void {
+  configModels = models;
+}
+
+/** The config-level map (canonical + kind aliases) — read-only view. */
+export function getConfigModels(): Record<string, ModelInfo> {
+  return configModels;
+}
+
 let fallbackCatalog: Catalog | null = null;
 function fromFallback(): Catalog {
   if (fallbackCatalog) return fallbackCatalog;
@@ -164,8 +183,10 @@ export async function loadCatalog(forceRefresh = false): Promise<{ models: Recor
   return { models: fromFallback().models, source: "fallback" };
 }
 
-/** Synchronous metadata lookup — cache then fallback (never fetches). */
+/** Synchronous metadata lookup — config (P2.1) then cache then fallback (never fetches). */
 export function lookupModel(provider: string, id: string): ModelInfo | null {
+  const fromConfig = configModels[key(provider, id)];
+  if (fromConfig) return fromConfig;
   const cached = readCache();
   if (cached) {
     const m = cached.models[key(provider, id)];
@@ -178,7 +199,8 @@ export function lookupModel(provider: string, id: string): ModelInfo | null {
 
 /** contextWindow for the compaction budget (I-02 → H-10). Fallback 128k. */
 export function contextWindowFor(provider: string, id: string): number {
-  return lookupModel(provider, id)?.contextWindow ?? 128_000;
+  const w = lookupModel(provider, id)?.contextWindow;
+  return w && w > 0 ? w : 128_000;
 }
 
 /** Catalog age in hours (for `scoder models --refresh` UX). -1 when no cache. */

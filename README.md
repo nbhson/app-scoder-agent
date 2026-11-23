@@ -145,7 +145,7 @@ Machine-wide defaults shared by **all** projects: `mcpServers`, `model`, `baseUr
 | `buildCmd` | auto-detected | Build/compile command (stop condition) |
 | `maxSteps` | `40` | Max autonomous loop iterations |
 | `stream` | `true` | Stream LLM output token-by-token |
-| `provider` | auto-detected | `openai` \| `anthropic` |
+| `provider` | auto-detected | `"openai"` \| `"anthropic"` selector **or** an opencode-style provider block `{ "box-api": { npm, name, options:{baseURL, apiKey}, models:{…} } }` — see [docs/configuration.md](docs/configuration.md#custom-providers--models-opencode-style-provider-block) |
 | `permission` | `auto` | `auto` \| `ask` \| `readonly` |
 | `theme` | auto-detected | TUI palette: `mission` \| `paper` \| `mono` \| `light` \| `high-contrast` \| `solarized` (project `.scoder/theme.json` still wins — it also allows inline color overrides) |
 | `mcpServers` | — | MCP servers — stdio (`command`) hoặc HTTP (`url`) (see below) |
@@ -212,7 +212,8 @@ In `ask` mode the prompt offers `[y] yes / [a] always allow "<prefix>" / [n] no 
 ### Project-config trust
 
 A `.scoderrc.json` inside a cloned repo is just another file from that repo —
-so sensitive fields (`baseUrl`, `apiKey`, `providers`, `mcpServers`,
+so sensitive fields (`baseUrl`, `apiKey`, `providers`, `provider`,
+`mcpServers`,
 `buildCmd`, `verifyCmds`, `formatter`, `permission(s)`, `sandbox`,
 `shellEnvAllow`) are **dropped on first sight** of an unknown directory, with
 one warning explaining how to accept them. Global/user config is never

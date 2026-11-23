@@ -108,6 +108,8 @@ export interface LlmClientOptions {
   stream?: boolean;
   /** G7: per-request timeout ms (default LLM_REQUEST_TIMEOUT_MS). */
   requestTimeoutMs?: number;
+  /** P2.1: extra headers from the provider def (Content-Type/Authorization stay owned here). */
+  headers?: Record<string, string>;
 }
 
 /** A piece of streamed output. */
@@ -300,11 +302,17 @@ export class LlmClient {
 
     let res: Response;
     try {
+      /** P2.1: provider-def headers merged first; auth headers below always win. */
+      const reqHeaders: Record<string, string> = {
+        ...(this.opts.headers ?? {}),
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.opts.apiKey}`,
+      };
       res = await withRetry(
         async () => {
           const r = await fetch(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.opts.apiKey}` },
+            headers: reqHeaders,
             body,
             signal,
           });
@@ -395,11 +403,17 @@ export class LlmClient {
 
     let res: Response;
     try {
+      /** P2.1: provider-def headers merged first; auth headers below always win. */
+      const reqHeaders: Record<string, string> = {
+        ...(this.opts.headers ?? {}),
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.opts.apiKey}`,
+      };
       res = await withRetry(
         async () => {
           const r = await fetch(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.opts.apiKey}` },
+            headers: reqHeaders,
             body: bodyStr,
             signal,
           });

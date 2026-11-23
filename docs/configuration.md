@@ -202,6 +202,51 @@ Related top-level keys:
 { "model": "qwen2.5-scoder:32b", "baseUrl": "http://localhost:11434/v1", "apiKey": "ollama" }
 ```
 
+## Custom Providers & Models (opencode-style `provider` block)
+
+Declare any OpenAI-compatible / Anthropic-compatible endpoint with its own
+model list — same shape as opencode's config:
+
+```json
+{
+  "provider": {
+    "box-api": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Box API",
+      "options": {
+        "baseURL": "https://api.ai-box.vn/v1",
+        "apiKey": "{env:BOX_API_KEY}"
+      },
+      "models": {
+        "kimi-k3": { "name": "kimi-k3" },
+        "qwen3.8-flash": { "name": "qwen3.8-flash", "limit": { "context": 262144 }, "cost": { "input": 0.2, "output": 0.8 } }
+      }
+    }
+  },
+  "model": "box-api/kimi-k3"
+}
+```
+
+- **Refs**: `"model": "box-api/kimi-k3"` or bare `"qwen3.8-flash"` — a bare id
+  that exactly one configured provider declares routes there automatically
+  (ambiguous ids print a warning and keep the active provider).
+- **`npm`** only selects the runtime: `@ai-sdk/openai*` → OpenAI-compatible,
+  `@ai-sdk/anthropic` → native Anthropic. No npm package is ever installed or
+  imported (the agent has zero runtime dependencies); an unknown `npm` falls
+  back to OpenAI-compatible with a one-line warning.
+- **Keys** resolve in order: `--api-key` flag → `SCODER_API_KEY` → the
+  provider's `apiKeyEnv` var → rc inline `options.apiKey` → legacy rc
+  `apiKey`. Inline values support `{env:VAR}` — use it, literal keys print a
+  commit-risk warning. An inline key belongs to ITS provider: `/model`
+  hot-swaps never carry it to another endpoint.
+- **`limit` / `cost`** feed the sidebar ctx %, auto-compaction and
+  `scoder cost` — rc metadata always wins over the models.dev catalog.
+- `scoder models` lists configured providers first (`SOURCE=config`), then the
+  catalog. `/model` (no args) shows the resolved display name + context.
+- The legacy `providers.<id>` format still works and merges (the new block
+  wins on id collisions). In untrusted directories the whole `provider` block
+  is dropped until you run `scoder trust`.
+
 ## Security Notes
 
 - Never commit `apiKey` in `.scoderrc.json` — add to `.gitignore`

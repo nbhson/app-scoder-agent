@@ -17,6 +17,7 @@ import { agentsMdTemplate } from "../context/agents-guide.js";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatSlashHelp, parseMcpExec, BUILTIN_COMMANDS, resolveCommandDef, discoverCustomCommands, runCustomCommand, type SlashCommand, type CommandDef, type CommandVisibility } from "./definitions.js";
+import { lookupModel } from "../llm/model-catalog.js";
 
 // ── Host facade ─────────────────────────────────────────────────────────────
 
@@ -224,7 +225,16 @@ export function coreCommands(): CommandEntry[] {
           return;
         }
         const cfg = host.config;
-        notice(`model: ${cfg.model} · provider: ${cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}`);
+        // P2.1 §6: rich one-liner — display name, context window (config model
+        // metadata wins over the catalog), provider id + swap hint.
+        const def = cfg.providerDef;
+        const label = def?.models?.[cfg.model]?.name ?? def?.displayName;
+        const ctx = lookupModel(def?.id ?? cfg.provider, cfg.model)?.contextWindow ?? lookupModel(cfg.provider, cfg.model)?.contextWindow;
+        const ctxStr = ctx ? ` · ctx ${Math.round(ctx / 1000)}k` : "";
+        notice(
+          `model: ${cfg.model}${label ? ` (${label})` : ""}${ctxStr} · provider: ${def?.id ?? cfg.provider} · build: ${cfg.buildCmd ?? "auto-detect"}\n` +
+          `swap: /model <provider/model> · list: scoder models`,
+        );
       },
     },
     {

@@ -20,8 +20,8 @@ import { contextWindowFor } from "./llm/model-catalog.js";
 import { probeContextWindow, type ProbedWindow } from "./llm/context-probe.js";
 import { promptMetrics, type PromptMetrics } from "./llm/prompt-metrics.js";
 import { JsonlLogger } from "./session/logger.js";
-import { parseCustomProviders, resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
-import { loadRcFile, isLocalBaseUrl } from "./config/config.js";
+import { resolveProvider, splitProviderModel } from "./llm/provider-registry.js";
+import { loadRcFile, isLocalBaseUrl, loadMergedProviders } from "./config/config.js";
 import type { McpManager } from "./mcp/manager.js";
 import { watchWorkdir, type ReloadWatcher } from "./workspace/watch.js";
 import type { Skill } from "./context/skills.js";
@@ -1721,8 +1721,10 @@ export class Agent {
       this.dropProbedWindow();
       return `model → ${m} (${this.config.provider})`;
     }
-    // Cross-provider: rebuild the client runtime.
-    const resolved = resolveProvider(prov, parseCustomProviders(loadRcFile(this.config.workdir).providers));
+    // Cross-provider: rebuild the client runtime. P2.1: the SAME merged map
+    // as startup — legacy `providers.<id>` and the new `provider` block both
+    // resolve here (previously this path only saw the legacy format).
+    const resolved = resolveProvider(prov, loadMergedProviders(this.config.workdir));
     if ("error" in resolved) return `ERROR: ${resolved.error}`;
     // P0-5: endpoint + key are re-resolved for the TARGET provider. Passing the
     // outgoing config.baseUrl here made `anthropic/…` POST to
@@ -1739,7 +1741,11 @@ export class Agent {
     this.client = createSwappedRuntime(this.config, resolved.def, conn);
     this.dropProbedWindow();
     const endpoint = conn.endpointFromDef ? `, ${conn.baseUrl}` : "";
-    return `model → ${id} (provider ${prov}${endpoint})`;
+    // P2.1 §6: escape hatch — swapping to an id the provider does not declare
+    // still works, but say so (typo detection for `box-api/kimi-k4`).
+    const declared = resolved.def.models;
+    const undeclared = declared && Object.keys(declared).length > 0 && !declared[id] ? ` · warn: "${id}" not declared in provider "${prov}"` : "";
+    return `model → ${id} (provider ${prov}${endpoint})${undeclared}`;
   }
 
   private finish(

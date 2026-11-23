@@ -246,3 +246,142 @@ describe("loadConfig — theme (rc/env/flag precedence)", () => {
     assert.equal(cfg.theme, undefined);
   });
 });
+
+// ── P2.1 (plan/P2-01-provider-config.md): provider block kiểu opencode ──────
+
+const BOX_RC = {
+  provider: {
+    "box-api": {
+      npm: "@ai-sdk/openai-compatible",
+      name: "Box API",
+      options: { baseURL: "https://api.ai-box.vn/v1", apiKey: "{env:BOX_TEST_KEY}" },
+      models: {
+        "kimi-k3": { name: "kimi-k3" },
+        "kimi-k2.7-code": { name: "kimi-k2.7-code" },
+        "glm-5.3": { name: "glm-5.3" },
+        "qwen3.8-flash": { name: "qwen3.8-flash", limit: { context: 262144 }, cost: { input: 0.2, output: 0.8 } },
+      },
+    },
+  },
+};
+
+describe("loadConfig — provider block (P2.1)", () => {
+  let saved;
+  beforeEach(() => {
+    saved = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      BOX_TEST_KEY: process.env.BOX_TEST_KEY,
+    };
+    delete process.env.OPENAI_API_KEY; // deterministic key chain
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.BOX_TEST_KEY = "sk-box-1234567890";
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('"model": "box-api/kimi-k3" → baseUrl + inline key + provider id đúng', () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ ...BOX_RC, model: "box-api/kimi-k3" }));
+    const cfg = loadConfig({ workdir: TMP });
+    assert.equal(cfg.model, "kimi-k3");
+    assert.equal(cfg.baseUrl, "https://api.ai-box.vn/v1");
+    assert.equal(cfg.apiKey, "sk-box-1234567890");
+    assert.equal(cfg.apiKeySource, "provider-rc");
+    assert.equal(cfg.providerDef.id, "box-api");
+    assert.equal(cfg.providerDef.displayName, "Box API");
+    assert.equal(cfg.provider, "openai");
+  });
+
+  it("bare \"qwen3.8-flash\" tự route vào owner + contextWindow từ rc", () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ ...BOX_RC, model: "qwen3.8-flash" }));
+    const cfg = loadConfig({ workdir: TMP });
+    assert.equal(cfg.providerDef.id, "box-api");
+    assert.equal(cfg.baseUrl, "https://api.ai-box.vn/v1");
+    assert.equal(cfg.contextWindow, 262144);
+  });
+
+  it("key chain: SCODER_API_KEY > apiKeyEnv env > inline > rc.apiKey", () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ ...BOX_RC, model: "box-api/kimi-k3", apiKey: "sk-rc-legacy" }));
+    process.env.SCODER_API_KEY = "sk-shared";
+    let cfg = loadConfig({ workdir: TMP });
+    assert.equal(cfg.apiKey, "sk-shared");
+    assert.equal(cfg.apiKeySource, "env");
+    delete process.env.SCODER_API_KEY;
+    cfg = loadConfig({ workdir: TMP }); // inline {env:BOX_TEST_KEY} thắng rc.apiKey
+    assert.equal(cfg.apiKey, "sk-box-1234567890");
+    assert.equal(cfg.apiKeySource, "provider-rc");
+    delete process.env.BOX_TEST_KEY;
+    cfg = loadConfig({ workdir: TMP }); // không env nào → rc.apiKey
+    assert.equal(cfg.apiKey, "sk-rc-legacy");
+    assert.equal(cfg.apiKeySource, "rc");
+    process.env.BOX_TEST_KEY = "sk-box-1234567890";
+  });
+
+  it("ambiguity: 2 provider cùng declaring 1 id → warn, giữ active provider", () => {
+    const rc = {
+      ...BOX_RC,
+      provider: {
+        ...BOX_RC.provider,
+        "other-api": { options: { baseURL: "https://other/v1" }, models: { "kimi-k3": {} } },
+      },
+      model: "kimi-k3",
+    };
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify(rc));
+    const warns = [];
+    const orig = console.error;
+    console.error = (...a) => warns.push(a.join(" "));
+    let cfg;
+    try {
+      cfg = loadConfig({ workdir: TMP });
+    } finally {
+      console.error = orig;
+    }
+    assert.match(warns.find((w) => /several providers/.test(w)) ?? "", /write "<provider>\/kimi-k3"/);
+    assert.equal(cfg.providerDef.id, "openai"); // active mặc định, không đoán bừa
+  });
+
+  it("rc.provider dạng STRING (legacy selector) vẫn chạy y hệt — discrimination theo shape", () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ provider: "anthropic", model: "claude-sonnet-4-5" }));
+    const cfg = loadConfig({ workdir: TMP, apiKey: "k" });
+    assert.equal(cfg.provider, "anthropic");
+    assert.equal(cfg.baseUrl, "https://api.anthropic.com/v1");
+  });
+
+  it("format cũ `providers.<id>` không đổi hành vi khi có thêm block mới", () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({
+      ...BOX_RC,
+      providers: { "my-llm": { baseUrl: "https://llm.example.com/v1", apiKeyEnv: "MY_LLM_KEY" } },
+      model: "my-llm/llama3",
+    }));
+    process.env.MY_LLM_KEY = "k-legacy";
+    const cfg = loadConfig({ workdir: TMP });
+    assert.equal(cfg.baseUrl, "https://llm.example.com/v1");
+    assert.equal(cfg.apiKey, "k-legacy");
+    assert.equal(cfg.apiKeySource, "env");
+    delete process.env.MY_LLM_KEY;
+  });
+
+  it("cost từ models.<id>.cost vào modelPricing; rc modelPricing vẫn thắng", () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({
+      ...BOX_RC,
+      model: "box-api/kimi-k3",
+      modelPricing: { "qwen3.8-flash": { input: 9, output: 9 } },
+    }));
+    const cfg = loadConfig({ workdir: TMP });
+    assert.deepEqual(cfg.modelPricing["qwen3.8-flash"], { input: 9, output: 9 }); // rc override thắng
+    assert.equal(cfg.modelPricing["kimi-k2.7-code"], undefined); // id không khai cost → không có entry
+    assert.deepEqual(cfg.modelPricing["box-api/qwen3.8-flash"], { input: 0.2, output: 0.8 }); // key qualified lấy theo provider cost
+  });
+
+  it("config model thắng catalog: contextWindowFor sau loadConfig dùng rc", async () => {
+    writeFileSync(join(TMP, ".scoderrc.json"), JSON.stringify({ ...BOX_RC, model: "box-api/qwen3.8-flash" }));
+    loadConfig({ workdir: TMP });
+    const { contextWindowFor, lookupModel } = await import("../dist/llm/model-catalog.js");
+    assert.equal(contextWindowFor("openai", "qwen3.8-flash"), 262144); // alias theo kind để sidebar tra
+    assert.equal(lookupModel("box-api", "qwen3.8-flash").pricing.input, 0.2);
+  });
+});

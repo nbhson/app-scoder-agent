@@ -2,7 +2,15 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, statSyn
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import type { PermissionMode, PermissionRule, PermissionEffect } from "../security/permissions.js";
-import { parseCustomProviders, resolveProvider, splitProviderModel } from "../llm/provider-registry.js";
+import {
+  parseCustomProviders,
+  parseProviderConfig,
+  findModelOwners,
+  resolveProvider,
+  splitProviderModel,
+  type ProviderDef,
+} from "../llm/provider-registry.js";
+import { registerConfigModels, type ModelInfo } from "../llm/model-catalog.js";
 import { applyProjectTrust, guardSavedApprovals } from "./trust.js";
 import type { Reporter } from "../io/reporter.js";
 
@@ -17,9 +25,11 @@ export interface AgentConfig {
    * anthropic/…`) must not keep the key of the provider being left, unless the
    * user pinned it — `flag` (--api-key / programmatic override), or `rc`
    * (apiKey in the rc file, which is provider-agnostic). Env-derived keys are
-   * re-resolved against the NEW provider's `apiKeyEnv`.
+   * re-resolved against the NEW provider's `apiKeyEnv`. P2.1: `provider-rc` =
+   * the inline `provider.<id>.options.apiKey` — provider-SPECIFIC, never kept
+   * across a hot-swap.
    */
-  apiKeySource?: "flag" | "env" | "rc" | "none";
+  apiKeySource?: "flag" | "env" | "rc" | "provider-rc" | "none";
   model: string;
   /** Provider backend: "openai" (compatible) or "anthropic" (native Messages API) */
   provider: "openai" | "anthropic";
@@ -168,7 +178,12 @@ interface RcFile {
   maxSteps?: number;
   stream?: boolean;
   permission?: string;
-  provider?: string;
+  /**
+   * P2.1: SHAPE-discriminated. String = legacy active-provider selector
+   * ("openai" | "anthropic" | a custom id). Object = opencode-style provider
+   * block: id -> {npm, name, options:{baseURL, apiKey}, models}.
+   */
+  provider?: string | Record<string, unknown>;
   /** Per-model price overrides (USD per 1M tokens) for `scoder cost`. */
   modelPricing?: Record<string, { input: number; output: number }>;
   /** v2: named primary agent to use (e.g. "build" | "plan" | "review"). */
@@ -483,6 +498,15 @@ function parsePricing(raw: unknown): Record<string, { input: number; output: num
   return out;
 }
 
+/** rc `provider.<id>.models.<id>.cost` overrides (P2.1) < explicit rc `modelPricing`. */
+function mergePricing(
+  fromProvider: Record<string, { input: number; output: number }>,
+  fromRc: Record<string, { input: number; output: number }> | undefined,
+): Record<string, { input: number; output: number }> | undefined {
+  if (Object.keys(fromProvider).length === 0) return fromRc;
+  return { ...fromProvider, ...(fromRc ?? {}) };
+}
+
 const VALID_EFFECTS = new Set(["allow", "deny", "ask"]);
 
 /** Validate permission rules v2; drop malformed entries with a warning. */
@@ -508,15 +532,71 @@ export function parsePermissionRules(raw: unknown, label = "permissions.rules"):
   return out;
 }
 
+/**
+ * P2.1: the custom provider map for a workdir — `builtin < rc.providers
+ * (legacy format) < rc.provider (opencode block)`. The ONE source used by
+ * startup, `scoder -m`, `/model` hot-swap, agent routing and the P2.2 router
+ * so no path can drift from another.
+ */
+export function loadMergedProviders(workdir: string): Record<string, ProviderDef> {
+  const rc = loadRcFile(workdir);
+  return { ...parseCustomProviders(rc.providers), ...parseProviderConfig(rc.provider) };
+}
+
+/** Flatten rc-config model metadata into catalog-shaped entries (P2.1 §5). */
+function buildConfigModels(custom: Record<string, ProviderDef>): Record<string, ModelInfo> {
+  const out: Record<string, ModelInfo> = {};
+  for (const def of Object.values(custom)) {
+    for (const [mid, mc] of Object.entries(def.models ?? {})) {
+      if (mc.contextWindow === undefined && mc.pricing === undefined &&
+          mc.supportCache === undefined && mc.supportReasoning === undefined) continue;
+      const info: ModelInfo = {
+        id: mid,
+        provider: def.id,
+        contextWindow: mc.contextWindow ?? 0, // 0 → contextWindowFor falls back to 128k
+        maxTokens: mc.maxTokens,
+        pricing: mc.pricing,
+        supportCache: mc.supportCache ?? def.supportCache,
+        supportReasoning: mc.supportReasoning ?? def.supportReasoning,
+      };
+      // Canonical key (provider id) + alias under the runtime kind — Agent
+      // code looks up with `config.provider`, which is the kind.
+      out[`${def.id}/${mid}`] = info;
+      out[`${def.kind}/${mid}`] = { ...info };
+    }
+  }
+  return out;
+}
+
+/** Model-level cost overrides (P2.1 §5): providers' `models.<id>.cost`. */
+function buildConfigPricing(custom: Record<string, ProviderDef>): Record<string, { input: number; output: number }> {
+  const out: Record<string, { input: number; output: number }> = {};
+  for (const def of Object.values(custom)) {
+    for (const [mid, mc] of Object.entries(def.models ?? {})) {
+      if (!mc.pricing) continue;
+      out[mid] = mc.pricing;
+      out[`${def.id}/${mid}`] = mc.pricing;
+    }
+  }
+  return out;
+}
+
 export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const workdir = overrides.workdir ?? process.cwd();
   const rc = loadRcFile(workdir);
+
+  // P2.1: `rc.provider` is SHAPE-discriminated — a string is the legacy
+  // active-provider selector, an object is the opencode-style provider block.
+  const rcProviderSelector = typeof rc.provider === "string" ? rc.provider : undefined;
+  const rcProviderBlock = typeof rc.provider === "object" && rc.provider !== null && !Array.isArray(rc.provider)
+    ? rc.provider
+    : undefined;
 
   // Provider auto-detection: explicit flag > env > rc > baseUrl/model heuristics
   const providerRaw =
     (overrides as { provider?: ProviderName }).provider ??
     process.env.SCODER_PROVIDER ??
-    rc.provider ??
+    rcProviderSelector ??
     undefined;
   const isAnthropic =
     providerRaw === "anthropic" ||
@@ -526,36 +606,67 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       )) ||
     (providerRaw === undefined &&
       /^claude-/i.test(overrides.model ?? process.env.SCODER_MODEL ?? rc.model ?? ""));
-  const provider: ProviderName = providerRaw === "anthropic" || isAnthropic ? "anthropic" : "openai";
+  let provider: ProviderName = providerRaw === "anthropic" || isAnthropic ? "anthropic" : "openai";
 
-  // I-01: provider registry — support "provider/model" syntax + custom providers.
-  const customProviders = parseCustomProviders(rc.providers);
+  // I-01 + P2.1: provider registry — "provider/model" refs, bare ids that are
+  // declared in a configured `models` map, legacy `providers.<id>` and the
+  // new opencode `provider` block all merge into one map.
+  const customProviders = { ...parseCustomProviders(rc.providers), ...parseProviderConfig(rcProviderBlock) };
   const rawModel = overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? "";
   const [providerPrefix, modelFromSlash] = splitProviderModel(rawModel);
-  const providerId = providerPrefix ?? (overrides as { provider?: string }).provider ?? process.env.SCODER_PROVIDER ?? rc.provider ?? (isAnthropic ? "anthropic" : "openai");
+  let refExplicit = providerPrefix !== null;
+  let providerId =
+    providerPrefix ??
+    (overrides as { provider?: string }).provider ??
+    process.env.SCODER_PROVIDER ??
+    rcProviderSelector ??
+    (isAnthropic ? "anthropic" : "openai");
+  if (!providerPrefix && rawModel) {
+    const owners = findModelOwners(rawModel, customProviders);
+    if (owners.length === 1) {
+      providerId = owners[0].provider.id; // bare id declared by exactly one provider → route to it
+      refExplicit = true;
+    } else if (owners.length > 1) {
+      const active = customProviders[providerId];
+      if (!active?.models?.[rawModel]) {
+        console.error(
+          `⚠  model "${rawModel}" is declared by several providers (${owners.map((o) => o.provider.id).join(", ")}) — write "<provider>/${rawModel}" to choose`,
+        );
+      }
+    }
+  }
   const providerResolution = resolveProvider(providerId, customProviders);
   const providerDef = "def" in providerResolution ? providerResolution.def : undefined;
   if ("error" in providerResolution) {
     console.error(`⚠  provider: ${providerResolution.error} — falling back to openai-compatible behavior`);
   }
-  // API key: provider-specific env var wins (registry), then legacy chain.
+  // An explicit ref wins the runtime kind over the "claude-" heuristic (e.g.
+  // `box-api/…` kind anthropic, `groq/claude-copy` kind openai).
+  if (providerDef && refExplicit && providerDef.kind !== provider) provider = providerDef.kind;
+
+  // API key chain (P2.1 §3): flag > SCODER_API_KEY > <apiKeyEnv> env >
+  // provider options.apiKey (rc inline) > rc.apiKey > "".
   const providerKeyEnv = providerDef ? process.env[providerDef.apiKeyEnv] : undefined;
   // P0-5: same chain as before, but remember WHICH source won — a provider
   // hot-swap may only re-resolve an env-derived key; a pinned one (flag or rc)
-  // is provider-agnostic and must survive the switch.
+  // is provider-agnostic and must survive the switch. `provider-rc` is
+  // provider-SPECIFIC: the inline key travels with its provider only.
   const keyFromEnv =
     process.env.SCODER_API_KEY ??
     providerKeyEnv ??
     (isAnthropic ? process.env.ANTHROPIC_API_KEY : undefined) ??
     process.env.OPENAI_API_KEY;
-  const apiKey = overrides.apiKey ?? keyFromEnv ?? rc.apiKey ?? "";
+  const keyFromProviderRc = keyFromEnv ? undefined : providerDef?.apiKeyInline;
+  const apiKey = overrides.apiKey ?? keyFromEnv ?? keyFromProviderRc ?? rc.apiKey ?? "";
   const apiKeySource: NonNullable<AgentConfig["apiKeySource"]> = overrides.apiKey
     ? "flag"
     : keyFromEnv
       ? "env"
-      : rc.apiKey
-        ? "rc"
-        : "none";
+      : keyFromProviderRc
+        ? "provider-rc"
+        : rc.apiKey
+          ? "rc"
+          : "none";
 
   // Validate maxSteps: NaN/0/negative would silently break the agent loop
   // (steps < NaN is always false → the loop never runs).
@@ -566,14 +677,25 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const maxStepsExplicit =
     overrides.maxSteps !== undefined || process.env.SCODER_MAX_STEPS !== undefined || rc.maxSteps !== undefined;
 
+  // The final model id (after "provider/model" split) — used for model-level
+  // metadata lookups (context window, pricing display) below.
+  const resolvedModelId = modelFromSlash || rawModel || (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL);
+
   const cfg: AgentConfig = {
     provider,
-    baseUrl: overrides.baseUrl ?? process.env.SCODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
+    // P2.1: the resolved provider def's own endpoint beats the generic default
+    // (an explicit env/flag/rc.baseUrl still wins above it).
+    baseUrl: overrides.baseUrl ?? process.env.SCODER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? rc.baseUrl ?? providerDef?.baseUrl ?? (isAnthropic ? ANTHROPIC_BASE_URL : DEFAULT_BASE_URL),
     apiKey,
     apiKeySource,
-    model: modelFromSlash || (overrides.model ?? process.env.SCODER_MODEL ?? process.env.OPENAI_MODEL ?? rc.model ?? (isAnthropic ? ANTHROPIC_DEFAULT_MODEL : DEFAULT_MODEL)),
+    model: resolvedModelId,
     providerDef,
-    contextWindow: rc.contextWindow ?? (providerDef as { contextWindow?: number } | undefined)?.contextWindow,
+    // Model-level ctx (provider block `models.<id>.limit.context`) wins over
+    // the provider default; rc.contextWindow still overrides everything.
+    contextWindow:
+      rc.contextWindow ??
+      providerDef?.models?.[resolvedModelId]?.contextWindow ??
+      (providerDef as { contextWindow?: number } | undefined)?.contextWindow,
     workdir,
     buildCmd: overrides.buildCmd ?? process.env.SCODER_BUILD_CMD ?? rc.buildCmd ?? null,
     maxSteps: overrides.maxSteps ?? validatedMaxSteps,
@@ -615,7 +737,7 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     selfReview: rc.selfReview,
     verifyCache: rc.verifyCache,
     localProfile: rc.localProfile,
-    modelPricing: parsePricing(rc.modelPricing),
+    modelPricing: mergePricing(buildConfigPricing(customProviders), parsePricing(rc.modelPricing)),
     theme: overrides.theme ?? process.env.SCODER_THEME ?? rc.theme,
     notify: process.env.SCODER_NOTIFY != null
       ? /^(1|true)$/.test(process.env.SCODER_NOTIFY)
@@ -630,6 +752,10 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     overrides.reporter?.info(`local model profile (plan/performance-issue.md P2): ${localChanges.join(", ")} — ghi đè bằng rc "localProfile": false hoặc đặt từng key trong "limits"`);
   }
 
+  // P2.1 §5: config-level models become the top layer of the catalog so
+  // sidebar ctx %, compaction and contextWindowFor know box-api-style ids.
+  registerConfigModels(buildConfigModels(customProviders));
+
   // Secrets hygiene: warn if apiKey is set in the rc file (risk of accidental commit)
   if (rc.apiKey && !process.env.SCODER_NO_APIKEY_WARNING) {
     console.error(
@@ -637,6 +763,19 @@ export function loadConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
       `   Prefer the environment variable SCODER_API_KEY (or OPENAI_API_KEY) instead,\n` +
       `   and add .scoderrc.json to .gitignore. Suppress: SCODER_NO_APIKEY_WARNING=1\n`,
     );
+  }
+  // P2.1 §3: the same commit risk applies to literal inline keys in the
+  // provider block — `{env:VAR}` is the recommended form.
+  if (rcProviderBlock && !process.env.SCODER_NO_APIKEY_WARNING) {
+    for (const [id, v] of Object.entries(rcProviderBlock)) {
+      const k = (v as { options?: { apiKey?: unknown } })?.options?.apiKey;
+      if (typeof k === "string" && k && !k.includes("{env:")) {
+        console.error(
+          `⚠  WARNING: provider "${id}" has a literal API key in the rc file — prefer "apiKey": "{env:VAR_NAME}". Suppress: SCODER_NO_APIKEY_WARNING=1`,
+        );
+        break;
+      }
+    }
   }
 
   return cfg;

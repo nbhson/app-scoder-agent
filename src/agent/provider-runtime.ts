@@ -47,6 +47,7 @@ export function createClientRuntime(config: AgentConfig): ProviderRuntimeContrac
     supportCache: config.providerDef?.supportCache ?? true,
     reasoning: config.reasoning,
     requestTimeoutMs: config.limits?.requestTimeoutMs,
+    headers: config.providerDef?.headers,
   });
 }
 
@@ -72,6 +73,7 @@ export function createSwappedRuntime(
     supportCache: def.supportCache ?? true,
     reasoning: config.reasoning,
     requestTimeoutMs: config.limits?.requestTimeoutMs,
+    headers: def.headers,
   });
 }
 
@@ -87,6 +89,8 @@ function buildClient(o: {
   supportCache: boolean;
   reasoning?: "off" | "on";
   requestTimeoutMs?: number;
+  /** P2.1: extra request headers from the provider def. */
+  headers?: Record<string, string>;
 }): ProviderRuntimeContract {
   const common = {
     baseUrl: o.baseUrl,
@@ -95,6 +99,7 @@ function buildClient(o: {
     maxTokens: o.maxTokens,
     temperature: o.temperature,
     requestTimeoutMs: o.requestTimeoutMs, // G7
+    ...(o.headers ? { headers: o.headers } : {}),
   };
   if (o.isAnthropic) {
     return new AnthropicClient({
@@ -111,7 +116,7 @@ export interface SwapConnection {
   baseUrl: string;
   apiKey: string;
   /** What decided the key — surfaced in the `/model` notice so a wrong key is visible. */
-  keySource: "pinned" | "provider-env" | "shared-env" | "kept";
+  keySource: "pinned" | "provider-env" | "shared-env" | "provider-rc" | "kept";
   /** Endpoint came from the provider definition rather than the current config. */
   endpointFromDef: boolean;
 }
@@ -124,7 +129,9 @@ export interface SwapConnection {
  * `openai-compatible` escape hatch — inherit the current baseUrl.
  * apiKey: a pinned key (`--api-key`, rc `apiKey`, programmatic override) is
  * provider-agnostic and stays; otherwise the new provider's env var wins, then
- * `SCODER_API_KEY`, then whatever is in use (empty key = local engine, fine).
+ * `SCODER_API_KEY`, then the TARGET def's own rc inline key (P2.1). A key that
+ * came from the provider we are LEAVING (`provider-rc`) is provider-specific —
+ * it must never travel to the new one.
  */
 export function resolveSwapConnection(config: AgentConfig, def: ProviderDef): SwapConnection {
   const baseUrl = def.baseUrl || config.baseUrl;
@@ -144,6 +151,12 @@ export function resolveSwapConnection(config: AgentConfig, def: ProviderDef): Sw
     } else if (sharedEnv) {
       apiKey = sharedEnv;
       keySource = "shared-env";
+    } else if (def.apiKeyInline) {
+      apiKey = def.apiKeyInline;
+      keySource = "provider-rc";
+    } else if (config.apiKeySource === "provider-rc") {
+      apiKey = ""; // drop the leaving provider's inline key — P0-5 bug class
+      keySource = "kept";
     }
   }
   return { baseUrl, apiKey, keySource, endpointFromDef: Boolean(def.baseUrl) };

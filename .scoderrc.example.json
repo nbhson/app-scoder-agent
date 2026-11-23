@@ -1,7 +1,23 @@
 {
   "model": "gpt-4o-mini",
-  "provider": "openai",
   "baseUrl": "https://api.openai.com/v1",
+
+  "provider": {
+    "box-api": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Box API",
+      "options": {
+        "baseURL": "https://api.example-provider.vn/v1",
+        "apiKey": "{env:BOX_API_KEY}"
+      },
+      "models": {
+        "kimi-k3": { "name": "kimi-k3" },
+        "kimi-k2.7-code": { "name": "kimi-k2.7-code" },
+        "glm-5.3": { "name": "glm-5.3" },
+        "qwen3.8-flash": { "name": "qwen3.8-flash", "limit": { "context": 262144 }, "cost": { "input": 0.2, "output": 0.8 } }
+      }
+    }
+  },
 
   "theme": "mission",
   "notify": true,

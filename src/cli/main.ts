@@ -156,6 +156,27 @@ async function main(): Promise<void> {
 
   if (args.subcommand === "models") {
     const { loadCatalog, cacheAgeHours } = await import("../llm/model-catalog.js");
+    const { loadMergedProviders } = await import("../config/config.js");
+    // P2.1: models declared in the rc `provider` block come FIRST — they win
+    // over the catalog in every lookup. Display shows ALL declared ids, even
+    // metadata-light ones (the lookup registry only keeps entries that carry
+    // real metadata; a name-only row is still a row the user configured).
+    const configured: Array<[string, { ctx?: number; price?: { input: number; output: number }; cache?: boolean; reasoning?: boolean }]> = [];
+    for (const def of Object.values(loadMergedProviders(cfg.workdir))) {
+      for (const [mid, m] of Object.entries(def.models ?? {})) {
+        configured.push([`${def.id}/${mid}`, { ctx: m.contextWindow, price: m.pricing, cache: m.supportCache, reasoning: m.supportReasoning }]);
+      }
+    }
+    configured.sort((a, b) => a[0].localeCompare(b[0]));
+    if (configured.length > 0) {
+      console.log(`configured (rc "provider" block) — always wins over the catalog:\n`);
+      for (const [ref, m] of configured) {
+        const flags = [m.cache ? "cache" : null, m.reasoning ? "reasoning" : null].filter(Boolean).join(",");
+        const ctx = m.ctx ? `ctx=${(m.ctx / 1000).toFixed(0)}k` : "ctx=?";
+        console.log(`  ${ref.padEnd(28)} ${ctx}  SOURCE=config${m.price ? `  $${m.price.input}/$${m.price.output} per 1M` : ""}${flags ? `  [${flags}]` : ""}`);
+      }
+      console.log("");
+    }
     const filter = args.modelsProvider ?? null;
     const { models, source } = await loadCatalog(args.modelsRefresh === true);
     const age = cacheAgeHours();

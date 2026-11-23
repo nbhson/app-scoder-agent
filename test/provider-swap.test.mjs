@@ -143,6 +143,21 @@ describe("P0-5 resolveSwapConnection", () => {
     assert.equal(c.baseUrl, "http://127.0.0.1:1234/v1");
     assert.equal(c.endpointFromDef, false);
   });
+
+  it("P2.1: target provider's rc inline key is used when no env wins", () => {
+    env({ BOX_KEY_X: undefined, SCODER_API_KEY: undefined });
+    const def = { id: "box", baseUrl: "https://box/v1", apiKeyEnv: "BOX_KEY_X", kind: "openai", apiKeyInline: "sk-box-inline" };
+    const c = resolveSwapConnection(baseConfig({ apiKeySource: "env" }), def);
+    assert.equal(c.apiKey, "sk-box-inline");
+    assert.equal(c.keySource, "provider-rc");
+  });
+
+  it("P2.1: a provider-rc inline key NEVER travels to the next provider", () => {
+    env({ SCODER_API_KEY: undefined, OPENAI_API_KEY: undefined, ANTHROPIC_API_KEY: undefined });
+    // Leaving box-api (key came from its inline rc value) → target has no key source.
+    const c = resolveSwapConnection(baseConfig({ apiKey: "sk-box-inline", apiKeySource: "provider-rc" }), BUILTIN_PROVIDERS.openai);
+    assert.equal(c.apiKey, "", "outgoing inline key must not leak to openai");
+  });
 });
 
 describe("P0-5 Agent.setModel cross-provider", () => {
@@ -181,6 +196,61 @@ describe("P0-5 Agent.setModel cross-provider", () => {
     a.setModel("groq/llama-3.3-70b");
     assert.equal(a.config.provider, "openai");
     assert.equal(a.config.baseUrl, "https://api.groq.com/openai/v1");
+  });
+
+  it("P2.1: `/model box-api/kimi-k3` resolves via the NEW provider block; undeclared id warns", () => {
+    writeFileSync(
+      process.env.SCODER_CONFIG,
+      JSON.stringify({
+        provider: {
+          "box-api": {
+            npm: "@ai-sdk/openai-compatible",
+            options: { baseURL: "https://api.ai-box.vn/v1", apiKey: "{env:BOX_TEST_KEY}" },
+            models: { "kimi-k3": {} },
+          },
+        },
+      }),
+    );
+    env({ BOX_TEST_KEY: "sk-box", SCODER_API_KEY: undefined, OPENAI_API_KEY: undefined });
+    const a = new Agent(baseConfig({ apiKeySource: "env" }));
+    const n1 = a.setModel("box-api/kimi-k3");
+    assert.doesNotMatch(n1, /^ERROR/);
+    assert.equal(a.config.baseUrl, "https://api.ai-box.vn/v1");
+    assert.equal(a.config.apiKey, "sk-box", "target provider's inline key wins");
+    assert.doesNotMatch(n1, /not declared/);
+    const n2 = a.setModel("box-api/kimi-k9");
+    assert.match(n2, /not declared in provider "box-api"/, "escape hatch still swaps, with a warning");
+  });
+
+  it("P2.1: provider-def headers ride on every request of the swapped client", async () => {
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      calls.push({ headers: init?.headers ?? {} });
+      return new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+    try {
+      writeFileSync(
+        process.env.SCODER_CONFIG,
+        JSON.stringify({
+          provider: {
+            "box-api": { options: { baseURL: "https://api.ai-box.vn/v1", apiKey: "sk-box-literal", headers: { "x-tenant": "acme" } }, models: { "kimi-k3": {} } },
+          },
+        }),
+      );
+      env({ SCODER_API_KEY: undefined, OPENAI_API_KEY: undefined });
+      const a = new Agent(baseConfig({ apiKeySource: "env" }));
+      a.setModel("box-api/kimi-k3");
+      await a.client.chat([{ role: "user", content: "hi" }], []);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].headers["x-tenant"], "acme");
+      assert.equal(calls[0].headers["Authorization"], "Bearer sk-box-literal");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("the swapped client sends requests to the new endpoint", async () => {

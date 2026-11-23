@@ -36,6 +36,11 @@ export const PROJECT_RC_SENSITIVE_KEYS: readonly string[] = [
   "baseUrl",
   "apiKey",
   "providers",
+  // P2.1: the opencode-style block carries endpoints AND inline keys — a
+  // cloned repo must not exfiltrate SCODER_* keys to its own baseURL before
+  // the user trusts it. (The legacy string selector is gated together with
+  // it; the anthropic/claude- heuristics keep working either way.)
+  "provider",
   "mcpServers",
   "buildCmd",
   "verifyCmds",
