@@ -15,7 +15,7 @@
  * còn lại.
  */
 import React, { useEffect, useState } from "react";
-import { Box, Text, useWindowSize } from "ink";
+import { Box, Text } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import { contextWindowFor } from "../llm/model-catalog.js";
 import { type ChatItem, type TuiState } from "./state.js";
@@ -676,40 +676,13 @@ function RouterTab({ state, rows, pulse }: { state: TuiState; rows: number; puls
 
 // ── P8: harness log tab ───────────────────────────────────────────────────────
 
-/**
- * Improve TUI: full-width LOG panel — khi tab log mở và terminal đủ rộng,
- * log thay vì nhốt trong rail 48 cell (clip ~27 ký tự) được render như
- * Palette/Pager: nguyên chiều ngang terminal, chat phía trên flex nhỏ lại.
- * Rail sidebar ẩn khi panel này hiện (app.tsx điều phối).
- */
-export function LogPanel({ state, rows, view }: { state: TuiState; rows: number; view: LogView }): React.JSX.Element {
-  const { columns } = useWindowSize();
-  const inner = Math.max(28, (columns ?? 100) - 6);
-  return (
-    <Box
-      flexDirection="column"
-      width="100%"
-      height={rows}
-      flexShrink={0}
-      overflow="hidden"
-      borderStyle="single"
-      borderColor={theme.border}
-      paddingX={1}
-    >
-      <TabBar active="log" count={state.log.length} dropped={state.logDropped} filter={view.filter} routerOn={state.routerTiers.length > 0} flash={null} />
-      <TabGap />
-      <LogTab state={state} view={view} rows={Math.max(4, rows - 4)} inner={inner} />
-    </Box>
-  );
-}
-
-function LogTab({ state, view, rows, inner = INNER }: { state: TuiState; view: LogView; rows: number; inner?: number }): React.JSX.Element {
+function LogTab({ state, view, rows }: { state: TuiState; view: LogView; rows: number }): React.JSX.Element {
   const filtered = filterLog(state.log, view.filter);
   const detailOn = view.detail && view.selId != null;
   const sel = detailOn ? state.log.find((e) => e.id === view.selId) : undefined;
   // DETAIL block = rule + lines + its own footer; the list also reserves the
   // "─ LOG ─" rule row and the bottom key-hint row, so the tab never overflows.
-  const detailLines = sel ? logDetailLines(sel, inner, clipCells) : [];
+  const detailLines = sel ? logDetailLines(sel, INNER, clipCells) : [];
   const detailRows = sel ? detailLines.length + 2 : 0;
   const avail = Math.max(1, rows - 2 - detailRows);
   const win = logWindow(filtered, avail, view.offset);
@@ -722,37 +695,30 @@ function LogTab({ state, view, rows, inner = INNER }: { state: TuiState; view: L
         <Text dimColor>{selected ? "❱" : " "}</Text>
         <Text color={theme.dim}>{` ${fmtLogClock(e.ts)} `}</Text>
         <Text color={logKindColor(e)} bold={selected}>{`${logKind(e)} `}</Text>
-        <Text bold={selected}>{clipCells(e.text + logSuffix(e), inner - 17)}</Text>
+        <Text bold={selected}>{clipCells(e.text + logSuffix(e), INNER - 17)}</Text>
       </Text>,
     );
   });
-
-  // Improve TUI: rule "─ LOG … ────" điền CHÍNH XÁC hết chiều ngang (đếm cả
-  // nhãn + count) — panel full-width nhìn gọn như Palette, không hở mép.
-  const logLabel = `LOG${view.filter !== "ALL" ? ` · ${view.filter}` : ""}`;
-  const logCount = win.maxOffset > 0 ? `${Math.min(filtered.length, win.first + 1)}–${win.first + win.rows.length}/${filtered.length}` : `${filtered.length}`;
-  const logRuleFill = Math.max(0, inner - (2 + logLabel.length + 1 + logCount.length) - 1);
 
   return (
     <Box flexDirection="column" flexShrink={0}>
       <Text wrap="truncate">
         <Text dimColor>{`${charset.h} `}</Text>
-        <Text bold>{logLabel}</Text>
-        <Text dimColor>{` ${logCount}`}</Text>
-        <Text dimColor>{` ${charset.h.repeat(logRuleFill)}`}</Text>
+        <Text bold>{`LOG${view.filter !== "ALL" ? ` · ${view.filter}` : ""}`}</Text>
+        <Text dimColor>{` ${win.maxOffset > 0 ? `${Math.min(filtered.length, win.first + 1)}–${win.first + win.rows.length}/${filtered.length}` : `${filtered.length}`}`}</Text>
       </Text>
       {lines.length === 0 && <Text dimColor>  nothing yet — events land here as they happen</Text>}
       {lines}
       {sel && (
         <Box flexDirection="column" flexShrink={0}>
-          <Text dimColor>{`${charset.h} DETAIL ${charset.h.repeat(Math.max(0, inner - 8))}`}</Text>
+          <Text dimColor>{`${charset.h} DETAIL ${charset.h.repeat(Math.max(0, INNER - 8))}`}</Text>
           {detailLines.map((l, i) => (
             <Text key={i} dimColor wrap="truncate">  {l}</Text>
           ))}
           <Text dimColor>  Enter full · y copy · Esc close</Text>
         </Box>
       )}
-      <Text dimColor>jk select · f filter · d detail · Enter/F · Esc back</Text>
+      <Text dimColor>jk select · f filter · d detail · Enter/F</Text>
     </Box>
   );
 }

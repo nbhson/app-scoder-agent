@@ -51,7 +51,7 @@ import { formatShortcuts } from "./shortcuts.js"; // /shortcut cheat sheet
 import { getTheme, setActiveTheme, theme } from "./theme.js";
 import { boxBorderStyle, charset, isAsciiMode } from "./charset.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
-import { nextSidebarTab, Sidebar, LogPanel, type SidebarTab } from "./sidebar.js"; // sidebar opencode
+import { nextSidebarTab, Sidebar, type SidebarTab } from "./sidebar.js"; // sidebar opencode
 import { getVersion } from "../shared/version.js";
 import { useScrollMetrics } from "./hooks/use-scroll.js";
 import { useGitStatus } from "./hooks/use-git-status.js";
@@ -411,17 +411,12 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // P8: keyboard routing for the harness-log tab. The view lives in app state;
   // these callbacks are stable (they read logViewRef/stateRef at key time).
   // Mirror of Sidebar's LogTab budget so the window follows the cursor.
-  // Improve TUI: geometry của LOG tab (panel full-width vs rail 48 cell) —
-  // ref được cập nhật mỗi render (bên dưới, sau useWindowSize) để logListRows
-  // chạy lúc bấm phím mirror đúng budget thật của LogPanel/Sidebar.
-  const logGeomRef = useRef({ wide: false, inner: SIDEBAR_WIDTH - 4, total: 24 });
   const logListRows = useCallback(() => {
-    const g = logGeomRef.current;
-    const total = g.wide ? g.total : viewportRowsRef.current ?? g.total;
+    const total = viewportRowsRef.current ?? 24;
     const avail = Math.max(8, total - 3);
     const v = logViewRef.current;
     const sel = v.detail && v.selId != null ? stateRef.current.log.find((e) => e.id === v.selId) : undefined;
-    const detailRows = sel ? logDetailLines(sel, g.inner, clipCells).length + 2 : 0;
+    const detailRows = sel ? logDetailLines(sel, SIDEBAR_WIDTH - 4, clipCells).length + 2 : 0;
     return Math.max(1, avail - 2 - detailRows);
   }, [viewportRowsRef, stateRef]);
   const logHandlers = useMemo(() => ({
@@ -512,16 +507,6 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // cửa sổ (scrollTop - startRow[item_start]).
   const { rows, columns } = useWindowSize();
   const showSidebar = (columns ?? 100) >= SIDEBAR_MIN_COLS;
-  // Improve TUI: LOG tab trên terminal rộng = panel full-width (như Palette/
-  // Pager) thay vì nhốt log trong rail 48 cell bị cắt ~27 ký tự; rail ẩn khi
-  // panel hiện. logGeomRef mirror budget để phím j/k/f/d trượt cửa sổ đúng.
-  const logWide = showSidebar && sidebarTab === "log";
-  const logPanelHeight = Math.max(8, Math.min(16, (rows || 24) - 10));
-  logGeomRef.current = {
-    wide: logWide,
-    inner: logWide ? Math.max(28, (columns ?? 100) - 6) : SIDEBAR_WIDTH - 4,
-    total: logWide ? logPanelHeight : viewport.clientHeight || logGeomRef.current.total,
-  };
   // Keyboard ownership: while any overlay (permission modal, session picker,
   // palette, help) is open, Input stops consuming keys — the overlay's own
   // useInput answers. (Regression this fixes: keys leaked through the
@@ -639,9 +624,8 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       )}
         {/* Sidebar phải: session · MCP · metrics · phases · plan · build
             (narrow → ẩn). rows = chiều cao đo được của khung chính — sidebar
-            greedy-fit theo budget, section không vừa trọn vẹn thì bỏ qua.
-            tab log → rail ẩn, LogPanel full-width bên dưới thay thế. */}
-        {showSidebar && sidebarTab !== "log" && (
+            greedy-fit theo budget, section không vừa trọn vẹn thì bỏ qua. */}
+        {showSidebar && (
           <Sidebar
             state={state}
             config={cfg}
@@ -651,10 +635,6 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           />
         )}
       </Box>
-      {/* Improve TUI: harness log full-width khi LOG tab mở (terminal ≥100
-          cols) — render dạng panel trong-flow như Palette/Pager, chat viewport
-          phía trên flex nhỏ lại. Esc/Ctrl+B đưa về OVERVIEW (escChain). */}
-      {logWide && <LogPanel state={state} rows={logPanelHeight} view={logView} />}
       {/* Session picker modal — Ctrl+S or bare "/" opens it. */}
       {sessionPickerOpen && !permPrompt && (
         <SessionPicker

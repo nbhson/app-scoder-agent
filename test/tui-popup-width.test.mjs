@@ -1,7 +1,7 @@
 /**
- * Render tests cho các popup/tab "improve TUI": SessionPicker (Ctrl+S) và
- * LogPanel (tab HARNESS LOG full-width) phải trải hết chiều ngang terminal
- * như Palette — không clip ở 38/44 cell — và không bao giờ cao quá rows.
+ * Render tests cho SessionPicker (Ctrl+S) — popup "improve TUI" phải trải hết
+ * chiều ngang terminal như Palette — không clip ở 38 cell — và không bao giờ
+ * cao quá rows.
  * Chạy: node --test test/tui-popup-width.test.mjs (sau npm run build)
  */
 import { describe, it } from "node:test";
@@ -11,10 +11,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import React from "react";
-import { render, Box } from "ink";
+import { render } from "ink";
 import { SessionPicker } from "../dist/tui/session-picker.js";
-import { LogPanel } from "../dist/tui/sidebar.js";
-import { applyEvent, initialState } from "../dist/tui/state.js";
 
 function stripAnsi(s) {
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
@@ -111,58 +109,5 @@ describe("SessionPicker — fullwidth + height cap (improve TUI)", () => {
     );
     assert.equal(lines[0].length, 50);
     assert.ok(lines.every((l) => l.length <= 50), `dài nhất=${Math.max(...lines.map((l) => l.length))}`);
-  });
-});
-
-// ── LogPanel (tab HARNESS LOG full-width) ────────────────────────────────────
-
-function logState() {
-  const s = initialState();
-  applyEvent(s, { type: "run_start", task: "demo", model: "m1", provider: "openai", workdir: "/tmp/x", buildCmd: "npm run build" });
-  applyEvent(s, { type: "step", step: 1, maxSteps: 9 });
-  applyEvent(s, {
-    type: "tool_call", step: 1, id: "c1", name: "run_command",
-    args: { command: "npm run test -- --filter some-long-project-name packages/core" },
-  });
-  applyEvent(s, { type: "tool_result", step: 1, id: "c1", name: "run_command", ok: true, output: "hi" });
-  return s;
-}
-
-const logView = { filter: "ALL", selId: null, offset: 0, detail: false };
-
-describe("LogPanel — harness log full-width (improve TUI)", () => {
-  it("panel trải hết cols, log dài không bị clip ở 44 cell của rail", async () => {
-    const lines = await renderLines(
-      React.createElement(Box, { flexDirection: "column", height: 30 },
-        React.createElement(LogPanel, { state: logState(), rows: 12, view: logView })),
-      140, 30,
-    );
-    assert.equal(lines[0].length, 140, "border trên = cols");
-    const shell = lines.find((l) => l.includes("SHELL"));
-    assert.ok(shell, "có dòng SHELL");
-    // chuỗi dài nằm sâu bên phải (>60 cell) → proof không clip kiểu rail 44
-    const idx = shell.indexOf("packages/core");
-    assert.ok(idx > 60, `text không được render full-width (idx=${idx})`);
-  });
-
-  it("rule ─ LOG ─ điền gần hết chiều ngang (đếm đúng, không hở lớn)", async () => {
-    const lines = await renderLines(
-      React.createElement(Box, { flexDirection: "column", height: 30 },
-        React.createElement(LogPanel, { state: logState(), rows: 12, view: logView })),
-      140, 30,
-    );
-    const rule = lines.find((l) => l.includes("LOG") && l.includes("─"));
-    assert.ok(rule, "có dòng rule LOG");
-    const dashes = (rule.match(/─/g) ?? []).length;
-    assert.ok(dashes > 100, `rule chỉ có ${dashes} gạch ─ ở 140 cols`);
-  });
-
-  it("không dòng nào vượt quá cols trên terminal hẹp", async () => {
-    const lines = await renderLines(
-      React.createElement(Box, { flexDirection: "column", height: 26 },
-        React.createElement(LogPanel, { state: logState(), rows: 14, view: logView })),
-      70, 26,
-    );
-    assert.ok(lines.every((l) => l.length <= 70), `dài nhất=${Math.max(...lines.map((l) => l.length))} > 70`);
   });
 });

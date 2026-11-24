@@ -6,9 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 ## [1.4.0] — 2026-11-24
 
 TUI hardening release: the chrome stays one row tall at every terminal size,
-multiline input can no longer eat the viewport, and the two surfaces that
-looked amateur next to the Ctrl+P palette — the Ctrl+S session picker and the
-HARNESS LOG tab — are now full-width, column-aligned and height-safe.
+multiline input can no longer eat the viewport, and the Ctrl+S session picker
+is now full-width, column-aligned and height-safe like the Ctrl+P palette.
 
 ### Fixed
 
@@ -32,18 +31,13 @@ HARNESS LOG tab — are now full-width, column-aligned and height-safe.
   column-aligned rows `▸ id · date · steps · task` on wide terminals with a
   two-line degrade when narrow, and a selection-following height window plus
   `⋯ +N more` indicator so the picker never overflows a 20-row terminal.
-- **HARNESS LOG gains a full-width panel** — on wide terminals the log tab
-  replaces the 48-cell rail with `LogPanel` (100% cols, height-capped, like
-  Pager/Palette): log rows, DETAIL block and the `─ LOG ─` rule budget from
-  the real column count instead of clipping at ~27 cells. `Ctrl+B`/`Esc`
-  routing is unchanged; narrow terminals keep the rail.
 
 ### Tests
 
-- New `test/tui-popup-width.test.mjs` (7 cases: full-width borders, column
-  rows, height cap, narrow degrade); chrome fixed-height cases in
+- New `test/tui-popup-width.test.mjs` (full-width borders, column rows,
+  height cap, narrow degrade); chrome fixed-height cases in
   `test/tui-render.test.mjs`; `windowInputLines` cases in
-  `test/command-registry.test.mjs`. Full suite: 1450 pass.
+  `test/command-registry.test.mjs`. Full suite: 1447 pass.
 
 ## [1.3.0] — 2026-11-24
 
