@@ -26,6 +26,21 @@ import {
 import { applyRules, classify, type ClassifySignals } from "./classifier.js";
 import { hysteresisDecide, initialHysteresis, type HysteresisResult, type HysteresisState } from "./hysteresis.js";
 
+/** Mirrors MCP_TOOL_PREFIX (src/mcp/types.ts) — a local const keeps the
+ *  router→mcp layer edge at zero; the wire names are the contract. */
+const MCP_TOOL_PREFIX = "mcp__";
+
+/**
+ * Schema JSON size of the CORE tools only. MCP schemas are constant per
+ * session (one github-mcp ≈ 30k+ chars on every single turn) — a constant
+ * must not decide whether "chào" is a heavy turn. toolCount still counts
+ * everything so `rules` on `tools` keep their meaning.
+ */
+function coreSchemaChars(tools: ToolSpec[]): number {
+  const core = tools.filter((t) => !t.function?.name.startsWith(MCP_TOOL_PREFIX));
+  return core.length > 0 ? JSON.stringify(core).length : 0;
+}
+
 export interface RouterRuntimeOptions {
   /** Validated candidates (Phase B guarantees ≥1 + fallback present). */
   models: RouterModel[];
@@ -223,7 +238,7 @@ export class RouterRuntime implements ProviderRuntimeContract {
   private turnSignals(messages: ChatMessage[], tools: ToolSpec[]): ClassifySignals {
     return {
       estTokens: estimateHistoryTokens(messages),
-      toolSchemaChars: tools.length > 0 ? JSON.stringify(tools).length : 0,
+      toolSchemaChars: coreSchemaChars(tools),
       toolCount: tools.length,
       endsInToolResults: messages.length > 0 && messages[messages.length - 1].role === "tool",
     };

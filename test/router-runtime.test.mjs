@@ -243,3 +243,37 @@ describe("RouterRuntime — judge hook (chữ ký L4, fake judge)", () => {
     assert.equal(called, 0);
   });
 });
+
+// ── Schema MCP là chi phí thường xuyên — không được lật tier (fix 1.3.x) ───
+
+describe("RouterRuntime — toolSchemaChars chỉ đếm tool core (MCP loại trừ)", () => {
+  const mcpTools = Array.from({ length: 30 }, (_, i) => ({
+    type: "function",
+    function: { name: `mcp__github__tool_${i}`, description: "m".repeat(2000), parameters: {} },
+  })); // ≈ 62k chars schema — vượt trần 30k nếu tính gộp
+  const coreSmall = [{ type: "function", function: { name: "read_file", description: "r".repeat(200), parameters: {} } }];
+
+  it("MCP schema khổng lồ + lượt nhẹ → vẫn small, reason không có 'tools'", async () => {
+    const { rt, decisions } = harness({ phase: "explore", step: 2 });
+    const r = await rt.chat(smallMsgs, [...coreSmall, ...mcpTools]);
+    assert.equal(r.message.content, "ok:qwen3.8-flash");
+    assert.equal(decisions[0].tier, "small");
+    assert.doesNotMatch(decisions[0].reason, /tools/);
+    // toolCount VẪN đếm tất cả — semantics của rules "tools" giữ nguyên
+    assert.equal(decisions[0].signals.toolCount, 31);
+  });
+
+  it("chỉ có MCP (không tool core) → chars = 0, không +1", async () => {
+    const { rt, decisions } = harness({ phase: "explore", step: 2 });
+    await rt.chat(smallMsgs, mcpTools);
+    assert.equal(decisions[0].signals.toolSchemaChars, 0);
+    assert.equal(decisions[0].tier, "small");
+  });
+
+  it("tool CORE vượt trần → +1 như cũ (khi chưa có MCP nào)", async () => {
+    const { rt, decisions } = harness({ phase: null, step: 2 });
+    await rt.chat(smallMsgs, [{ type: "function", function: { name: "giant", description: "g".repeat(31000), parameters: {} } }]);
+    assert.equal(decisions[0].tier, "large");
+    assert.match(decisions[0].reason, /score \+1: tools 1/);
+  });
+});

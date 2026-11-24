@@ -85,6 +85,12 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
             SCODER_API_KEY: "test",
             SCODER_BASE_URL: `http://127.0.0.1:${mockPort}`,
             SCODER_NO_SAVE: "1",
+            // Hermeticity: the REAL ~/.scoder/config.json may enable the
+            // router/judge and point tiers at live provider URLs — a routed
+            // turn would then dial 127.0.0.1:3003 instead of this mock and
+            // TIMEOUT. SCODER_CONFIG is the documented test override; the
+            // path never exists ⇒ no global layer, project rc + env as usual.
+            SCODER_CONFIG: join(dir, "no-global-config.json"),
           };
           // ROOT CAUSE (mà CI 2 PTY test chưa từng xanh): Ink 8 gate
           // interactivity bằng is-in-ci — env CI/CONTINUOUS_INTEGRATION tồn tại

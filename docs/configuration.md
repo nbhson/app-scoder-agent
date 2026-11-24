@@ -281,7 +281,8 @@ default; enabling it changes nothing until you opt in to routing:
   resumes routing. No restart needed either way.
 - **Decision layers** (win order: pin > rules > judge > score > hysteresis):
   L1 scores the turn (history size, phase from the last tool call, tool
-  schema weight, plan/wrap-up steps); L2 `rules` are "khi" expressions
+  schema weight — core tools only, see `signals`, plan/wrap-up steps);
+  L2 `rules` are "khi" expressions
   (`phase|step|tokens|tools` with `== != >= <=`) that force a tier;
   L3 hysteresis escalates small→large after `buildFails` consecutive build
   failures (and locks large until the build passes), resists tier
@@ -294,6 +295,13 @@ default; enabling it changes nothing until you opt in to routing:
   `cost` auto-split (cheapest half → small). `fallback` (default: the
   largest-context large model) is the deterministic way home whenever the
   router is undecided or errors — routing can never fail a run.
+- **`signals`**: L1 thresholds. `smallMaxCtxTokens` (default 16000) — an
+  estimated history above it leans large. `largeToolSchemaChars` (default
+  30000) — JSON size of **core** tool schemas adds +1 above the threshold;
+  `mcp__*` tools are deliberately excluded, because a 46-tool MCP server is
+  ~30k+ constant chars on *every* turn and would pin the whole session to
+  large (a "chào" should not be a heavy turn). `rules` on `tools` still see
+  the full tool count, MCP included.
 - **`judge`**: `null` (default) = pure 3-layer pipeline, ZERO extra
   requests. An object `{"model": "box-api/qwen3.8-flash", "scope":
   "gray", "timeoutMs": 2000, "minConfidence": 0.6}` adds a 4th layer that
