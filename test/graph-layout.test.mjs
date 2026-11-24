@@ -19,12 +19,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const GRAPH = join(here, "..", "dist", "tui", "markdown", "graph.js").replace(/\\/g, "/");
 const TW = join(here, "..", "dist", "tui", "text-width.js").replace(/\\/g, "/");
 
-let parseFlowchart, renderFlowchart, cleanMermaidLabel, measure;
+let parseFlowchart, renderFlowchart, cleanMermaidLabel, measure, parseMarkdown;
 
 before(async () => {
   const g = await import(`file://${GRAPH}`);
   ({ parseFlowchart, renderFlowchart, cleanMermaidLabel } = g);
   ({ measure } = await import(`file://${TW}`));
+  ({ parseMarkdown } = await import(`file://${join(here, "..", "dist", "tui", "markdown", "parse.js")}`));
 });
 
 const flow = (body) => body.split("\n").map((l) => l.trim()).filter((l) => l !== "");
@@ -108,6 +109,30 @@ const CHAIN = `flowchart LR
   A[Plan] --> B[Design] --> C[Implement] --> D[Unit test] --> E[Review]
   E --> F[Staging] --> G[Perf test] --> H[Docs] --> I[Release] --> J[Monitor]`;
 
+// 16 nodes / 18 edges with heavy fan-out (A has six children) and one cycle —
+// the real shape that regressed: too tall for `layered` at BAND 3, it fell
+// through to chain layout, which draws only chain-consecutive edges and left
+// an unreadable grid of 16 boxes with 4 of 18 connectors.
+const BRANCHING_TALL = `flowchart TD
+  A[JavaScript Runtime] --> B[Call Stack]
+  A --> C[Heap / Memory]
+  A --> D[Web APIs<br/>(Browser)]
+  A --> E[Task Queue<br/>(Macrotask)]
+  A --> F[Microtask Queue]
+  A --> G[Console / DOM]
+  B --> H{Stack empty?}
+  H -->|Yes| I[Drain Microtask Queue]
+  H -->|No| J[Execute Function]
+  I --> K{Microtasks done?}
+  K -->|Yes| L[Render / Paint]
+  K -->|No| I
+  L --> M[Request Animation Frame]
+  M --> N[Next Event Loop Cycle]
+  D --> E
+  D --> F
+  E --> O[setTimeout, setInterval, I/O, UI events]
+  F --> P[Promise.then, queueMicrotask, MutationObserver]`;
+
 function assertFits(raster, width, maxRows) {
   for (const segs of raster.rows) {
     const line = segs.map((s) => s.text).join("");
@@ -137,7 +162,26 @@ describe("renderFlowchart", () => {
     assert.ok(r);
     assert.equal(r.mode, "strip");
     assert.equal(r.nodes, 10);
+    assert.ok(r.edges >= 8, "chain layout kept its edges");
     assertFits(r, 40, 40);
+  });
+  it("tightens the routing band instead of losing a tall branching graph's shape", () => {
+    // Regression: the finished event-loop diagram (49 rows at BAND 3) fell
+    // through to chain layout and drew 4 of 18 edges — while the partial
+    // source during streaming still rendered as a real graph.
+    const r = renderFlowchart(flow(BRANCHING_TALL), 140, 40);
+    assert.ok(r, "expected a graph, got fallback");
+    assert.equal(r.mode, "layered");
+    assert.equal(r.nodes, 16);
+    assert.ok(r.edges >= 14, `only ${r.edges}/17 non-cycle edges drawn`);
+    assertFits(r, 140, 40);
+  });
+  it("never chain-lays-out a branching graph — it degrades to the summary", () => {
+    for (const width of [40, 60, 80]) {
+      const r = renderFlowchart(flow(BRANCHING_TALL), width, 40);
+      assert.ok(!r || r.mode === "layered", `width ${width}: got ${r?.mode}`);
+      if (r) assertFits(r, width, 40);
+    }
   });
   it("shrinks label caps until the graph fits instead of clipping", () => {
     for (const width of [24, 28, 34, 40, 60, 80, 120]) {
@@ -170,6 +214,19 @@ describe("renderFlowchart", () => {
   it("degrades to null for things it cannot draw", () => {
     assert.equal(renderFlowchart(flow("sequenceDiagram\n  A->>B: x"), 80, 40), null);
     assert.equal(renderFlowchart(["flowchart TD"], 80, 40), null); // no statements
+  });
+});
+
+// ── Streaming fences (bug: every repaint exported its partial source) ───────
+
+describe("mermaid fence open flag", () => {
+  it("marks an unclosed fence as open so partial sources are never exported", () => {
+    const open = parseMarkdown("```mermaid\nflowchart TD\n  A --> B");
+    assert.equal(open[0].kind, "mermaid");
+    assert.equal(open[0].open, true);
+    const closed = parseMarkdown("```mermaid\nflowchart TD\n  A --> B\n```");
+    assert.equal(closed[0].kind, "mermaid");
+    assert.equal(closed[0].open, undefined);
   });
 });
 

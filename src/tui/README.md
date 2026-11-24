@@ -19,11 +19,14 @@ dedicated renderers: `markdown/table.tsx` (GFM tables: full borders, alignment
 row, cell wrap, key-value fallback for narrow panes, 50-row cap),
 `markdown/graph.ts` + `markdown/diagram.tsx` (mermaid **flowcharts are drawn
 for real**: parse → longest-path ranking → barycenter ordering → box/edge
-rasterization into a cell grid; `layered` mode for branching graphs, `strip`
-mode (wrapped rows of boxes) for long chains; anything that cannot fit
-degrades to a structured summary box; sequence/other diagram types stay
-summary/source; every preview saves its `.mmd` under `.scoder/diagrams/` so
-the export hint is runnable), plus ```chart / ```timeline fences. Inline
+rasterization into a cell grid; `layered` mode for branching graphs (the
+routing band tightens 3→2→1 rows before the graph gives up height), `strip`
+mode (wrapped rows of boxes) ONLY for chain-shaped graphs — a branching
+graph in strip would lose most of its edges, so it degrades to a structured
+summary box instead; sequence/other diagram types stay summary/source; every
+FINISHED preview saves its `.mmd` under `.scoder/diagrams/` so the export
+hint is runnable (a still-open fence is never exported — its partial source
+would litter the folder every repaint), plus ```chart / ```timeline fences. Inline
 tokens: `markdown/inline.ts` (parse) + `inline-render.tsx` (Ink). Parse
 results are LRU-cached per text; `ChatItemView` is memoized with field-level
 equality — `state.ts` therefore updates chat items IMMUTABLY (`patchItem`

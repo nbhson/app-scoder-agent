@@ -8,10 +8,15 @@
  *
  * Two placement modes:
  *  - `layered` — Sugiyama-style bands, one layer per rank. Used whenever the
- *    graph fits the pane (the common case for branching flowcharts).
+ *    graph fits the pane (the common case for branching flowcharts). When the
+ *    height budget is the only blocker, the routing band tightens (3 → 2 → 1)
+ *    before the graph gives up its shape.
  *  - `strip`   — topological order flowed into wrapped rows of boxes joined by
  *    `──▶`, with a `┌───┘` connector where the chain wraps. Used for long
- *    chains (version timelines) that would be taller than the viewport.
+ *    chains (version timelines) that would be taller than the viewport — and
+ *    ONLY chains: strip draws edges between consecutive nodes in the order,
+ *    so a branching graph would lose most of its edges. When the drawn share
+ *    is too low, strip returns null and the caller degrades to the summary.
  *
  * Pure module: no Ink, no I/O, never throws. Every failure path returns null
  * so diagram.tsx falls back to the structured summary — the TUI shows a
@@ -668,7 +673,13 @@ function dedupe(items: string[]): string[] {
 
 // ── 6. Layered layout ───────────────────────────────────────────────────────
 
-interface LayoutOpts { width: number; maxRows: number; cap: number }
+interface LayoutOpts {
+  width: number;
+  maxRows: number;
+  cap: number;
+  /** Layered only: routing rows between ranks (default BAND). */
+  band?: number;
+}
 
 /**
  * One band per rank. `BT`/`RL` are laid out as `TD`/`LR` on reversed edges and
@@ -676,6 +687,7 @@ interface LayoutOpts { width: number; maxRows: number; cap: number }
  * reads in the direction the author asked for.
  */
 function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
+  const band = opts.band ?? BAND;
   const rankVertical = g.direction !== "LR" && g.direction !== "RL";
   const flip = g.direction === "BT" || g.direction === "RL";
   const graph: FlowGraph = flip
@@ -725,10 +737,10 @@ function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
       });
       c += cr + GAP;
     }
-    rank += L.reduce((max, id) => Math.max(max, rankOf(id)), 0) + BAND;
+    rank += L.reduce((max, id) => Math.max(max, rankOf(id)), 0) + band;
   });
 
-  const totalRank = rank - BAND;
+  const totalRank = rank - band;
   const width = rankVertical ? totalCross : totalRank;
   const height = rankVertical ? totalRank : totalCross;
   if (width < 1 || height < 1 || width > opts.width || height > opts.maxRows) return null;
@@ -1013,6 +1025,13 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
   const skipped = g.edges.length - back.size - drawn;
   if (skipped > 0) notes.push(`${skipped} side edge(s) not drawn (chain order only)`);
 
+  // Chain layout only tells the truth about chain-shaped graphs: it draws an
+  // edge only between consecutive nodes in topological order. A branching
+  // graph (fan-out/fan-in) would lose most of its connectors and read as a
+  // grid of disconnected boxes — worse than the honest summary, so refuse.
+  const nonBack = g.edges.length - back.size;
+  if (drawn * 2 < nonBack) return null;
+
   return finalize(cv, {
     mode: "strip",
     direction: "chain",
@@ -1028,6 +1047,23 @@ const cache = new Map<string, Raster | null>();
 const CACHE_MAX = 24;
 
 /**
+ * Layered placement over every (cap, band) candidate, widest cap first.
+ * The band tightens 3 → 2 → 1 before the cap narrows: for TD graphs it is
+ * height, not width, that overflows the budget, and a 1-row band still
+ * routes every edge (straight drops and shared horizontal runs) — it just
+ * cannot jog around boxes.
+ */
+function layeredFits(graph: FlowGraph, width: number, maxRows: number): Raster | null {
+  for (const cap of LAYERED_CAPS) {
+    for (const band of [BAND, 2, 1]) {
+      const raster = layeredLayout(graph, { width, maxRows, cap, band });
+      if (raster) return raster;
+    }
+  }
+  return null;
+}
+
+/**
  * Render a mermaid flowchart into a raster, or null when the source is not a
  * flowchart, is too large, or cannot fit the pane. Cached per source+width so
  * the row estimator and the renderer share one layout pass.
@@ -1040,10 +1076,7 @@ export function renderFlowchart(lines: string[], width: number, maxRows = 40): R
   try {
     const graph = parseFlowchart(lines);
     if (graph) {
-      for (const cap of LAYERED_CAPS) {
-        result = layeredLayout(graph, { width, maxRows, cap });
-        if (result) break;
-      }
+      result = layeredFits(graph, width, maxRows);
       if (!result) {
         for (const cap of STRIP_CAPS) {
           result = stripLayout(graph, { width, maxRows, cap });

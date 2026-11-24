@@ -52,10 +52,11 @@ const matchFence: Matcher = (lines, i) => {
   const code: string[] = [];
   let j = i + 1;
   while (j < lines.length && !lines[j].startsWith("```")) code.push(lines[j++]);
+  const open = j >= lines.length; // EOF without a closing fence (streaming)
   j++; // consume closing fence (or EOF)
 
   let block: Block;
-  if (lang === "mermaid" && code.length > 0) block = { kind: "mermaid", lines: code };
+  if (lang === "mermaid" && code.length > 0) block = { kind: "mermaid", lines: code, ...(open ? { open: true } : {}) };
   else if ((lang === "chart" || lang.startsWith("chart:")) && code.length > 0) block = { kind: "chart", lang, source: code.join("\n") };
   else if ((lang === "timeline" || lang === "events") && code.length > 0) block = { kind: "timeline", source: code.join("\n") };
   else block = { kind: "code", lang, lines: code };

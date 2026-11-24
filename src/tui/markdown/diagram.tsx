@@ -328,12 +328,13 @@ function cellStyle(kind: CellKind): { color?: string; bold?: boolean } {
 }
 
 /** A flowchart drawn for real: box-drawing nodes, routed edges, edge labels. */
-export function FlowchartView({ raster, source, width }: {
+export function FlowchartView({ raster, source, width, open }: {
   raster: Raster;
   source: string[];
   width: number;
+  open?: boolean;
 }): React.JSX.Element {
-  const file = exportDiagram(source);
+  const file = open ? null : exportDiagram(source);
   return (
     <Box flexDirection="column">
       <Text dimColor>
@@ -361,10 +362,14 @@ export function FlowchartView({ raster, source, width }: {
 /**
  * Mermaid block: draw the graph when it fits the pane; otherwise an honest
  * structured summary (supported types) or source + note (unsupported).
+ * `open` marks a still-streaming (unclosed) fence: its partial source must
+ * not be exported — every repaint would write a new truncated file.
  */
-export function MermaidPreview({ source, width }: { source: string[]; width: number }): React.JSX.Element {
+export function MermaidPreview({ source, width, open }: {
+  source: string[]; width: number; open?: boolean;
+}): React.JSX.Element {
   const graph = renderFlowchart(source, Math.max(24, width), MAX_GRAPH_ROWS);
-  if (graph) return <FlowchartView raster={graph} source={source} width={width} />;
+  if (graph) return <FlowchartView raster={graph} source={source} width={width} open={open} />;
 
   const summary = summarizeMermaid(source);
   if (summary.supported) {
@@ -374,14 +379,14 @@ export function MermaidPreview({ source, width }: { source: string[]; width: num
         <Text dimColor>  ◉ mermaid diagram</Text>
         <ContentBox
           title="◈ diagram preview"
-          lines={[...summary.lines, "", ...exportHintLines(exportDiagram(source), boxWidth - 4)]}
+          lines={[...summary.lines, "", ...exportHintLines(open ? null : exportDiagram(source), boxWidth - 4)]}
           width={boxWidth}
           color={theme.mermaid}
         />
       </Box>
     );
   }
-  const file = exportDiagram(source);
+  const file = open ? null : exportDiagram(source);
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>  ◉ mermaid diagram — {summary.lines[0]}</Text>

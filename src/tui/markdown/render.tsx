@@ -368,7 +368,7 @@ export function renderBlock(block: Block, width: number, key: number): React.JSX
     case "mermaid":
       return (
         <Box key={key} marginTop={1} flexDirection="column">
-          <MermaidPreview source={block.lines} width={width} />
+          <MermaidPreview source={block.lines} width={width} open={block.open} />
         </Box>
       );
     case "chart": {

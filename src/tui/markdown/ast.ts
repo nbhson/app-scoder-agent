@@ -23,7 +23,7 @@ export type Block =
   | { kind: "list"; items: ListItem[] }
   | { kind: "quote"; text: string }
   | { kind: "hr" }
-  | { kind: "mermaid"; lines: string[] }
+  | { kind: "mermaid"; lines: string[]; open?: boolean }
   | { kind: "chart"; lang: string; source: string }
   | { kind: "timeline"; source: string }
   | { kind: "spacer" };

@@ -3,6 +3,35 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Finished mermaid flowcharts no longer collapse into an unreadable
+  "chain layout"** — the layout engine fell back from `layered` to `strip`
+  for ANY graph that exceeded the height budget, but `strip` only draws
+  edges between consecutive nodes in topological order: a branching
+  diagram (e.g. the JS event loop, 16 nodes / 18 edges, 49 rows tall at
+  the default routing band) lost 13 connectors and rendered as a grid of
+  disconnected boxes, while the partial source during streaming still
+  looked right. `layered` now tightens its routing band (3 → 2 → 1 rows)
+  before giving up, and `strip` refuses graphs whose chain order would
+  draw less than half the edges — those degrade to the honest structured
+  summary box instead, as the module always promised.
+- **Streaming no longer exports truncated `.mmd` files** — every repaint of
+  an unclosed mermaid fence wrote its partial source (including the `▋`
+  cursor) to `.scoder/diagrams/`, leaving dozens of invalid files per
+  diagram. Open fences are marked in the Block AST and skip the export;
+  the finished block still writes one clean file.
+
+### Tests
+
+- `graph-layout.test.mjs`: branching-tall regression case (drawn as a real
+  layered graph, ≥14/17 edges), "never chain-lay-out a branching graph",
+  strip edge-retention assertion, and the open-fence export-flag case.
+  `mermaid-chain` @ 120c snapshot updated — the LR chain now fits one
+  honest row instead of wrapping.
+
 ## [1.4.1] — 2026-11-24
 
 Patch on top of 1.4.0: the harness-log full-width panel experiment is
