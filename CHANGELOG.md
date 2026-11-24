@@ -3,6 +3,71 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [1.3.0] — 2026-11-24
+
+The model-router release: multi-provider config, per-turn model routing, and a
+ROUTER tab in the TUI. Disabled by default — with no `router` block every code
+path is byte-identical to 1.2.0.
+
+### Added
+
+- **Provider/models config block (P2.1, opencode-style)** — `"provider": {
+  "<id>": { "npm": …, "options": { "baseURL": …, "apiKey": "{env:VAR}" },
+  "models": { "<id>": { "name", "limit.context", "cost.input/output" } } } }`.
+  Declared models register into the catalog (context window + pricing feed ctx
+  %, compaction and cost), `provider/model` refs work everywhere (`-m`,
+  `/model`, `router.tiers`), and inline keys are `{env:VAR}`-expandable with a
+  warning when written literally.
+- **Model router (P2.2)** — per-turn tier routing behind `"router": {
+  "enabled", "tiers": { "small": […], "large": […] }, "fallback", "signals",
+  "rules", "escalate", "judge" }`. Four decision layers (win order: pin >
+  rules > judge > score > hysteresis): L1 scores the turn (ctx size, phase of
+  the last tool call, tool-schema weight, plan/wrap-up), L2 `rules` force a
+  tier via `phase|step|tokens|tools` expressions, L3 hysteresis escalates
+  small→large after `buildFails` consecutive build failures, locks large until
+  green and demotes only after 3 clean steps, L4 optional judge. `"model":
+  "auto"` (rc / `-m auto` / `/model auto`) routes; any concrete model is
+  PINNED — zero router overhead, zero `route_decision` events — and pin/auto
+  toggle mid-session without restart. Bad tier refs warn + drop; routing can
+  never fail a run (deterministic fallback). `src/router/*` +
+  `RouterRuntime`, tests `router-*.test.mjs`.
+- **L4 judge (`router.judge`, default `null` = 3-layer, ZERO extra requests)**
+  — a cheap model names the exact target ref when L1 lands in the gray band
+  (`scope: gray|first|always`). Strict JSON, TTL-10′ cache keyed on
+  (context, tier, candidate refs), AbortController timeout, and it never
+  throws: timeout/unparseable/error fall back to the L1+L2 decision with
+  honest audited verdicts (`timeout` / `fallback` / `reject-hallucinated`).
+  Judge calls bypass the agent loop, so they never pollute `llm_usage`,
+  model stats or cost; their tokens are audited on `route_decision.judge`.
+  `src/router/judge.ts`, `test/router-judge.test.mjs` (18 cases).
+- **ROUTER sidebar tab** — `Ctrl+B` now cycles three tabs OVERVIEW → ROUTER →
+  HARNESS LOG. The tab draws the live graph `user ─▶ router ─┬▶ ref …` (cap 4,
+  `+N refs`), a packet dot runs along the active edge ~0.7 s per new decision
+  (fully static under `SCODER_ANIM=0` / `SCODER_NO_MOTION=1` / `--no-motion`),
+  plus folded DECISIONS (`⤳ tier ref — reason · ×N`) and MODELS stats
+  (`calls in→out tok ~$cost`). SESSION badges the live model `[auto]`/`[pin]`,
+  the tab bar shows a `⤳` badge while routing is armed, and the harness log
+  gains a `ROUTE` filter slot.
+- **`/router`** command — mode, tiers, last decision, judge layer.
+- **`scoder cost --router`** — per-model cost breakdown + estimated savings vs
+  running everything on the large tier; router eval gate
+  (`test/eval/router-profile.mjs`, 4 configs) with baseline in
+  `plan/baseline/router-eval.json`.
+
+### Changed
+
+- Session events (additive, schema stays v3): `route_decision` per routed
+  turn; `llm_usage` carries `ref`/`tier` when routed; `run_start` carries
+  `routingMode` + `tiers`.
+- `--no-motion` / `SCODER_NO_MOTION=1` was documented but consumed by nothing;
+  the route packet now honors it (alongside `SCODER_ANIM=0`).
+
+### Verification
+
+1432/1432 tests (+28 over 1.2.0), eval 13/13, typecheck clean, lint
+0 errors / 43 warnings (= budget), layers + docs:check green, coverage gates
+pass (92.4 lines / 85.5 branch / 92.8 funcs).
+
 ## [1.2.0] — 2026-11-23
 
 Two user-facing changes: a `/btw` side-question channel, and every keybinding
