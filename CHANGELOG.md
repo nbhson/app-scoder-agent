@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 
 ## [Unreleased]
 
+### Added
+
+- **Diagram focus + packet animation (P2.3)** — flowcharts can now "point" at
+  one node like the ROUTER tab points at a model. Declare it in the source
+  (`%% focus: <id>` comment or a `:::focus` class on the node) or drive it
+  live with the new **`diagram_focus`** tool: the TUI lights that node's box
+  and label with the accent color and animates a packet (`◆`) riding its
+  edges for one ~0.7 s burst, so the model can explain a diagram step by
+  step WITHOUT re-printing it into the transcript. Consecutive focuses
+  remember the previous node and the packet takes the direct lane it just
+  walked. The animation shares the router's `usePulse` hook and honors the
+  same kill switches (`SCODER_ANIM=0`, `SCODER_NO_MOTION=1`). Focused graphs
+  route edges with lane occupancy (strict → shared-label → loose) so the
+  focus fan draws as one clean pipe; unfocused graphs keep the exact classic
+  ladder and render byte-identical (verified). ```chart fences accept a
+  `focus` (or `active`) row label that highlights that bar with `◆`. Export
+  slugs ignore focus directives, so moving the focus never duplicates the
+  `.mmd` file.
+
 ### Fixed
 
 - **Finished mermaid flowcharts no longer collapse into an unreadable
@@ -23,6 +42,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   cursor) to `.scoder/diagrams/`, leaving dozens of invalid files per
   diagram. Open fences are marked in the Block AST and skip the export;
   the finished block still writes one clean file.
+- **Double-width labels no longer stretch flowchart boxes** — a CJK glyph
+  covers two grid columns, but the raster emitter also printed the reserved
+  spacer as a space, so every 中文/日本語 label shifted the box borders to
+  the right by one column per character. The emitter now skips continuation
+  cells; the packet overlay (`paintCells`) is width-preserving across the
+  whole grid for the same reason.
 
 ### Tests
 
@@ -31,6 +56,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   strip edge-retention assertion, and the open-fence export-flag case.
   `mermaid-chain` @ 120c snapshot updated — the LR chain now fits one
   honest row instead of wrapping.
+- P2.3: `graph-layout.test.mjs` gains the focus channels (`:::focus` before
+  and after a shape, `%% focus:` directive, unknown-id drop), lane/pipe
+  invariants, `pulseMarks` frames walking the pipe or the direct prev→focus
+  lane, `paintCells` replacing exactly one glyph with row widths preserved
+  (plus a full CJK-grid sweep), and `resolveFocus` match/miss rules;
+  `tui-render.test.mjs` covers the chart `focus` marker, the focused
+  flowchart header, focus-move export dedup, and event routing through
+  `DiagramFocusContext` (only the hinted block lights); `tui-state.test.mjs`
+  the `diagram_focus` reducer (prev chain, malformed args, run reset);
+  `agent-v2.test.mjs` the tool itself.
 
 ## [1.4.1] — 2026-11-24
 

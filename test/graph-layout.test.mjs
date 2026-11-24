@@ -20,10 +20,11 @@ const GRAPH = join(here, "..", "dist", "tui", "markdown", "graph.js").replace(/\
 const TW = join(here, "..", "dist", "tui", "text-width.js").replace(/\\/g, "/");
 
 let parseFlowchart, renderFlowchart, cleanMermaidLabel, measure, parseMarkdown;
+let resolveFocus, pulseMarks, paintCells, PULSE_FRAMES;
 
 before(async () => {
   const g = await import(`file://${GRAPH}`);
-  ({ parseFlowchart, renderFlowchart, cleanMermaidLabel } = g);
+  ({ parseFlowchart, renderFlowchart, cleanMermaidLabel, resolveFocus, pulseMarks, paintCells, PULSE_FRAMES } = g);
   ({ measure } = await import(`file://${TW}`));
   ({ parseMarkdown } = await import(`file://${join(here, "..", "dist", "tui", "markdown", "parse.js")}`));
 });
@@ -227,6 +228,130 @@ describe("mermaid fence open flag", () => {
     const closed = parseMarkdown("```mermaid\nflowchart TD\n  A --> B\n```");
     assert.equal(closed[0].kind, "mermaid");
     assert.equal(closed[0].open, undefined);
+  });
+});
+
+// ── P2.3: focus, pipe lanes, packet overlay ─────────────────────────────────
+
+describe("focus declaration channels", () => {
+  it(":::focus after a shape marks the active node and pipes its edges", () => {
+    const g = parseFlowchart(flow(`flowchart LR
+      A[Start]:::focus --> B[Middle] --> C[End]`));
+    assert.equal(g.focus, "A");
+    assert.equal(g.labels.get(g.edges[0]), "*");
+    assert.equal(g.labels.has(g.edges[1]), false);
+  });
+  it(":::focus attached to a bare id (chain tail) also works", () => {
+    const g = parseFlowchart(flow(`flowchart TD
+      A --> B --> C:::focus`));
+    assert.equal(g.focus, "C");
+  });
+  it("%% focus directive wins over nothing; unknown id is dropped", () => {
+    assert.equal(parseFlowchart(flow(`flowchart TD
+      %% focus: C
+      A --> B --> C`)).focus, "C");
+    assert.equal(parseFlowchart(flow(`flowchart TD
+      %% focus: ZZZ
+      A --> B`)).focus, undefined);
+  });
+  it("unfocused graph carries no pipe labels at all", () => {
+    const g = parseFlowchart(flow(SIMPLE));
+    assert.equal(g.focus, undefined);
+    for (const v of g.labels.values()) assert.notEqual(v, "*");
+  });
+});
+
+describe("lanes & focus overlay", () => {
+  it("layered raster carries a lane per drawn edge, inside bounds", () => {
+    const r = renderFlowchart(flow(SIMPLE), 80, 40);
+    assert.ok(r.lanes.length >= 4, "expected lanes for the drawn edges");
+    for (const l of r.lanes) {
+      assert.match(l.id, /^.+>.+$/, `lane id: ${l.id}`);
+      assert.ok(l.cells.length > 0);
+      for (const c of l.cells) {
+        assert.ok(c.x >= 0 && c.x < r.width && c.y >= 0 && c.y < r.height, `lane cell out of raster: ${JSON.stringify(c)}`);
+      }
+      assert.equal(l.pipe, undefined, "no pipes without focus");
+    }
+  });
+  it("focused graph pipes exactly the focus edges", () => {
+    const r = renderFlowchart(flow(`${SIMPLE}\n  %% focus: B`), 80, 40);
+    assert.equal(r.focus, "B");
+    assert.deepEqual(r.lanes.filter((l) => l.pipe).map((l) => l.id).sort(), ["A>B", "B>C", "B>D"]);
+    assertFits(r, 80, 40);
+  });
+  it("packet walks the pipe across the burst, then rests", () => {
+    const r = renderFlowchart(flow(`${SIMPLE}\n  %% focus: B`), 80, 40);
+    assert.deepEqual(pulseMarks(r, "B", null, -1), []);
+    assert.deepEqual(pulseMarks(r, null, null, 2), []);
+    const seen = [];
+    for (let f = 0; f < PULSE_FRAMES; f++) {
+      const m = pulseMarks(r, "B", null, f);
+      assert.equal(m.length, 1);
+      seen.push(`${m[0].x},${m[0].y}`);
+      const pipe = new Set();
+      for (const l of r.lanes.filter((x) => x.pipe)) for (const c of l.cells) pipe.add(`${c.x},${c.y}`);
+      assert.ok(pipe.has(seen[f]), `frame ${f} packet left the pipe: ${seen[f]}`);
+    }
+    assert.ok(new Set(seen).size > 1, "packet never moved");
+  });
+  it("prev→focus direct lane beats the merged pipe", () => {
+    const r = renderFlowchart(flow(`flowchart LR
+      %% focus: C
+      A[One] --> B[Two] --> C[Three] --> D[Four]`), 100, 40);
+    const lane = r.lanes.find((l) => l.id === "B>C");
+    assert.ok(lane && lane.pipe);
+    const on = new Set(lane.cells.map((c) => `${c.x},${c.y}`));
+    for (let f = 0; f < PULSE_FRAMES; f++) {
+      const [m] = pulseMarks(r, "C", "B", f);
+      assert.ok(on.has(`${m.x},${m.y}`), `frame ${f} left the direct lane`);
+    }
+  });
+  it("paintCells replaces exactly one glyph, keeps every row width", () => {
+    const r = renderFlowchart(flow(`${SIMPLE}\n  %% focus: B`), 80, 40);
+    const widths = r.rows.map((segs) => segs.reduce((w, s) => w + measure(s.text), 0));
+    const marks = [];
+    for (const l of r.lanes) if (l.pipe) marks.push(l.cells[0]);
+    assert.ok(marks.length >= 3);
+    for (const c of marks) {
+      const painted = paintCells(r.rows, [{ y: c.y, x: c.x, ch: "◆" }]);
+      painted.forEach((segs, y) => {
+        assert.equal(segs.reduce((w, s) => w + measure(s.text), 0), widths[y], `row ${y} width shifted`);
+        if (y !== c.y) assert.equal(segs, r.rows[y], "untouched rows must keep identity");
+      });
+      assert.ok(painted[c.y].map((s) => s.text).join("").includes("◆"));
+      assert.ok(painted[c.y].some((s) => s.kind === "arrow" && s.text.includes("◆")));
+    }
+  });
+  it("paintCells is width-safe on CJK labels (wide glyph under the dot)", () => {
+    const r = renderFlowchart(flow(`flowchart LR
+      %% focus: A
+      A[中文标签] --> B[下一个]`), 80, 40);
+    const widths = r.rows.map((segs) => segs.reduce((w, s) => w + measure(s.text), 0));
+    for (let y = 0; y < r.rows.length; y++) {
+      for (let x = 0; x < widths[y]; x++) {
+        const after = paintCells(r.rows, [{ y, x, ch: "◆" }])[y];
+        assert.equal(after.reduce((w, s) => w + measure(s.text), 0), widths[y], `y${y} x${x} shifted`);
+      }
+    }
+  });
+});
+
+describe("resolveFocus", () => {
+  const src = flow(SIMPLE);
+  it("accepts node ids and exact labels (case-insensitive)", () => {
+    assert.equal(resolveFocus(src, "", "B")?.id, "B");
+    assert.equal(resolveFocus(src, "", "valid?")?.id, "B");
+    assert.equal(resolveFocus(src, undefined, "  Done ")?.id, "E");
+  });
+  it("a diagram hint that is absent from the block rejects the match", () => {
+    assert.equal(resolveFocus(src, "event loop", "B"), null);
+    assert.equal(resolveFocus(src, "Start", "B")?.id, "B");
+  });
+  it("unknown node / empty node → null (never paint a wrong box)", () => {
+    assert.equal(resolveFocus(src, "", "ZZ"), null);
+    assert.equal(resolveFocus(src, "", "   "), null);
+    assert.equal(resolveFocus(flow("sequenceDiagram\n  A->>B: hi"), "", "A"), null);
   });
 });
 

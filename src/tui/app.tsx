@@ -25,6 +25,7 @@ import { transcriptWindow, estimateTotalRows } from "./selectors.js";
 import { formatSlashHelp, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE, discoverCustomCommands } from "../commands/definitions.js";
 import { dispatchCommand } from "../commands/registry.js";
 import { ChatItemView } from "./chat-views.js"; // T2
+import { DiagramFocusContext } from "./markdown/diagram.js"; // P2.3 live focus
 import { BuildRail, HelpLine, StatusBar, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH, osc52Copy } from "./chrome.js"; // T2
 import { clipCells } from "./text-width.js";
 import { Input } from "./input.js"; // T2
@@ -517,6 +518,9 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     // flexShrink={0}: pinned chrome must never be squeezed when the chat
     // content overflows — Ink defaults every box to flexShrink:1, which
     // shrank the input bar to zero rows once the log outgrew the terminal.
+    // P2.3: diagram_focus events reach memoized markdown blocks through this
+    // context (ChatItemView props stay stable; context skips the memo wall).
+    <DiagramFocusContext.Provider value={state.diagramFocus}>
     <Box flexDirection="column" height={rows || 24} flexShrink={0}>
       <BuildRail state={state} config={cfg} git={gitStatus} />
       {/* Hàng chính: chat bên trái (flexGrow) + Sidebar phải (cố định rộng).
@@ -767,6 +771,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
       </Box>
       <StatusBar state={state} scroll={effScrollOffset > 0 ? `${Math.min(effScrollOffset, maxScroll)}/${maxScroll} above` : null} selectMode={selectMode} sidebarTab={sidebarTab} git={gitStatus} />
     </Box>
+    </DiagramFocusContext.Provider>
   );
 }
 

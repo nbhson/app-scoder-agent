@@ -12,7 +12,7 @@
  * source plus a friendly note. Every preview also writes its source to a real
  * file, so the export hint is a command that actually runs.
  */
-import React from "react";
+import React, { createContext, useContext, useMemo } from "react";
 import { Box, Text } from "ink";
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -20,7 +20,11 @@ import { join } from "node:path";
 import { theme } from "../theme.js";
 import { charset } from "../charset.js";
 import { clipCells, measure, padEndCells } from "../text-width.js";
-import { cleanMermaidLabel, renderFlowchart, MAX_GRAPH_ROWS, type CellKind, type Raster } from "./graph.js";
+import { usePulse } from "../hooks/use-pulse.js";
+import {
+  cleanMermaidLabel, renderFlowchart, resolveFocus, pulseMarks, paintCells,
+  MAX_GRAPH_ROWS, type CellKind, type Raster,
+} from "./graph.js";
 
 // ── Chart / timeline specs (unchanged data formats) ─────────────────────────
 
@@ -38,6 +42,8 @@ export interface ChartSpec {
   type: "bar" | "line" | "pie";
   title?: string;
   data: ChartPoint[];
+  /** Row label to mark active (P2.3): its `▌` bar marker becomes `◆`. */
+  focus?: string;
 }
 
 export interface TimelineEvent {
@@ -86,9 +92,11 @@ export function parseChartSpec(source: string, language = "chart"): ChartSpec | 
   }
   if (data.length === 0 || !["bar", "line", "pie"].includes(type)) return null;
   const title = scalar(object.title);
+  const focus = scalar(object.focus) || scalar(object.active);
   return {
     type: type as ChartSpec["type"],
     ...(title ? { title } : {}),
+    ...(focus ? { focus } : {}),
     data: data.slice(0, 40),
   };
 }
@@ -249,6 +257,22 @@ const MAX_SOURCE_LINES = 12;
 
 const exported = new Set<string>();
 
+/** `%% focus: X` directive lines / `:::focus` classes are presentation-only:
+ *  they must NOT change the export identity (P2.3), otherwise every focus
+ *  re-emit would write another .mmd copy of the same diagram. */
+const FOCUS_LINE_RX = /^\s*%%+\s*focus\s*:/i;
+
+function stripFocus(source: string[]): string[] {
+  let touched = false;
+  const out: string[] = [];
+  for (const line of source) {
+    if (FOCUS_LINE_RX.test(line)) { touched = true; continue; }
+    if (line.includes(":::focus")) { touched = true; out.push(line.replace(/:::focus\b/g, "")); continue; }
+    out.push(line);
+  }
+  return touched ? out : source;
+}
+
 /** `Angular 12-14 <br/> 2021` → `angular-12-14-2021-a1b2c3`.
  *
  * P-perf (item 14): memo keyed on the source ARRAY identity — markdown AST
@@ -262,14 +286,15 @@ const slugMemo = new WeakMap<string[], string>();
 function diagramSlug(source: string[]): string {
   const hit = slugMemo.get(source);
   if (hit !== undefined) return hit;
-  const first = source.join(" ").match(/\["?([^"\]]{3,40})"\?\]/)?.[1] ?? "diagram";
+  const content = stripFocus(source);
+  const first = content.join(" ").match(/\["?([^"\]]{3,40})"\?\]/)?.[1] ?? "diagram";
   const base = first
     .toLowerCase()
     .replace(/<[^>]+>/g, " ")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 24);
-  const hash = createHash("sha1").update(source.join("\n")).digest("hex").slice(0, 6);
+  const hash = createHash("sha1").update(content.join("\n")).digest("hex").slice(0, 6);
   const slug = `${base || "diagram"}-${hash}`;
   try {
     slugMemo.set(source, slug);
@@ -315,37 +340,70 @@ function exportHintLines(file: string | null, width: number): string[] {
   ];
 }
 
-/** Cell kind → text props: boxes/edges stay quiet, labels carry the meaning. */
-function cellStyle(kind: CellKind): { color?: string; bold?: boolean } {
+/** Cell kind → text props: boxes/edges stay quiet, labels carry the meaning.
+ *  `active` marks cells belonging to the focused node (P2.3 diagram_focus). */
+function cellStyle(kind: CellKind, active = false): { color?: string; bold?: boolean } {
   switch (kind) {
-    case "box": return { color: theme.mermaid };
+    case "box": return active ? { color: theme.accent } : { color: theme.mermaid };
     case "arrow": return { color: theme.mermaid };
     case "edge": return { color: theme.dim };
-    case "label": return { bold: true };
+    case "label": return active ? { color: theme.accent, bold: true } : { bold: true };
     case "elabel": return { color: theme.accent };
     default: return {};
   }
 }
 
-/** A flowchart drawn for real: box-drawing nodes, routed edges, edge labels. */
-export function FlowchartView({ raster, source, width, open }: {
+/** Live focus request (diagram_focus event, held in TuiState.diagramFocus).
+ *  `prev` is the previously focused node of the SAME diagram — the packet
+ *  rides that lane when it exists (the route the explanation just walked). */
+export interface DiagramFocusEvent {
+  diagram?: string;
+  node: string;
+  prev?: string | null;
+  ts: number;
+}
+
+/** Provided once at the app root; consumed by every MermaidPreview. Context
+ *  (not props) because ChatItemView is memoized — prop threading would have
+ *  to break the memo, context updates reach consumers directly. */
+export const DiagramFocusContext = createContext<DiagramFocusEvent | null>(null);
+
+/** A flowchart drawn for real: box-drawing nodes, routed edges, edge labels.
+ *  When a node is focused (source `:::focus`/`%% focus:` or the diagram_focus
+ *  event), its box lights up accent and a `◆` packet walks the lane from the
+ *  previous node over ~0.7 s, then rests — ROUTER-tab cadence, grid-stable:
+ *  the overlay only recolour/replaces glyphs inside the already-measured
+ *  raster, never reflows, and no timer runs at rest. */
+export function FlowchartView({ raster, source, width, open, focus, focusLabel, prev, ts }: {
   raster: Raster;
   source: string[];
   width: number;
   open?: boolean;
+  /** Event-resolved node id (wins over the raster's own source directive). */
+  focus?: string | null;
+  focusLabel?: string | null;
+  prev?: string | null;
+  ts?: number | null;
 }): React.JSX.Element {
   const file = open ? null : exportDiagram(source);
+  const node = focus ?? raster.focus ?? null;
+  // A source-declared focus bursts once when the block first paints; an
+  // event-driven one bursts whenever `ts` changes. No node → no timer.
+  const frame = usePulse(node == null ? null : ts ?? 0);
+  const marks = frame >= 0 && node != null ? pulseMarks(raster, node, prev ?? null, frame) : [];
+  const rows = marks.length > 0 ? paintCells(raster.rows, marks) : raster.rows;
   return (
     <Box flexDirection="column">
       <Text dimColor>
         <Text color={theme.mermaid} bold>◉ </Text>
         flowchart {raster.direction} · {raster.nodes} nodes · {raster.edges} edges
         {raster.mode === "strip" ? " · chain layout" : ""}
+        {node != null && <Text color={theme.accent}> · focus: {clipCells(focusLabel ?? node, Math.max(8, width - 34))}</Text>}
       </Text>
-      {raster.rows.map((segs, y) => (
+      {rows.map((segs, y) => (
         <Text key={y}>
           {segs.map((seg, i) => (
-            <Text key={i} {...cellStyle(seg.kind)}>{seg.text}</Text>
+            <Text key={i} {...cellStyle(seg.kind, node != null && seg.owner === node)}>{seg.text}</Text>
           ))}
         </Text>
       ))}
@@ -364,12 +422,35 @@ export function FlowchartView({ raster, source, width, open }: {
  * structured summary (supported types) or source + note (unsupported).
  * `open` marks a still-streaming (unclosed) fence: its partial source must
  * not be exported — every repaint would write a new truncated file.
+ * Live focus (P2.3): the diagram_focus event targets whichever finalized
+ * block actually contains the node + diagram hint (resolveFocus); blocks that
+ * do not match stay completely untouched.
  */
 export function MermaidPreview({ source, width, open }: {
   source: string[]; width: number; open?: boolean;
 }): React.JSX.Element {
+  const event = useContext(DiagramFocusContext);
+  const hit = useMemo(() => {
+    if (!event || open) return null;
+    return resolveFocus(source, event.diagram, event.node);
+  }, [event, source, open]);
+  const prevHit = useMemo(() => {
+    if (!event?.prev || !hit) return null;
+    return resolveFocus(source, event.diagram, event.prev);
+  }, [event, source, hit]);
+
   const graph = renderFlowchart(source, Math.max(24, width), MAX_GRAPH_ROWS);
-  if (graph) return <FlowchartView raster={graph} source={source} width={width} open={open} />;
+  if (graph) {
+    return (
+      <FlowchartView
+        raster={graph}
+        source={source}
+        width={width}
+        open={open}
+        {...(hit ? { focus: hit.id, focusLabel: hit.label, prev: prevHit?.id ?? null, ts: event!.ts } : {})}
+      />
+    );
+  }
 
   const summary = summarizeMermaid(source);
   if (summary.supported) {
@@ -416,6 +497,9 @@ export function ChartPreview({ spec, width }: { spec: ChartSpec; width: number }
   // padding) → plot budget = chartWidth - labelWidth - valueWidth - 6.
   const plotWidth = Math.max(12, chartWidth - labelWidth - valueWidth - 6);
 
+  const isFocus = (label: string): boolean =>
+    spec.focus != null && label.trim().toLowerCase() === spec.focus.trim().toLowerCase();
+
   if (spec.type === "pie") {
     const total = spec.data.reduce((sum, p) => sum + Math.max(0, p.value), 0) || 1;
     const lines = spec.data.map((p) => {
@@ -423,7 +507,7 @@ export function ChartPreview({ spec, width }: { spec: ChartSpec; width: number }
       // Row = label + " " + "NN%" + " " + bar ≤ chartWidth-3 → -9.
       const barWidth = Math.max(1, chartWidth - labelWidth - 9);
       const bar = charset.blockFull.repeat(Math.min(barWidth, Math.max(1, Math.round((pct / 100) * barWidth))));
-      return `${padEndCells(clipCells(p.label, labelWidth), labelWidth)} ${String(pct).padStart(3)}% ${bar}`;
+      return `${padEndCells(clipCells(p.label, labelWidth), labelWidth)} ${String(pct).padStart(3)}% ${isFocus(p.label) ? charset.active : charset.blockFull}${bar.slice(1)}`;
     });
     return <ContentBox title={spec.title ?? "pie chart"} lines={lines} width={chartWidth} color={theme.code} />;
   }
@@ -432,7 +516,7 @@ export function ChartPreview({ spec, width }: { spec: ChartSpec; width: number }
     const ratio = (point.value - min) / range;
     const filled = Math.max(0, Math.min(plotWidth, Math.round(ratio * plotWidth)));
     const bar = charset.blockFull.repeat(filled) + charset.blockEmpty.repeat(plotWidth - filled);
-    return `${padEndCells(clipCells(point.label, labelWidth), labelWidth)} ▌${bar} ${String(point.value).padStart(valueWidth)}`;
+    return `${padEndCells(clipCells(point.label, labelWidth), labelWidth)} ${isFocus(point.label) ? charset.active : "▌"}${bar} ${String(point.value).padStart(valueWidth)}`;
   });
   return <ContentBox title={spec.title ?? `${spec.type} chart`} lines={rows} width={chartWidth} color={theme.code} />;
 }

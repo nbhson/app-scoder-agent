@@ -160,6 +160,12 @@ export interface TuiState {
    * routed this run). Drives the graph highlight + RoutePacket target.
    */
   activeRoute: { ref: string; tier: "small" | "large"; step: number; ts: number } | null;
+  /**
+   * P2.3 DIAGRAM focus: last diagram_focus tool call (node id/label + diagram
+   * hint). Null = nothing is being "pointed at". `prev` keeps the previously
+   * focused node so the packet animates along the edge just explained.
+   */
+  diagramFocus: { diagram: string; node: string; prev: string | null; ts: number } | null;
   /** P2.2: per-routed-ref accumulated usage, from llm_usage attribution. */
   modelStats: Record<string, ModelStat>;
   /** P2.2 §7: candidate graph from run_start.tiers (empty = no RouterRuntime). */
@@ -215,6 +221,7 @@ export function initialState(): TuiState {
     logSeq: 0,
     logDropped: 0,
     activeRoute: null,
+    diagramFocus: null,
     modelStats: {},
     routerTiers: [],
     routingMode: "pinned",
@@ -425,6 +432,7 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.lastLlmTokPerSec = null;
       // P2.2: routing state is per-run too — the ROUTER tab starts empty.
       state.activeRoute = null;
+      state.diagramFocus = null;
       state.modelStats = {};
       state.routerTiers = ev.tiers ?? [];
       state.routingMode = ev.routingMode === "auto" ? "auto" : "pinned";
@@ -582,6 +590,23 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         step: ev.step,
         startedAt: Date.now(),
       });
+      // P2.3: diagram_focus is a pure display directive — the tool row above
+      // already audits it; here it becomes the live focus the markdown blocks
+      // read from DiagramFocusContext (prev = last different node, for the
+      // packet lane). Malformed args simply keep the old focus.
+      if (ev.name === "diagram_focus") {
+        const node = typeof ev.args.node === "string" ? ev.args.node.trim() : "";
+        if (node) {
+          const cur = state.diagramFocus;
+          const diagram = typeof ev.args.diagram === "string" ? ev.args.diagram.trim() : "";
+          state.diagramFocus = {
+            diagram,
+            node,
+            prev: cur && cur.node !== node ? cur.node : cur?.prev ?? null,
+            ts: Date.now(),
+          };
+        }
+      }
       // Phase tracking cho breadcrumb (không trùng phase liền trước).
       const phase = toolPhase(ev.name);
       if (phase && state.phases[state.phases.length - 1] !== phase) state.phases.push(phase);

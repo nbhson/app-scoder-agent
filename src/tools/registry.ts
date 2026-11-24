@@ -346,6 +346,33 @@ export const AGENT_TOOLS: AgentTool[] = [
       }
     },
   },
+  {
+    spec: {
+      type: "function",
+      function: {
+        name: "diagram_focus",
+        description:
+          "Highlight ONE node of a mermaid flowchart you already printed in this reply: the TUI lights its box and " +
+          "pulses a packet along its edges (like the ROUTER tab), no re-print. Use while explaining a diagram step by " +
+          "step — re-printing the whole diagram for each step spams the transcript. `node` is the node id (e.g. \"C\") " +
+          "or its exact label; `diagram` is a hint (any label of that diagram) when several diagrams are on screen. " +
+          "Pure display directive: nothing changes if no printed diagram matches — then print the diagram and retry.",
+        parameters: obj(
+          {
+            node: str("Node id (e.g. \"C\") or exact label to focus"),
+            diagram: str("Hint: any node label of the target diagram (recommended when multiple diagrams are printed)"),
+          },
+          ["node"],
+        ),
+      },
+    },
+    run: (_ctx, args) => {
+      const node = typeof args.node === "string" ? args.node.trim() : "";
+      if (!node) return { ok: false, output: "ERROR: node is required — pass a node id (e.g. \"C\") or its exact label" };
+      const diagram = typeof args.diagram === "string" ? args.diagram.trim() : "";
+      return { ok: true, output: diagram ? `focus: ${diagram} · ${node}` : `focus: ${node}` };
+    },
+  },
 ];
 
 export function getTool(name: string): AgentTool | undefined {

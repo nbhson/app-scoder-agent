@@ -37,7 +37,7 @@ export interface ToolExecutionPost {
 }
 
 /** I-09: tools safe to run concurrently (pure reads, no permission ask). */
-export const READONLY_TOOLS = new Set(["read_file", "list_files", "grep", "glob", "load_skill", "repo_map", "web_fetch"]);
+export const READONLY_TOOLS = new Set(["read_file", "list_files", "grep", "glob", "load_skill", "repo_map", "web_fetch", "diagram_focus"]);
 
 export class ToolExecutor {
   constructor(private readonly runtime: ToolExecutorRuntime) {}

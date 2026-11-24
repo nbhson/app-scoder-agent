@@ -14,7 +14,8 @@
  * vừa trọn vẹn thì bỏ qua (không clip nửa chừng); riêng PLAN co giãn theo chỗ
  * còn lại.
  */
-import React, { useEffect, useState } from "react";
+import { usePulse } from "./hooks/use-pulse.js";
+import React from "react";
 import { Box, Text } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import { contextWindowFor } from "../llm/model-catalog.js";
@@ -368,7 +369,7 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
   const avail = rows != null && rows > 0 ? Math.max(8, rows - 4) : Number.POSITIVE_INFINITY;
   // P2.2 Phase D: the route packet ticks only while a fresh decision is <~0.7s
   // old. Isolated frame state → only the sidebar re-renders per frame.
-  const pulse = useRoutePulse(state.activeRoute?.ts ?? null);
+  const pulse = usePulse(state.activeRoute?.ts ?? null);
   const flash = pulse >= 0 && state.activeRoute != null ? state.activeRoute.tier : null;
 
   let used = SESSION_ROWS;
@@ -535,36 +536,15 @@ function TabBar({ active, count, dropped, filter, routerOn, flash }: {
 
 // ── P2.2: router tab ────────────────────────────────────────────────────────
 
-const PULSE_FRAMES = 6;
-const PULSE_MS = 110;
 const GRAPH_MAX = 4; // sidebar cao hữu hạn — ref thứ 5+ gộp "+N more"
 const DECISIONS_MAX = 4;
 const STATS_MAX = 4;
 
 /**
  * Phase D packet: một burst ~0.7 s mỗi khi có route_decision mới (dot chạy
- * trên cạnh router→model, không phải "particle" — terminal grid). Trả về frame
- * 0..PULSE_FRAMES-1, -1 = nghỉ. SCODER_ANIM=0 hoặc SCODER_NO_MOTION=1 /
- * `--no-motion` (CI/máy yếu) → luôn -1, graph tĩnh hoàn toàn, không timer.
+ * trên cạnh router→model, không phải "particle" — terminal grid). Hành vi
+ * dùng chung với diagram focus qua `usePulse` (hooks/use-pulse.ts).
  */
-function useRoutePulse(ts: number | null): number {
-  const [frame, setFrame] = useState(-1);
-  useEffect(() => {
-    if (ts == null || process.env.SCODER_ANIM === "0" || process.env.SCODER_NO_MOTION === "1") {
-      setFrame(-1);
-      return;
-    }
-    setFrame(0);
-    let f = 0;
-    const id = setInterval(() => {
-      f += 1;
-      if (f >= PULSE_FRAMES) setFrame(-1);
-      else setFrame(f);
-    }, PULSE_MS);
-    return () => clearInterval(id);
-  }, [ts]);
-  return frame;
-}
 
 /** 3-char packet lane: dot "chạy" trên cạnh của ref đang active (charset-safe). */
 function laneSegs(pulse: number): string {

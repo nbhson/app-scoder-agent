@@ -8,12 +8,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import React from "react";
 import { render } from "ink";
 import { BuildRail, StatusBar, fuelGauge, gaugeColor, SIDEBAR_MIN_COLS, SIDEBAR_WIDTH } from "../dist/tui/chrome.js";
 import { Sidebar } from "../dist/tui/sidebar.js";
 import { ChatItemView } from "../dist/tui/chat-views.js";
-import { parseChartSpec, parseTimelineSpec, Markdown } from "../dist/tui/markdown.js";
+import { charset } from "../dist/tui/charset.js";
+import { parseChartSpec, parseTimelineSpec, Markdown, DiagramFocusContext } from "../dist/tui/markdown.js";
 import { applyEvent, initialState, latestPlan } from "../dist/tui/state.js";
 
 function stripAnsi(s) {
@@ -300,6 +304,80 @@ describe("tui rich display — chart/timeline/width", () => {
     assert.match(out, /chart/);
     assert.match(out, /Deploy/);
     assert.ok(out.split("\n").every((line) => line.length <= 50), "rich blocks stay within terminal width");
+  });
+
+  // ── P2.3: diagram focus ───────────────────────────────────────────────────
+
+  it("chart focus parses (focus/active alias) and marks exactly one row", async () => {
+    assert.equal(parseChartSpec('{"data":[{"label":"A","value":1}],"focus":"A"}')?.focus, "A");
+    assert.equal(parseChartSpec('{"data":[{"label":"A","value":1}],"active":"A"}')?.focus, "A");
+    assert.equal(parseChartSpec('{"data":[{"label":"A","value":1}]}')?.focus, undefined);
+    const out = await renderOnce(React.createElement(Markdown, {
+      width: 42,
+      text: [
+        "```chart:bar",
+        '{"title":"t","focus":"Beta","data":[{"label":"Alpha","value":10},{"label":"Beta","value":20}]}',
+        "```",
+      ].join("\n"),
+    }), 50);
+    const lines = out.split("\n");
+    assert.equal(out.split(charset.active).length - 1, 1, "exactly one focus marker on screen");
+    assert.ok(lines.some((l) => l.includes("Beta") && l.includes(charset.active)), "marker sits on the focused row");
+    assert.ok(lines.some((l) => l.includes("Alpha") && !l.includes(charset.active)), "other rows keep the plain marker");
+  });
+
+  it("mermaid :::focus directive renders layered; export slug ignores focus moves", async () => {
+    const real = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "scoder-focus-"));
+    try {
+      process.chdir(tmp);
+      const out = await renderOnce(React.createElement(Markdown, {
+        width: 60,
+        text: ["```mermaid", "flowchart LR", "  A[Start]:::focus --> B[End]", "```"].join("\n"),
+      }), 70);
+      assert.match(out, /focus: A/);
+      assert.match(out, /┌/, "still a real box-drawing graph");
+      assert.ok(!out.includes(":::focus"), "class token never leaks into the drawing");
+      const dir = join(tmp, ".scoder", "diagrams");
+      assert.equal(readdirSync(dir).length, 1, "closed fence exports its source once");
+      assert.match(readFileSync(join(dir, readdirSync(dir)[0]), "utf8"), /flowchart LR/);
+      // Same diagram re-printed with the focus on another node: the directive
+      // is presentation-only, so it must NOT duplicate the export file.
+      await renderOnce(React.createElement(Markdown, {
+        width: 60,
+        text: ["```mermaid", "flowchart LR", "  A[Start] --> B[End]:::focus", "```"].join("\n"),
+      }), 70);
+      assert.equal(readdirSync(dir).length, 1, "moved focus reuses the same slug");
+    } finally {
+      process.chdir(real);
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("diagram_focus event highlights a printed diagram through context (and only the matching one)", async () => {
+    const real = process.cwd();
+    const tmp = mkdtempSync(join(tmpdir(), "scoder-evt-"));
+    const fence = (a, b) => ["```mermaid", "flowchart LR", `  A[${a}] --> B[${b}]`, "```"].join("\n");
+    const twoDiagrams = React.createElement(Markdown, {
+      width: 60,
+      text: [fence("One", "Two"), fence("Red", "Blue")].join("\n\n"),
+    });
+    const wrap = (value) => React.createElement(DiagramFocusContext.Provider, { value }, twoDiagrams);
+    try {
+      process.chdir(tmp);
+      const plain = await renderOnce(wrap(null), 70);
+      assert.ok(!plain.includes("focus:"), "no event, no focus");
+      const evt = { diagram: "One", node: "B", prev: "A", ts: Date.now() };
+      const hit = await renderOnce(wrap(evt), 70);
+      assert.equal((hit.match(/focus: Two/g) ?? []).length, 1, "exactly the hinted block lights up");
+      const miss = await renderOnce(wrap({ ...evt, diagram: "Nope" }), 70);
+      assert.ok(!miss.includes("focus:"), "a diagram hint absent from both blocks matches nothing");
+      const byLabel = await renderOnce(wrap({ diagram: "", node: "blue", prev: null, ts: Date.now() }), 70);
+      assert.match(byLabel, /focus: Blue/, "labels resolve case-insensitively");
+    } finally {
+      process.chdir(real);
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

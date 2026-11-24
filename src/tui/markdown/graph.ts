@@ -60,11 +60,34 @@ export interface FlowGraph {
   nodes: FlowNode[];
   edges: FlowEdge[];
   notes: string[];
+  /** Node id marked `:::focus` or `%% focus: <id>` — the "active" node. */
+  focus?: string;
+  /**
+   * VISIBLE pipe label per edge (P2.3): all edges of the focused node share
+   * `"*"` so the renderer draws ONE packet pipe from the highlighted box
+   * (several single-letter labels along one corridor are unreadable — the
+   * legend carries the words). Others keep their own label. Routing uses it
+   * to group lanes that may share a corridor.
+   */
+  labels: Map<FlowEdge, string>;
 }
 
 export type CellKind = "empty" | "box" | "label" | "edge" | "arrow" | "elabel";
 
-export interface Seg { text: string; kind: CellKind }
+/**
+ * A horizontal run of cells sharing one style. `owner` carries graph
+ * identity through rasterization: node id for box/label cells, edge id
+ * (`from>to`) for edge/arrow/elabel cells — so the renderer can highlight
+ * the focused node without re-parsing anything.
+ */
+export interface Seg { text: string; kind: CellKind; owner?: string }
+
+/** One drawable cell coordinate (column, row) in FINAL (cropped) raster space. */
+export interface LaneCell { x: number; y: number }
+
+/** One drawn edge's cell path (final raster space). `pipe` = the lane belongs
+ *  to the focused node's merged packet pipe (P2.3). */
+export interface Lane { id: string; cells: LaneCell[]; pipe?: boolean }
 
 export interface Raster {
   rows: Seg[][];
@@ -75,6 +98,10 @@ export interface Raster {
   direction: string;
   nodes: number;
   edges: number;
+  /** Ordered cells per drawn edge — the packet lane for focus animation. */
+  lanes: Lane[];
+  /** Source-declared active node (id), when the diagram marks one. */
+  focus?: string;
 }
 
 // ── 1. Label cleanup (shared with the summary renderer) ─────────────────────
@@ -144,7 +171,7 @@ const ARROW_SPECS: ArrowSpec[] = [
 const ID_RX = /^[\p{L}\p{N}_][\p{L}\p{N}_\-.]*/u;
 
 type Tok =
-  | { t: "node"; id: string; label?: string; shape?: NodeShape }
+  | { t: "node"; id: string; label?: string; shape?: NodeShape; class?: string }
   | { t: "edge"; spec: ArrowSpec; label: string };
 
 function skipSpace(line: string, i: number): number {
@@ -183,6 +210,23 @@ function findNextArrow(line: string, from: number): ArrowHit | null {
 }
 
 /** Scan one statement into alternating node/edge tokens (`A --> B --> C` works). */
+/** Consume the label glued to an arrow: `-->|lbl|` or the open form
+ *  `-- lbl -->` (whose text doubles as the real arrow head position). */
+function readEdgeLabel(line: string, at: number, arrow: ArrowHit): { label: string; arrow: ArrowHit; end: number } {
+  const bar = skipSpace(line, at);
+  if (line[bar] === "|") {
+    const close = line.indexOf("|", bar + 1);
+    if (close !== -1) return { label: line.slice(bar + 1, close), arrow, end: close + 1 };
+    return { label: "", arrow, end: at };
+  }
+  if (arrow.spec.head === "open") {
+    // `A -- yes --> B`: open arrow, label text, then the real arrow head.
+    const next = findNextArrow(line, at);
+    if (next && next.start > at) return { label: line.slice(at, next.start).trim(), arrow: next, end: next.end };
+  }
+  return { label: "", arrow, end: at };
+}
+
 function scanStatement(line: string): Tok[] | null {
   const toks: Tok[] = [];
   let i = 0;
@@ -193,32 +237,24 @@ function scanStatement(line: string): Tok[] | null {
     i += id.length;
     const shape = readShape(line, i);
     if (shape) {
-      toks.push({ t: "node", id, label: shape.text, shape: shape.shape });
-      i = shape.end;
+      const cls = /^:::([\w-]+)/.exec(line.slice(shape.end)); // `A[Start]:::focus`
+      toks.push({ t: "node", id, label: shape.text, shape: shape.shape, ...(cls ? { class: cls[1] } : {}) });
+      i = shape.end + (cls ? cls[0].length : 0);
     } else {
-      const cls = /^:::[\w-]+/.exec(line.slice(i)); // `A:::someClass`
-      if (cls) i += cls[0].length;
-      toks.push({ t: "node", id });
-    }
-    i = skipSpace(line, i);
-    let arrow = matchArrow(line, i);
-    if (!arrow) break;
-    i = arrow.end;
-    let label = "";
-    const bar = skipSpace(line, i);
-    if (line[bar] === "|") {
-      const close = line.indexOf("|", bar + 1);
-      if (close !== -1) { label = line.slice(bar + 1, close); i = close + 1; }
-    } else if (arrow.spec.head === "open") {
-      // `A -- yes --> B`: open arrow, label text, then the real arrow head.
-      const next = findNextArrow(line, i);
-      if (next && next.start > i) {
-        label = line.slice(i, next.start).trim();
-        arrow = next;
-        i = next.end;
+      const cls = /^:::([\w-]+)/.exec(line.slice(i)); // `A:::someClass`
+      if (cls) {
+        i += cls[0].length;
+        toks.push({ t: "node", id, class: cls[1] });
+      } else {
+        toks.push({ t: "node", id });
       }
     }
-    toks.push({ t: "edge", spec: arrow.spec, label: cleanMermaidLabel(label) });
+    i = skipSpace(line, i);
+    const arrow = matchArrow(line, i);
+    if (!arrow) break;
+    const edge = readEdgeLabel(line, arrow.end, arrow);
+    toks.push({ t: "edge", spec: edge.arrow.spec, label: cleanMermaidLabel(edge.label) });
+    i = edge.end;
   }
   return toks.length >= 2 ? toks : null;
 }
@@ -230,6 +266,13 @@ function stripComment(line: string): string {
 
 /** Parse a mermaid `graph`/`flowchart` block; null for anything else. */
 export function parseFlowchart(lines: string[]): FlowGraph | null {
+  // `%% focus: <id>` — a comment directive naming the active node. Scanned
+  // on the RAW lines because stripComment() would eat it.
+  let focusId: string | undefined;
+  for (const raw of lines) {
+    const m = /^\s*%%+\s*focus\s*:\s*([\p{L}\p{N}_]+)\s*$/u.exec(raw);
+    if (m) focusId = m[1];
+  }
   const rows = lines.map(stripComment).filter((l) => l !== "");
   if (rows.length === 0) return null;
   const header = /^(?:graph|flowchart)(?:\s+(TB|BT|TD|RL|LR))?\b/i.exec(rows[0]);
@@ -268,6 +311,7 @@ export function parseFlowchart(lines: string[]): FlowGraph | null {
     for (const tok of toks) {
       if (tok.t === "edge") { pending = tok; continue; }
       touch(tok.id, tok.label, tok.shape);
+      if (tok.class === "focus") focusId = tok.id;
       if (pending && prev) {
         if (prev === tok.id) {
           notes.push(`self-loop omitted: ${nodes.get(prev)?.label ?? prev}`);
@@ -288,7 +332,22 @@ export function parseFlowchart(lines: string[]): FlowGraph | null {
   }
 
   if (nodes.size === 0 || nodes.size > MAX_NODES) return null;
-  return { direction, nodes: [...nodes.values()], edges, notes: dedupe(notes).slice(0, 4) };
+  // P2.3 visible pipe labels (see FlowGraph.labels): the focused node's
+  // edges merge into one `*` pipe; everything else keeps its own label.
+  const focus = focusId !== undefined && nodes.has(focusId) ? focusId : undefined;
+  const labels = new Map<FlowEdge, string>();
+  for (const e of edges) {
+    if (focus !== undefined && (e.from === focus || e.to === focus)) labels.set(e, "*");
+    else if (e.label !== "") labels.set(e, e.label);
+  }
+  return {
+    direction,
+    nodes: [...nodes.values()],
+    edges,
+    labels,
+    notes: dedupe(notes).slice(0, 4),
+    ...(focus !== undefined ? { focus } : {}),
+  };
 }
 
 // ── 3. Ranking & ordering ───────────────────────────────────────────────────
@@ -406,12 +465,15 @@ class Canvas {
   readonly kinds: CellKind[][];
   readonly masks: number[][];
   readonly styles: EdgeStyle[][];
+  /** Graph identity per cell (node id / edge id) — see `Seg.owner`. */
+  readonly owners: Array<string | undefined>[];
 
   constructor(readonly w: number, readonly h: number) {
     this.chars = Array.from({ length: h }, () => new Array<string>(w).fill(" "));
     this.kinds = Array.from({ length: h }, () => new Array<CellKind>(w).fill("empty"));
     this.masks = Array.from({ length: h }, () => new Array<number>(w).fill(0));
     this.styles = Array.from({ length: h }, () => new Array<EdgeStyle>(w).fill("solid"));
+    this.owners = Array.from({ length: h }, () => new Array<string | undefined>(w).fill(undefined));
   }
 
   private ok(x: number, y: number): boolean {
@@ -445,107 +507,98 @@ class Canvas {
     return true;
   }
 
-  /**
-   * Free run along the RANK axis at a fixed cross coordinate. TD: rank is
-   * vertical (a column); LR: rank is horizontal (a row).
-   */
-  freeRank(atCross: number, r1: number, r2: number, rankVertical: boolean, allowShared = false): boolean {
-    return rankVertical ? this.freeV(atCross, r1, r2, allowShared) : this.freeH(atCross, r1, r2, allowShared);
-  }
-
-  /** Free run along the CROSS axis at a fixed rank coordinate. */
-  freeCross(atRank: number, c1: number, c2: number, rankVertical: boolean, allowShared = false): boolean {
-    return rankVertical ? this.freeH(atRank, c1, c2, allowShared) : this.freeV(atRank, c1, c2, allowShared);
-  }
-
-  private put(x: number, y: number, ch: string, kind: CellKind): void {
+  private put(x: number, y: number, ch: string, kind: CellKind, owner?: string): void {
     if (!this.ok(x, y)) return;
     this.chars[y][x] = ch;
     this.kinds[y][x] = kind;
     this.masks[y][x] = 0;
+    if (owner !== undefined) this.owners[y][x] = owner;
   }
 
   /** Add connection arms to a cell; crossing lines merge into one glyph. */
-  line(x: number, y: number, mask: number, style: EdgeStyle): void {
+  line(x: number, y: number, mask: number, style: EdgeStyle, owner?: string): void {
     if (!this.ok(x, y)) return;
     const kind = this.kinds[y][x];
     if (kind === "box" || kind === "label" || kind === "arrow") return;
     this.kinds[y][x] = "edge";
     this.masks[y][x] |= mask;
     if (style !== "solid") this.styles[y][x] = style;
+    if (owner !== undefined && this.owners[y][x] === undefined) this.owners[y][x] = owner;
   }
 
-  hLine(y: number, x1: number, x2: number, style: EdgeStyle): void {
+  hLine(y: number, x1: number, x2: number, style: EdgeStyle, owner?: string): void {
     const [a, b] = x1 <= x2 ? [x1, x2] : [x2, x1];
     for (let x = a; x <= b; x++) {
       const mask = a === b ? RIGHT | LEFT : x === a ? RIGHT : x === b ? LEFT : RIGHT | LEFT;
-      this.line(x, y, mask, style);
+      this.line(x, y, mask, style, owner);
     }
   }
 
-  vLine(x: number, y1: number, y2: number, style: EdgeStyle): void {
+  vLine(x: number, y1: number, y2: number, style: EdgeStyle, owner?: string): void {
     const [a, b] = y1 <= y2 ? [y1, y2] : [y2, y1];
     for (let y = a; y <= b; y++) {
       const mask = a === b ? UP | DOWN : y === a ? DOWN : y === b ? UP : UP | DOWN;
-      this.line(x, y, mask, style);
+      this.line(x, y, mask, style, owner);
     }
   }
 
-  arrow(x: number, y: number, dir: "up" | "right" | "down" | "left"): void {
+  arrow(x: number, y: number, dir: "up" | "right" | "down" | "left", owner?: string): void {
     if (!this.ok(x, y)) return;
     if (this.kinds[y][x] === "box" || this.kinds[y][x] === "label") return;
     const ch = dir === "up" ? charset.arrowUp : dir === "right" ? charset.arrowRight
       : dir === "down" ? charset.arrowDown : charset.arrowLeft;
-    this.put(x, y, ch, "arrow");
+    this.put(x, y, ch, "arrow", owner);
   }
 
   /**
-   * Write text at a cell. Busy cells are skipped unless `overwriteLines`,
-   * which lets an edge label break a line (mermaid draws labels on the
-   * connector) while never touching box borders or other text.
+   * Write text at a cell. Busy cells are skipped unless `overwrite` (set by
+   * edge labels, which break a line — mermaid draws labels on the connector)
+   * while never touching box borders or other text. `owner` marks the cells
+   * as belonging to one node/edge lane (P2.3 focus highlight).
    */
-  text(x: number, y: number, str: string, kind: CellKind, overwriteLines = false): void {
+  text(x: number, y: number, str: string, kind: CellKind, opts: { owner?: string; overwrite?: boolean } = {}): void {
+    const { owner, overwrite = false } = opts;
     let cx = x;
     for (const seg of new Intl.Segmenter("en", { granularity: "grapheme" }).segment(str)) {
       const width = measure(seg.segment);
       if (cx < 0) { cx += width; continue; }
       if (cx + width > this.w) break;
       const existing = this.ok(cx, y) ? this.kinds[y][cx] : "empty";
-      const blocked = existing !== "empty" && !(overwriteLines && existing === "edge");
+      const blocked = existing !== "empty" && !(overwrite && existing === "edge");
       if (!blocked) {
-        this.put(cx, y, seg.segment, kind);
-        for (let k = 1; k < width; k++) this.put(cx + k, y, " ", kind);
+        this.put(cx, y, seg.segment, kind, owner);
+        for (let k = 1; k < width; k++) this.put(cx + k, y, " ", kind, owner);
       }
       cx += width;
     }
   }
 
   /** Node box: border from `cornersFor(shape)` + centered label lines. */
-  box(rect: Rect, lines: string[], shape: NodeShape): void {
+  box(rect: Rect, lines: string[], shape: NodeShape, owner?: string): void {
     const { x, y, w, h } = rect;
     if (w < 5 || h < 3) {
-      this.text(x, y, clipCells(lines[0] ?? "", Math.max(1, w)), "label");
+      this.text(x, y, clipCells(lines[0] ?? "", Math.max(1, w)), "label", { owner });
       return;
     }
     const [tl, tr, br, bl] = cornersFor(shape);
-    this.put(x, y, tl, "box");
-    this.put(x + w - 1, y, tr, "box");
-    this.put(x + w - 1, y + h - 1, br, "box");
-    this.put(x, y + h - 1, bl, "box");
+    this.put(x, y, tl, "box", owner);
+    this.put(x + w - 1, y, tr, "box", owner);
+    this.put(x + w - 1, y + h - 1, br, "box", owner);
+    this.put(x, y + h - 1, bl, "box", owner);
     for (let i = x + 1; i < x + w - 1; i++) {
-      this.put(i, y, charset.h, "box");
-      this.put(i, y + h - 1, charset.h, "box");
+      this.put(i, y, charset.h, "box", owner);
+      this.put(i, y + h - 1, charset.h, "box", owner);
     }
     for (let j = y + 1; j < y + h - 1; j++) {
-      this.put(x, j, charset.v, "box");
-      this.put(x + w - 1, j, charset.v, "box");
+      this.put(x, j, charset.v, "box", owner);
+      this.put(x + w - 1, j, charset.v, "box", owner);
     }
     const inner = w - 4;
     lines.forEach((line, i) => {
       const row = y + 1 + i;
       if (row >= y + h - 1) return;
       const pad = Math.max(0, Math.floor((inner - measure(line)) / 2));
-      this.text(x + 2 + pad, row, line, "label");
+      this.text(x + 2 + pad, row, line, "label", { owner });
     });
   }
 
@@ -556,19 +609,28 @@ class Canvas {
       const segs: Seg[] = [];
       let text = "";
       let kind: CellKind = "empty";
+      let owner: string | undefined;
       let last = -1;
       for (let x = 0; x < this.w; x++) {
         const cellKind = this.kinds[y][x];
+        const cellOwner = this.owners[y][x];
         const ch = cellKind === "edge" ? lineGlyph(this.masks[y][x], this.styles[y][x]) : this.chars[y][x];
-        if (cellKind !== kind) {
-          if (text !== "") segs.push({ text, kind });
+        // A wide glyph covers `measure(ch)` grid columns — the continuation
+        // cells `put` left blank must NOT be emitted as spaces: the terminal
+        // already advanced past them (emitting them shifts every border to
+        // the right by one per CJK char).
+        const cw = cellKind === "empty" ? 1 : measure(ch);
+        if (cellKind !== kind || cellOwner !== owner) {
+          if (text !== "") segs.push({ text, kind, ...(owner !== undefined ? { owner } : {}) });
           kind = cellKind;
+          owner = cellOwner;
           text = "";
         }
         text += ch;
-        if (cellKind !== "empty") last = x;
+        if (cellKind !== "empty") last = x + cw - 1;
+        x += cw - 1;
       }
-      if (text !== "") segs.push({ text, kind });
+      if (text !== "") segs.push({ text, kind, ...(owner !== undefined ? { owner } : {}) });
       rows.push(cutToLast(segs, last));
     }
     return rows;
@@ -583,7 +645,7 @@ function cutToLast(segs: Seg[], last: number): Seg[] {
   for (const seg of segs) {
     if (used > last) break;
     const width = measure(seg.text);
-    if (used + width > last + 1) out.push({ text: seg.text.slice(0, last + 1 - used), kind: seg.kind });
+    if (used + width > last + 1) out.push({ text: seg.text.slice(0, last + 1 - used), kind: seg.kind, ...(seg.owner !== undefined ? { owner: seg.owner } : {}) });
     else out.push(seg);
     used += width;
   }
@@ -635,18 +697,33 @@ function toXY(p: Pt, rankVertical: boolean): { x: number; y: number } {
   return rankVertical ? { x: p.c, y: p.r } : { x: p.r, y: p.c };
 }
 
-function finalize(cv: Canvas, meta: Omit<Raster, "rows" | "width" | "height">): Raster {
-  const rows = crop(cv.toRows());
+function finalize(
+  cv: Canvas,
+  meta: Omit<Raster, "rows" | "width" | "height" | "lanes">,
+  lanes: Map<string, { cells: LaneCell[]; pipe?: boolean }> = new Map(),
+): Raster {
+  const { rows, top, indent } = crop(cv.toRows());
   const width = rows.reduce((max, segs) => Math.max(max, segs.reduce((s, seg) => s + measure(seg.text), 0)), 0);
-  return { ...meta, rows, width, height: rows.length, notes: dedupe(meta.notes).slice(0, 4) };
+  // Lane cells were recorded in canvas space; crop() dropped leading blank
+  // rows and a common indent — shift them so the packet lands on the right
+  // cell of the FINAL rows.
+  const shifted: Raster["lanes"] = [];
+  for (const [id, lane] of lanes) {
+    const out = lane.cells
+      .map((c) => ({ x: c.x - indent, y: c.y - top }))
+      .filter((c) => c.x >= 0 && c.y >= 0 && c.y < rows.length);
+    if (out.length > 0) shifted.push({ id, cells: out, ...(lane.pipe ? { pipe: true } : {}) });
+  }
+  return { ...meta, rows, width, height: rows.length, lanes: shifted, notes: dedupe(meta.notes).slice(0, 4) };
 }
 
 /**
  * Drop the unused gutters: leading/trailing blank rows, and the blank column
  * offset shared by every row (a detour channel that was never needed costs
- * the reader nothing).
+ * the reader nothing). Reports the removed top rows / indent so lane
+ * coordinates can be shifted by the same amount.
  */
-function crop(rows: Seg[][]): Seg[][] {
+function crop(rows: Seg[][]): { rows: Seg[][]; top: number; indent: number } {
   const empty = (segs: Seg[]): boolean => segs.length === 0;
   let top = 0, bottom = rows.length;
   while (top < bottom && empty(rows[top])) top++;
@@ -658,13 +735,14 @@ function crop(rows: Seg[][]): Seg[][] {
     const lead = first !== undefined && first.kind === "empty" ? measure(first.text) : 0;
     indent = Math.min(indent, lead);
   }
-  if (!Number.isFinite(indent) || indent <= 0) return body;
-  return body.map((segs) => {
+  if (!Number.isFinite(indent) || indent <= 0) return { rows: body, top, indent: 0 };
+  const cropped = body.map((segs) => {
     const [first, ...rest] = segs;
     if (first === undefined || first.kind !== "empty") return segs;
     const left = measure(first.text) - indent;
     return left > 0 ? [{ text: " ".repeat(left), kind: "empty" as CellKind }, ...rest] : rest;
   });
+  return { rows: cropped, top, indent };
 }
 
 function dedupe(items: string[]): string[] {
@@ -746,11 +824,17 @@ function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
   if (width < 1 || height < 1 || width > opts.width || height > opts.maxRows) return null;
 
   const cv = new Canvas(width, height);
-  for (const b of boxes.values()) cv.box(b.rect, b.lines, b.node.shape);
+  for (const b of boxes.values()) cv.box(b.rect, b.lines, b.node.shape, b.node.id);
 
   const notes: string[] = [];
   const dropped = { labels: 0 };
-  const ctx: RouteCtx = { rankVertical, flip, crossMax: totalCross - 1, dropped };
+  const lanes = new Map<string, { cells: LaneCell[]; pipe?: boolean }>();
+  // P2.3 lane geometry (occupancy tracked only while a node is focused —
+  // unfocused graphs keep the classic router byte-for-byte): lanes that share
+  // a visible pipe label (all focus edges use `*`) may reuse a corridor;
+  // lanes with different labels never cross each other.
+  const ctx: RouteCtx = { rankVertical, flip, crossMax: totalCross - 1, dropped, lanes, labels: graph.labels };
+  if (g.focus != null) ctx.occupied = new Map<string, Array<{ label: string; edge: string }>>();
   let drawn = 0;
   for (const e of graph.edges) {
     if (back.has(e)) continue;
@@ -772,8 +856,9 @@ function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
     direction: g.direction,
     nodes: boxes.size,
     edges: drawn,
+    ...(g.focus ? { focus: g.focus } : {}),
     notes: [...g.notes, ...notes],
-  });
+  }, lanes);
 }
 
 /** Shared context for routing one layered-layout edge (keeps params few). */
@@ -784,6 +869,30 @@ interface RouteCtx {
   /** Last drawable cross coordinate (gutter edge) for detour channels. */
   crossMax: number;
   dropped: { labels: number };
+  /** Ordered cells of every drawn edge, keyed `from>to` (layout space). */
+  lanes: Map<string, { cells: LaneCell[]; pipe?: boolean }>;
+  /** Edge → visible pipe label (only populated when a node is focused). */
+  labels?: Map<FlowEdge, string>;
+  /** cell → lanes claiming it; undefined = classic routing, no occupancy. */
+  occupied?: Map<string, Array<{ label: string; edge: string }>>;
+}
+
+/** Enumerate the cells of an axis-aligned abstract path, source → target. */
+function pathCells(path: Pt[], rankVertical: boolean): LaneCell[] {
+  const out: LaneCell[] = [];
+  for (let i = 0; i + 1 < path.length; i++) {
+    const p = path[i], q = path[i + 1];
+    const dr = Math.sign(q.r - p.r), dc = Math.sign(q.c - p.c);
+    let r = p.r, c = p.c;
+    if (i > 0) { r += dr; c += dc; } // corner cell already pushed by the last segment
+    for (;;) {
+      const xy = toXY({ r, c }, rankVertical);
+      out.push(xy);
+      if (r === q.r && c === q.c) break;
+      r += dr; c += dc;
+    }
+  }
+  return out;
 }
 
 /**
@@ -838,27 +947,74 @@ function routeEdge(cv: Canvas, a: Box, b: Box, edge: FlowEdge, ctx: RouteCtx): b
     : (headAtB ? "right" : "left");
 
   const candidates = edgePaths(a, b, from, to, crossMax);
-  for (const allowShared of [false, true]) {
+  const laneId = `${edge.from}>${edge.to}`;
+  // Pipe identity only while occupancy tracking is on (a focused graph):
+  // unfocused layouts must take EXACTLY the classic strict→loose ladder.
+  const me = ctx.occupied ? ctx.labels?.get(edge) ?? "" : "";
+  const modes: Guard["mode"][] = me ? ["strict", "shared", "loose"] : ["strict", "loose"];
+  for (const mode of modes) {
+    const guard: Guard = { mode, laneId, me };
     for (const path of candidates) {
-      if (!pathClear(cv, path, rankVertical, allowShared)) continue;
-      for (let i = 0; i + 1 < path.length; i++) drawAlong(cv, path[i], path[i + 1], edge.style, rankVertical);
+      if (!pathClear(cv, path, rankVertical, guard, ctx)) continue;
+      for (let i = 0; i + 1 < path.length; i++) {
+        drawAlong(cv, toXY(path[i], rankVertical), toXY(path[i + 1], rankVertical), edge.style, laneId);
+      }
       const head = toXY(headAtB ? path[path.length - 1] : path[0], rankVertical);
-      cv.arrow(head.x, head.y, dir);
-      placeLabel(cv, path, edge.label, rankVertical, dropped);
+      cv.arrow(head.x, head.y, dir, laneId);
+      placeLabel(cv, path, edge.label, rankVertical, { dropped, owner: laneId });
+      const cells = pathCells(path, rankVertical);
+      ctx.lanes.set(laneId, { cells, ...(me === "*" ? { pipe: true } : {}) });
+      claimCorridor(ctx, guard, cells);
       return true;
     }
   }
   return false;
 }
 
-/** Every segment of a candidate path is drawable. */
-function pathClear(cv: Canvas, path: Pt[], rankVertical: boolean, allowShared: boolean): boolean {
+/**
+ * Claim the corridor (P2.3): later edges keep out unless they share this
+ * visible label — see cellFree(). Loose fallbacks claim nothing: their
+ * overlap is the last-resort compromise, not a pattern to extend.
+ */
+function claimCorridor(ctx: RouteCtx, guard: Guard, cells: LaneCell[]): void {
+  if (!ctx.occupied || guard.mode === "loose") return;
+  for (const c of cells) {
+    const key = `${c.x},${c.y}`;
+    const list = ctx.occupied.get(key) ?? [];
+    list.push({ label: guard.me, edge: guard.laneId });
+    ctx.occupied.set(key, list);
+  }
+}
+
+/** What may occupy a corridor cell while routing one edge (P2.3 ladder):
+ *  - strict: no ink, no claims from other lanes;
+ *  - shared: same visible label may reuse a pipe (focus fan, multi-source
+ *    converge) — box/label cells are still off-limits;
+ *  - loose: classic `allowShared` — anything goes except boxes. */
+interface Guard {
+  mode: "strict" | "shared" | "loose";
+  laneId: string;
+  me: string;
+}
+
+/** Every segment of a candidate path is drawable under `guard`. */
+function pathClear(
+  cv: Canvas, path: Pt[], rankVertical: boolean, guard: Guard, ctx: RouteCtx,
+): boolean {
   for (let i = 0; i + 1 < path.length; i++) {
     const p = path[i], q = path[i + 1];
     if (p.c === q.c) {
-      if (!cv.freeRank(p.c, p.r, q.r, rankVertical, allowShared)) return false;
+      const lo = Math.min(p.r, q.r), hi = Math.max(p.r, q.r);
+      for (let r = lo; r <= hi; r++) {
+        const xy = toXY({ r, c: p.c }, rankVertical);
+        if (!cellFree(cv, xy.x, xy.y, guard, ctx)) return false;
+      }
     } else if (p.r === q.r) {
-      if (!cv.freeCross(p.r, p.c, q.c, rankVertical, allowShared)) return false;
+      const lo = Math.min(p.c, q.c), hi = Math.max(p.c, q.c);
+      for (let c = lo; c <= hi; c++) {
+        const xy = toXY({ r: p.r, c }, rankVertical);
+        if (!cellFree(cv, xy.x, xy.y, guard, ctx)) return false;
+      }
     } else {
       return false; // not axis-aligned
     }
@@ -866,23 +1022,32 @@ function pathClear(cv: Canvas, path: Pt[], rankVertical: boolean, allowShared: b
   return true;
 }
 
-/** Draw one axis-aligned abstract segment (rank or cross direction). */
-function drawAlong(cv: Canvas, p: Pt, q: Pt, style: EdgeStyle, rankVertical: boolean): void {
-  const A = toXY(p, rankVertical);
-  const B = toXY(q, rankVertical);
-  if (A.x === B.x) cv.vLine(A.x, A.y, B.y, style);
-  else cv.hLine(A.y, A.x, B.x, style);
+function cellFree(cv: Canvas, x: number, y: number, guard: Guard, ctx: RouteCtx): boolean {
+  if (guard.mode === "loose") return true; // classic allowShared: draw-through, line() guards itself
+  const claims = ctx.occupied?.get(`${x},${y}`) ?? [];
+  const kind = cv.kinds[y][x];
+  if (guard.mode === "strict") return kind === "empty" && claims.every((o) => o.edge === guard.laneId);
+  if (kind === "box" || kind === "label") return false;
+  return claims.every((o) => o.edge === guard.laneId || (guard.me !== "" && o.label === guard.me));
+}
+
+/** Draw one already-projected segment (A→B in raster cells). */
+function drawAlong(cv: Canvas, A: { x: number; y: number }, B: { x: number; y: number }, style: EdgeStyle, owner?: string): void {
+  if (A.x === B.x) cv.vLine(A.x, A.y, B.y, style, owner);
+  else cv.hLine(A.y, A.x, B.x, style, owner);
 }
 
 /**
  * Edge labels: prefer the longest horizontal run (the label sits on the line,
  * like mermaid does); otherwise put it beside the longest vertical run, in the
- * routing band that is free by construction. `dropped` counts labels that had
- * no room, so the caller can say so instead of losing them silently.
+ * routing band that is free by construction. `opts.dropped` counts labels that
+ * had no room, so the caller can say so instead of losing them silently.
  */
 function placeLabel(
-  cv: Canvas, path: Pt[], label: string, rankVertical: boolean, dropped: { labels: number },
+  cv: Canvas, path: Pt[], label: string, rankVertical: boolean,
+  opts: { dropped: { labels: number }; owner?: string },
 ): void {
+  const { dropped, owner } = opts;
   if (!label) return;
   const runs: Array<{ p: Pt; q: Pt; len: number; horizontal: boolean }> = [];
   for (let i = 0; i + 1 < path.length; i++) {
@@ -903,7 +1068,7 @@ function placeLabel(
   if (onLine) {
     const A = toXY(onLine.p, rankVertical), B = toXY(onLine.q, rankVertical);
     const [x1, x2] = A.x <= B.x ? [A.x, B.x] : [B.x, A.x];
-    cv.text(x1 + Math.floor((x2 - x1 + 1 - labelW) / 2), A.y, label, "elabel", true);
+    cv.text(x1 + Math.floor((x2 - x1 + 1 - labelW) / 2), A.y, label, "elabel", { owner, overwrite: true });
     return;
   }
 
@@ -911,8 +1076,8 @@ function placeLabel(
   if (beside) {
     const A = toXY(beside.p, rankVertical), B = toXY(beside.q, rankVertical);
     const midY = A.y + Math.floor((B.y - A.y) / 2);
-    if (cv.freeH(midY, A.x + 1, A.x + labelW)) cv.text(A.x + 1, midY, label, "elabel");
-    else if (cv.freeH(midY, A.x - labelW, A.x - 1)) cv.text(A.x - labelW, midY, label, "elabel");
+    if (cv.freeH(midY, A.x + 1, A.x + labelW)) cv.text(A.x + 1, midY, label, "elabel", { owner });
+    else if (cv.freeH(midY, A.x - labelW, A.x - 1)) cv.text(A.x - labelW, midY, label, "elabel", { owner });
     else dropped.labels++;
     return;
   }
@@ -937,7 +1102,8 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
   const next = new Map<string, { id: string; style: EdgeStyle; label: string }>();
   for (const e of g.edges) {
     if (back.has(e)) continue;
-    if (!next.has(e.from)) next.set(e.from, { id: e.to, style: e.style, label: e.label });
+    const visible = g.labels.get(e) ?? e.label;
+    if (!next.has(e.from)) next.set(e.from, { id: e.to, style: e.style, label: visible === "*" ? charset.arrowDown : visible });
   }
 
   interface Placed { id: string; row: number; rect: Rect; lines: string[]; shape: NodeShape }
@@ -977,10 +1143,11 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
   if (width < 1 || height < 1 || width > opts.width || height > opts.maxRows) return null;
 
   const cv = new Canvas(width, height);
+  const lanes = new Map<string, { cells: LaneCell[]; pipe?: boolean }>();
   const placed = new Map<string, Placed>();
   for (const row of rows) for (const p of row) {
     placed.set(p.id, p);
-    cv.box(p.rect, p.lines, p.shape);
+    cv.box(p.rect, p.lines, p.shape, p.id);
   }
 
   const notes: string[] = [];
@@ -991,6 +1158,7 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
     const b = placed.get(order[i + 1]);
     const link = next.get(order[i]);
     if (!a || !b || !link || link.id !== order[i + 1]) continue;
+    const laneId = `${a.id}>${b.id}`;
     if (a.row === b.row) {
       // Same row: `──▶` across the gap, on the line joining the two box middles.
       const midY = Math.floor(
@@ -998,12 +1166,15 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
       );
       const from = a.rect.x + a.rect.w;
       const to = b.rect.x - 1;
-      cv.hLine(midY, from, to - 1, link.style);
-      cv.arrow(to, midY, "right");
+      cv.hLine(midY, from, to - 1, link.style, laneId);
+      cv.arrow(to, midY, "right", laneId);
       if (link.label === "" || to - from >= measure(link.label) + 2) {
         const start = from + Math.floor((to - from - measure(link.label)) / 2);
-        cv.text(start, midY - 1, link.label, "elabel");
+        cv.text(start, midY - 1, link.label, "elabel", { owner: laneId });
       } else labelsDropped++;
+      const cells: LaneCell[] = [];
+      for (let x = from; x <= to; x++) cells.push({ x, y: midY });
+      lanes.set(laneId, { cells });
       drawn++;
       continue;
     }
@@ -1012,10 +1183,14 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
     const tx = b.rect.x + Math.floor(b.rect.w / 2);
     const headY = Math.max(a.rect.y + a.rect.h, b.rect.y - 1);
     const runY = Math.max(a.rect.y + a.rect.h, headY - 1);
-    cv.line(sx, runY, UP | LEFT, link.style);
-    cv.hLine(runY, tx + 1, sx - 1, link.style);
-    cv.line(tx, runY, DOWN | RIGHT, link.style);
-    cv.arrow(tx, headY, "down");
+    cv.line(sx, runY, UP | LEFT, link.style, laneId);
+    cv.hLine(runY, tx + 1, sx - 1, link.style, laneId);
+    cv.line(tx, runY, DOWN | RIGHT, link.style, laneId);
+    cv.arrow(tx, headY, "down", laneId);
+    const cells: LaneCell[] = [];
+    for (let x = sx; x >= tx; x--) cells.push({ x, y: runY });
+    for (let y = runY + 1; y <= headY; y++) cells.push({ x: tx, y });
+    lanes.set(laneId, { cells });
     drawn++;
   }
   if (labelsDropped > 0) notes.push(`${labelsDropped} edge label(s) omitted (no room)`);
@@ -1037,8 +1212,9 @@ function stripLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
     direction: "chain",
     nodes: placed.size,
     edges: drawn,
+    ...(g.focus ? { focus: g.focus } : {}),
     notes: [...g.notes, ...notes],
-  });
+  }, lanes);
 }
 
 // ── 8. Entry point ──────────────────────────────────────────────────────────
@@ -1090,4 +1266,123 @@ export function renderFlowchart(lines: string[], width: number, maxRows = 40): R
   if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value ?? "");
   cache.set(key, result);
   return result;
+}
+
+/**
+ * Resolve an event-driven focus request (`diagram_focus` tool) against this
+ * block's source: accepts a node id (`B`, case-sensitive like mermaid) or a
+ * node label (case-insensitive, `<br/>` normalized). Optional `diagram` hint
+ * must also appear somewhere in the block (id, label or any word of it) —
+ * it is how the caller says WHICH diagram, so a miss means "not my block".
+ * Returns the matched node id + label, or null when nothing matches: the
+ * renderer then leaves the diagram untouched (never paints a wrong node).
+ */
+export function resolveFocus(
+  lines: string[], diagram: string | null | undefined, node: string,
+): { id: string; label: string } | null {
+  const graph = parseFlowchart(lines);
+  if (!graph) return null;
+  const needle = node.trim().toLowerCase();
+  if (!needle) return null;
+  const want = (diagram ?? "").trim().toLowerCase();
+  for (const n of graph.nodes) {
+    const byNode = n.id.toLowerCase() === needle || n.label.trim().toLowerCase() === needle;
+    if (!byNode) continue;
+    if (want) {
+      const hay = graph.nodes.map((m) => `${m.id} ${m.label.toLowerCase()}`).join(" | ").toLowerCase();
+      if (!hay.includes(want) && want !== n.id.toLowerCase()) return null;
+    }
+    return { id: n.id, label: n.label };
+  }
+  return null;
+}
+
+// ── 6. Focus overlay (P2.3) ─────────────────────────────────────────────────
+
+/** Burst length shared with `usePulse` (the ROUTER tab's cadence). */
+export const PULSE_FRAMES = 6;
+
+export interface PaintMark { y: number; x: number; ch: string }
+
+/**
+ * Overwrite single raster cells with glyphs (the travelling packet, focus
+ * markers) without disturbing anything else: rows are expanded to cells,
+ * painted, and re-grouped into segments. Wide chars lose their spacer cell
+ * (the glyph fits the one column). Untouched rows keep their object identity
+ * so Ink can diff cheaply. Pure + side-effect free: unit-testable.
+ */
+export function paintCells(rows: Seg[][], marks: PaintMark[]): Seg[][] {
+  if (marks.length === 0) return rows;
+  const byRow = new Map<number, PaintMark[]>();
+  for (const m of marks) {
+    const list = byRow.get(m.y);
+    if (list) list.push(m);
+    else byRow.set(m.y, [m]);
+  }
+  const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+  return rows.map((segs, y) => {
+    const rowMarks = byRow.get(y);
+    if (!rowMarks) return segs;
+    // Expansion is grid-aware: each grapheme carries its measured width, so a
+    // mark's column lands on the glyph that occupies it (wide glyphs span two).
+    const chars: Array<{ ch: string; kind: CellKind; owner?: string }> = [];
+    for (const seg of segs) {
+      for (const g of segmenter.segment(seg.text)) chars.push({ ch: g.segment, kind: seg.kind, owner: seg.owner });
+    }
+    // Marks address grid columns (wide glyphs span two). Rebuild the row in a
+    // fresh array — never mutate while walking — and re-insert a blank column
+    // when a narrow glyph covers a wide one so the row width is preserved.
+    const painted: Array<{ ch: string; kind: CellKind; owner?: string }> = [];
+    let cx = 0;
+    for (const cell of chars) {
+      const w = measure(cell.ch);
+      const hit = rowMarks.find((m) => m.x >= cx && m.x < cx + w);
+      if (hit) {
+        painted.push({ ch: hit.ch, kind: "arrow", owner: cell.owner });
+        if (measure(hit.ch) < w) painted.push({ ch: " ", kind: "arrow", owner: cell.owner });
+      } else {
+        painted.push(cell);
+      }
+      cx += w;
+    }
+    const out: Seg[] = [];
+    let text = "";
+    let kind: CellKind = "empty";
+    let owner: string | undefined;
+    let open = false;
+    for (const c of painted) {
+      if (open && (c.kind !== kind || c.owner !== owner)) {
+        out.push({ text, kind, ...(owner !== undefined ? { owner } : {}) });
+        text = "";
+      }
+      kind = c.kind;
+      owner = c.owner;
+      open = true;
+      text += c.ch;
+    }
+    if (open) out.push({ text, kind, ...(owner !== undefined ? { owner } : {}) });
+    return out;
+  });
+}
+
+/**
+ * Cells the packet paints at burst frame `pulse` (0..PULSE_FRAMES-1):
+ * prefer the direct `prev → focus` lane (the route just travelled); otherwise
+ * the focus node's merged pipe — outgoing first, incoming as fallback.
+ * Negative frame, no focus, or no lanes → no marks (static render).
+ */
+export function pulseMarks(raster: Raster, focus: string | null, prev: string | null, pulse: number): PaintMark[] {
+  if (pulse < 0 || focus == null) return [];
+  const direct = prev != null && prev !== focus ? raster.lanes.find((l) => l.id === `${prev}>${focus}`) : undefined;
+  let cells = direct && direct.cells.length > 0 ? direct.cells : null;
+  if (!cells) {
+    const pipes = raster.lanes.filter((l) => l.pipe);
+    const pool = pipes.length > 0 ? pipes : raster.lanes;
+    const out = pool.filter((l) => l.id.startsWith(`${focus}>`));
+    const chosen = out.length > 0 ? out : pool.filter((l) => l.id.endsWith(`>${focus}`));
+    cells = chosen.flatMap((l) => l.cells);
+  }
+  if (cells.length === 0) return [];
+  const idx = Math.min(cells.length - 1, Math.floor((pulse * cells.length) / (PULSE_FRAMES - 1)));
+  return [{ y: cells[idx].y, x: cells[idx].x, ch: charset.active }];
 }

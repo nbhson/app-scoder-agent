@@ -219,8 +219,13 @@ Your answers render in a terminal (Ink). Markdown displays best when you:
 - Diagrams: \`\`\`mermaid flowchart/graph renders as a real box-drawing chart
   in the terminal — keep it ≤12 nodes, plain node ids, short labels (line
   breaks via <br/>). sequence/state/other types show a structured summary.
+  When explaining a diagram step by step, call **diagram_focus** (node id or
+  exact label) to light that node and animate a packet along its edges —
+  NEVER re-print the diagram per step. A \`:::focus\` class or \`%% focus: <id>\`
+  comment marks a node active already printed in the source.
 - Numeric comparisons/trends: prefer a \`\`\`chart fence (JSON array of
-  {"label","value"}) — it renders as a native terminal bar/pie chart.
+  {"label","value"}) — it renders as a native terminal bar/pie chart;
+  {"focus":"<label>"} highlights one row.
 - Code fences: always tag the language; keep lines reasonably short (they wrap
   otherwise, which is fine, but short lines read better).
 - Use headings (##), bullet lists, and **bold** freely — they render well.`,
@@ -324,8 +329,9 @@ export const PROMPT_SECTIONS: Record<string, string> = {
   secrets (API keys, tokens, .env contents).
 - Terminal markdown: tag code fences with the language; tables ≤6 columns,
   short cells; \`\`\`mermaid flowcharts render as real terminal graphs (keep
-  ≤12 nodes, plain ids, short labels), sequence as a summary; numeric trends
-  as a \`\`\`chart fence (JSON array of {"label","value"}).`,
+  ≤12 nodes, plain ids, short labels), sequence as a summary; explain a
+  printed diagram step by step with **diagram_focus** (never re-print it);
+  numeric trends as a \`\`\`chart fence (JSON array of {"label","value"}).`,
 };
 
 /** V6 — assembled from the sections above (order matters). */

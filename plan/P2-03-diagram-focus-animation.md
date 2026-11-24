@@ -1,6 +1,6 @@
 # P2.3 — Diagram focus & animation (highlight "active" như tab ROUTER)
 
-> Trạng thái: CHƯA LÀM (kế hoạch khả thi, cơ sở hạ tầng đã có ~70%) · Phụ thuộc: fix layout 11/2026 (`layered` band 3→2→1, `strip` chain-guard) đã merge · Liên quan: `plan/P2-02-model-router.md` (packet pulse), `src/tui/README.md` (markdown pipeline)
+> Trạng thái: ✅ ĐÃ SHIP phases 1–5 (11/2026) · phase 6 để ngỏ (tùy chọn) · Phụ thuộc: fix layout 11/2026 (`layered` band 3→2→1, `strip` chain-guard) đã merge · Liên quan: `plan/P2-02-model-router.md` (packet pulse), `src/tui/README.md` (markdown pipeline)
 
 ## Mục tiêu
 
@@ -111,13 +111,13 @@ theo topological order, Shift+f lùi. Chỉ làm khi A+B xong và thấy nhu c�
 
 ## Các giai đoạn (mỗi cái ship độc lập, có test riêng)
 
-| # | Việc | File | Rủi ro |
-|---|---|---|---|
-| 1 | `owner` tagging + `lanes` trong Canvas/toRows; `Seg.owner`; test raster thuần | `graph.ts`, `graph-layout.test.mjs` | thấp — additive, snapshot cũ phải không đổi |
-| 2 | `usePulse` extract + `cellStyle(kind,owner,focus)` + active node tĩnh (chưa packet) | `hooks/use-pulse.ts`, `sidebar.tsx`, `diagram.tsx` | thấp |
-| 3 | Kênh nguồn `:::focus` / `%% focus:` / chart `focus` (parse + prompt V5/V6) | `graph.ts`, `parse.ts`? (scanStatement đã có class), `prompt.ts` | thấp |
-| 4 | Packet lane animation prev→node | `diagram.tsx` | trung bình — index lane phải khớp crop() (crop dịch x! lưu lane SAU crop hoặc cộng offset) |
-| 5 | Tool `diagram_focus` + event + `state.diagramFocus` + wiring app | `src/tools/*`, `state.ts`, `use-event-queue` | trung bình — chạm agent loop, cần eval prompt |
+| # | Việc | File | Rủi ro | Trạng thái |
+|---|---|---|---|---|
+| 1 | `owner` tagging + `lanes` trong Canvas/toRows; `Seg.owner`; test raster thuần | `graph.ts`, `graph-layout.test.mjs` | thấp — additive, snapshot cũ phải không đổi | ✅ DONE |
+| 2 | `usePulse` extract + `cellStyle(kind,owner,focus)` + active node tĩnh (chưa packet) | `hooks/use-pulse.ts`, `sidebar.tsx`, `diagram.tsx` | thấp | ✅ DONE |
+| 3 | Kênh nguồn `:::focus` / `%% focus:` / chart `focus` (parse + prompt V5/V6) | `graph.ts`, `parse.ts`? (scanStatement đã có class), `prompt.ts` | thấp | ✅ DONE |
+| 4 | Packet lane animation prev→node | `diagram.tsx` | trung bình — index lane phải khớp crop() (crop dịch x! lưu lane SAU crop hoặc cộng offset) | ✅ DONE |
+| 5 | Tool `diagram_focus` + event + `state.diagramFocus` + wiring app | `src/tools/*`, `state.ts`, `use-event-queue` | trung bình — chạm agent loop, cần eval prompt | ✅ DONE |
 | 6 | (optional) phím cycle focus | `input.tsx`/`app.tsx` | cao hơn — focus management trong transcript virtualized |
 
 ## Test

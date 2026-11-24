@@ -259,6 +259,19 @@ describe("repo map", () => {
     assert.match(r.output, /REPO MAP/);
     assert.match(r.output, /entryPoint/);
   });
+
+  it("diagram_focus tool echoes the directive (P2.3) and rejects empty node", async () => {
+    const tool = getTool("diagram_focus");
+    assert.ok(tool, "tool must be registered");
+    const r = await tool.run({ workdir: ".", permissionMode: "auto" }, { node: "C", diagram: "event loop" });
+    assert.equal(r.ok, true);
+    assert.equal(r.output, "focus: event loop · C");
+    const bare = await tool.run({ workdir: ".", permissionMode: "auto" }, { node: " C " });
+    assert.equal(bare.output, "focus: C");
+    const bad = await tool.run({ workdir: ".", permissionMode: "auto" }, {});
+    assert.equal(bad.ok, false);
+    assert.match(bad.output, /ERROR/);
+  });
 });
 
 describe("AGENTS.md hierarchy", () => {

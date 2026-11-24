@@ -316,3 +316,42 @@ describe("tui state — P2.2 route_decision / modelStats / fold", () => {
     assert.match(row.text, /⤳j:reject-hallucinated/);
   });
 });
+
+// ── P2.3: diagram_focus tool_call → live focus state ───────────────────────
+
+describe("tui state — P2.3 diagram_focus", () => {
+  let n = 0;
+  const focusCall = (args) => ({ type: "tool_call", step: 1, id: `d${++n}`, name: "diagram_focus", args });
+
+  it("lưu node/diagram; prev là node khác gần nhất (đường packet đi)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, focusCall({ node: "B", diagram: "loop" }));
+    assert.equal(s.diagramFocus.node, "B");
+    assert.equal(s.diagramFocus.diagram, "loop");
+    assert.equal(s.diagramFocus.prev, null);
+    applyEvent(s, focusCall({ node: "C" }));
+    assert.equal(s.diagramFocus.prev, "B");
+    // gọi lại chính nó: prev không được tự trỏ vào mình (packet self-loop)
+    applyEvent(s, focusCall({ node: "C" }));
+    assert.equal(s.diagramFocus.prev, "B");
+    assert.ok(s.diagramFocus.ts > 0);
+  });
+
+  it("args thiếu node → giữ focus cũ; run_start mới → reset", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, focusCall({ node: "A" }));
+    applyEvent(s, focusCall({ node: "   " }));
+    assert.equal(s.diagramFocus.node, "A");
+    applyEvent(s, focusCall({}));
+    assert.equal(s.diagramFocus.node, "A");
+    applyEvent(s, baseEvent);
+    assert.equal(s.diagramFocus, null);
+  });
+
+  it("tool khác không đụng diagramFocus", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, focusCall({ node: "B" }));
+    applyEvent(s, { type: "tool_call", step: 1, id: "x", name: "read_file", args: { path: "a.ts" } });
+    assert.equal(s.diagramFocus.node, "B");
+  });
+});

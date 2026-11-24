@@ -33,8 +33,10 @@ import type { Block } from "./markdown/ast.js";
 export {
   parseChartSpec,
   parseTimelineSpec,
+  DiagramFocusContext,
   type ChartSpec,
   type ChartPoint,
+  type DiagramFocusEvent,
   type TimelineEvent,
 } from "./markdown/diagram.js";
 export { parseMarkdown } from "./markdown/parse.js";
