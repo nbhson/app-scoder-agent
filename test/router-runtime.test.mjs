@@ -221,11 +221,13 @@ describe("RouterRuntime — judge hook (chữ ký L4, fake judge)", () => {
     assert.equal(decisions[0].tier, "large");
   });
 
-  it("judge ném lỗi → pickTurn catch, run vẫn chạy với fallback", async () => {
+  it("judge ném lỗi → bắt trong askJudge (verdict fallback), run dùng decision L1 gốc, không nổ", async () => {
     const judge = { async judge() { throw new Error("judge down"); } };
-    const { rt } = baseHarness(judge, { judge: { model: "x", scope: "always" } });
+    const { rt, decisions } = baseHarness(judge, { judge: { model: "x", scope: "always" } });
     const r = await rt.chat(smallMsgs, []);
-    assert.equal(r.message.content, "ok:kimi-k3");
+    assert.equal(r.message.content, "ok:claude-sonnet"); // base large (phase edit), không phải emergency fallback
+    assert.equal(decisions[0].judge.verdict, "fallback");
+    assert.match(decisions[0].reason, /judge-fallback/);
   });
 
   it("scope gray: chỉ gọi khi L1 gray — phase edit (score +2) không gọi", async () => {

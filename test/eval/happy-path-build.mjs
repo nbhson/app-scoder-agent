@@ -1,6 +1,6 @@
 /**
  * I-12 eval — happy path: write a file, build passes, run succeeds.
- * Also pins the v2 event schema: run_start.schemaVersion, context event,
+ * Also pins the v3 event schema: run_start.schemaVersion, context event,
  * finish.usage + finish.verification.
  */
 const tc = (id, name, args) => ({
@@ -25,7 +25,7 @@ export default {
   check({ events, result }) {
     const rs = events.find((e) => e.type === "run_start");
     if (!rs) throw new Error("run_start missing");
-    if (rs.schemaVersion !== 2) throw new Error(`run_start.schemaVersion should be 2, got ${rs.schemaVersion}`);
+    if (rs.schemaVersion !== 3) throw new Error(`run_start.schemaVersion should be 3, got ${rs.schemaVersion}`);
     const ctx = events.find((e) => e.type === "context");
     if (!ctx) throw new Error("context event not emitted after LLM turn");
     const build = events.find((e) => e.type === "build");

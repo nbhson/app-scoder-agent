@@ -16,6 +16,7 @@ import {
   IDLE_TURN_CONTEXT,
   estimateHistoryTokens,
   type Judge,
+  type JudgeVerdict,
   type ResolvedRouterConfig,
   type RouteDecision,
   type RouterModel,
@@ -146,6 +147,10 @@ export class RouterRuntime implements ProviderRuntimeContract {
   /** The validated candidate list (read-only) — `/router` status + tab graph. */
   get candidates(): readonly RouterModel[] {
     return this.models;
+  }
+  /** Active L4 judge label — null = pure 3-layer pipeline (nothing configured or judge disabled). */
+  get judgeLabel(): string | null {
+    return this.opts.judge?.describe?.() ?? null;
   }
 
   /**
@@ -336,7 +341,11 @@ export class RouterRuntime implements ProviderRuntimeContract {
     base: { tier: Tier; reason: string },
     minConfidence: number,
   ): Promise<{ tier: Tier; reason: string; hit: RouterModel | null; info: NonNullable<RouteDecision["judge"]> }> {
-    const v = await judge.judge(ctx, cands, base);
+    const v = await judge.judge(ctx, cands, base).catch((err) => {
+      // Contract says Judge never throws — but a plugin judge that does must
+      // not sink the run (plan §Risks: "0 exception mới").
+      return { tier: null, ref: null, confidence: 0, reason: `judge-error:${(err as Error).message}`, ms: 0, tokens: 0 } as JudgeVerdict;
+    });
     const info: NonNullable<RouteDecision["judge"]> = {
       model: v.ref ?? "",
       confidence: v.confidence,
@@ -346,9 +355,13 @@ export class RouterRuntime implements ProviderRuntimeContract {
     };
     const hit = v.ref ? cands.find((m) => m.ref === v.ref || m.model === v.ref) : undefined;
     if (!hit) {
-      info.verdict = "reject-hallucinated";
+      // Honest audit: a missing ref is NOT a hallucination — timeouts and
+      // errors fall back quietly (plan AC: "⤳j fallback").
+      const why = v.ref ? "reject-hallucinated" : v.reason.startsWith("judge-timeout") ? "timeout" : "fallback";
+      info.verdict = why;
       info.model = "";
-      return { tier: base.tier, reason: `${base.reason} · judge-reject(hallucinated)`, hit: null, info };
+      const tag = why === "timeout" ? "judge-timeout" : why === "fallback" ? "judge-fallback" : "judge-reject(hallucinated)";
+      return { tier: base.tier, reason: `${base.reason} · ${tag}`, hit: null, info };
     }
     if (v.confidence < minConfidence) {
       info.verdict = "reject-confidence";

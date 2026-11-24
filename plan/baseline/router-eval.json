@@ -1,0 +1,45 @@
+{
+  "ts": "2026-11-24T03:54:49.515Z",
+  "configs": {
+    "pinned_large": {
+      "calls": {
+        "box-api/mini": 0,
+        "box-api/pro": 4
+      },
+      "decisions": 0
+    },
+    "pinned_small": {
+      "calls": {
+        "box-api/mini": 4,
+        "box-api/pro": 0
+      }
+    },
+    "router_3layer": {
+      "calls": {
+        "box-api/mini": 3,
+        "box-api/pro": 1
+      },
+      "tiers": [
+        "small",
+        "small",
+        "small",
+        "large"
+      ],
+      "decisions": 4
+    },
+    "router_4layer_judge": {
+      "calls": {
+        "box-api/mini": 4,
+        "box-api/pro": 0
+      },
+      "decisions": 4,
+      "judgeCalls": 4,
+      "judged": [
+        "accept",
+        "accept",
+        "accept",
+        "accept"
+      ]
+    }
+  }
+}

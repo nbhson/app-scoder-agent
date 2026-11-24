@@ -256,7 +256,10 @@ export function coreCommands(): CommandEntry[] {
         const last = rs.last
           ? `last: step ${rs.last.step} → ${rs.last.tier} (${rs.last.ref})\n  ${rs.last.reason}`
           : "last: none yet (auto routes on the next turn)";
-        notice([`mode: ${rs.mode} · active: ${rs.activeRef}`, ...tiers, last].join("\n"));
+        const judge = rs.judge
+          ? `judge: ${rs.judge} · scope ${host.config.router?.judge?.scope ?? "gray"} (L4 active)`
+          : "judge: off (3-layer pipeline)";
+        notice([`mode: ${rs.mode} · active: ${rs.activeRef}`, ...tiers, last, judge].join("\n"));
       },
     },
     {

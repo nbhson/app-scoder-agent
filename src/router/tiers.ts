@@ -57,6 +57,29 @@ function resolveTierRef(
 }
 
 /**
+ * Phase E: resolve the judge's `model` ref with the SAME strict rules as tier
+ * refs (undeclared under a declaring provider → dropped). The tier field is
+ * meaningless here — the judge is never a routing candidate.
+ */
+export function resolveJudgeModel(
+  rawRef: string,
+  providers: Record<string, ProviderDef>,
+  activeId = "openai",
+): { model: RouterModel | null; warnings: string[] } {
+  const warnings: string[] = [];
+  const model = resolveTierRef("small", rawRef, providers, activeId, warnings);
+  return { model, warnings };
+}
+
+/** `judge.model` omitted → "cheapest small" (§3 migration default for classifier:true). */
+export function pickCheapestSmall(models: readonly RouterModel[]): RouterModel | null {
+  const NO_PRICE = Number.MAX_SAFE_INTEGER;
+  const small = models.filter((m) => m.tier === "small");
+  if (small.length === 0) return null;
+  return [...small].sort((a, b) => (a.pricing?.output ?? NO_PRICE) - (b.pricing?.output ?? NO_PRICE))[0];
+}
+
+/**
  * Explicit tiers win. Without `router.tiers`, derive from every configured
  * model that declares pricing: cheapest half → small, dearest → large (§4c-2,
  * with a warning so the user pins tiers properly once they see the split).

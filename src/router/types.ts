@@ -131,6 +131,8 @@ export interface JudgeVerdict {
 export interface Judge {
   /** Must never throw — errors come back as a null-ref verdict. */
   judge(ctx: TurnContext, candidates: RouterModel[], base: { tier: Tier; reason: string }): Promise<JudgeVerdict>;
+  /** Display label of the judge model (`/router`, audit). */
+  describe?(): string;
 }
 
 /** Defaults from plan §2/§4 — thresholds are intentionally cheap-biased. */

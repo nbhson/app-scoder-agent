@@ -134,6 +134,13 @@ for (const file of scenarioFiles.sort()) {
   const scenario = mod.default ?? mod.scenario;
   const name = scenario.name ?? file.split("/").pop();
   try {
+    // P2.2: self-contained scenarios (router eval không đi qua Agent loop).
+    if (typeof scenario.run === "function") {
+      const r = await scenario.run();
+      results.push({ name, pass: true });
+      console.log(`  ✓ ${name}${r?.notes ? ` — ${r.notes}` : ""}`);
+      continue;
+    }
     const { events, result } = await runScenario(scenario);
     // Invariant chung: không tool-result mồ côi
     const orphans = checkNoOrphanTools(events);

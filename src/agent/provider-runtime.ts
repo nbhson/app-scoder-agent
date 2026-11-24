@@ -17,8 +17,9 @@ import { LlmClient } from "../llm/llm.js";
 import { AnthropicClient } from "../llm/provider-anthropic.js";
 import type { ProviderDef, ProviderRuntimeContract } from "../llm/provider-registry.js";
 import { RouterRuntime } from "../router/router-runtime.js";
-import { resolveRouterTiers } from "../router/tiers.js";
-import { ROUTER_DEFAULTS, type ResolvedRouterConfig, type RouterModel } from "../router/types.js";
+import { resolveJudgeModel, pickCheapestSmall, resolveRouterTiers } from "../router/tiers.js";
+import { createJudge } from "../router/judge.js";
+import { ROUTER_DEFAULTS, type Judge, type ResolvedRouterConfig, type RouterModel } from "../router/types.js";
 
 /** I-05: Anthropic reasoning budget = 25% of maxTokens, floor 1024. */
 export function thinkingBudgetFor(config: Pick<AgentConfig, "reasoning" | "maxTokens">): number {
@@ -90,6 +91,33 @@ export function makeRuntimeForRef(m: RouterModel, config: AgentConfig): Provider
   });
 }
 
+/**
+ * L4 judge (Phase E). null = 3-layer pipeline, zero extra requests — also the
+ * outcome when the configured judge ref is unresolvable (warned, never fatal:
+ * a broken judge must not disable the router).
+ */
+function makeJudgeRuntime(config: AgentConfig, models: RouterModel[]): Judge | null {
+  const j = config.router?.judge;
+  if (!j) return null;
+  let jm: RouterModel | null;
+  if (j.model) {
+    const r = resolveJudgeModel(j.model, loadMergedProviders(config.workdir), config.providerDef?.id ?? config.provider);
+    for (const w of r.warnings) console.error(`⚠  router.judge: ${w.replace(/^router: /, "")}`);
+    jm = r.model;
+    if (!jm) {
+      console.error(`⚠  router.judge model "${j.model}" unresolvable — judge disabled, router stays 3-layer`);
+      return null;
+    }
+  } else {
+    jm = pickCheapestSmall(models);
+    if (!jm) {
+      console.error("⚠  router.judge has no model and no small-tier candidate to derive one from — judge disabled");
+      return null;
+    }
+  }
+  return createJudge({ client: makeRuntimeForRef(jm, config), model: jm.ref, timeoutMs: j.timeoutMs });
+}
+
 /** rc block → fully defaulted runtime config (plan §5: junk → defaults). */
 export function resolveRouterRuntimeConfig(r: NonNullable<AgentConfig["router"]>): ResolvedRouterConfig {
   return {
@@ -122,6 +150,7 @@ export function makeRouterRuntime(config: AgentConfig): ProviderRuntimeContract 
     config.providerDef?.id ?? config.provider,
   );
   if (!t.fallback) return null;
+  const judge = makeJudgeRuntime(config, t.models);
   const rt = new RouterRuntime({
     models: t.models,
     fallbackRef: t.fallback.ref,
@@ -130,6 +159,7 @@ export function makeRouterRuntime(config: AgentConfig): ProviderRuntimeContract 
     sensors: config.routerSensors,
     onRoute: config.onRoute,
     mode: "auto",
+    ...(judge ? { judge } : {}),
   });
   if (config.routerMode !== "auto") {
     // Pin to the startup model — reuses the `/model` path so bare/qualified/
