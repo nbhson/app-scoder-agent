@@ -22,6 +22,16 @@ export const SIDEBAR_WIDTH = 48;
 /** Dưới ngưỡng cột này ẩn sidebar — BuildRail fallback sang header đầy đủ. */
 export const SIDEBAR_MIN_COLS = 100;
 
+/**
+ * Improve TUI: chiều cao mặc định của header + footer ở MỌI resolution.
+ * Ink tính border vào height của Box → 1 hàng nội dung + 1 hàng divider = 2.
+ * Các Box chrome đặt height={CHROME_HEIGHT} + overflow="hidden" để text dài
+ * (guardrail, hint, model name) không bao giờ wrap đẩy chrome thành 3–4 hàng
+ * khi terminal hẹp hoặc font nhỏ. Text luôn center (hàng content duy nhất,
+ * justifyContent="center" ở giữa).
+ */
+export const CHROME_HEIGHT = 2;
+
 /** Scaled step fuel gauge: ▰ filled / ▱ remaining, e.g. ▰▰▰▰▱▱▱▱ 4/40. */
 export function fuelGauge(step: number, maxSteps: number): string | null {
   if (maxSteps <= 0) return null;
@@ -57,10 +67,18 @@ export function BuildRail({ state, config, git = null }: { state: TuiState; conf
   // Guardrail: shown inline if it fired (small warning before the phase breadcrumb).
   const hasGuardrail = Boolean(state.lastGuardrail);
 
-  // Guardrail text gets the whole center region — no fixed 40-char cap that
-  // truncates while the header still has empty space. Reserve room for the
-  // brand on the left and permission/build lamps on the right.
-  const centerBudget = Math.max(24, (columns ?? 100) - 34);
+  // Improve TUI: brand + lamps are measured, the center region gets ONLY the
+  // cells that are really free (padding 2 + 1-cell gap each side) — never a
+  // floored 24-cell budget that pushed the row past the terminal width and
+  // made the header wrap to 3–4 rows on narrow screens.
+  const cols = columns ?? 100;
+  const lampsText = `[${perm}] ${lampLabel} ${lampText}`;
+  const brandFull = `⚑ scoder (v${getVersion()})`;
+  // Degradation instead of wrap: full brand → short brand → glyph only.
+  const sideRoom = cols - measure(lampsText) - 6;
+  const showVersion = measure(brandFull) <= sideRoom;
+  const brand = showVersion ? brandFull : sideRoom >= 10 ? "⚑ scoder" : sideRoom >= 6 ? "scoder" : "⚑";
+  const centerBudget = Math.max(0, cols - measure(brand) - measure(lampsText) - 4);
 
   // Phase breadcrumb or narrow-terminal metrics (right of the center)
   const showNarrowMetrics = !wide && (state.status === "running" || state.phases.length > 0);
@@ -68,6 +86,7 @@ export function BuildRail({ state, config, git = null }: { state: TuiState; conf
   return (
     // App-bar style: chỉ 1 divider mảnh dưới đáy thay vì khung "bold" nặng
     // 3 hàng — tiết kiệm 1 dòng dọc và cho cảm giác hiện đại hơn.
+    // height + overflow: mặc định 2 hàng ở mọi resolution (CHROME_HEIGHT).
     <Box
       borderStyle={dividerBorderStyle()}
       borderColor={theme.border}
@@ -78,40 +97,50 @@ export function BuildRail({ state, config, git = null }: { state: TuiState; conf
       justifyContent="space-between"
       alignItems="center"
       flexShrink={0}
+      height={CHROME_HEIGHT}
+      overflow="hidden"
     >
       {/* Left: brand logo */}
-      <Text bold color={theme.brand}>
-        ⚑ <Text bold>scoder</Text><Text dimColor> (v{getVersion()})</Text>
+      <Text bold color={theme.brand} wrap="truncate">
+        {showVersion ? <>⚑ scoder <Text dimColor>{`(v${getVersion()})`}</Text></> : brand}
       </Text>
 
       {/* Center: guardrail warning OR phase breadcrumb */}
-      <Box flexGrow={1} justifyContent="center">
-        {hasGuardrail ? (
-          <Text color={theme.warn} bold>⚠ {fit(state.lastGuardrail!, centerBudget)}</Text>
-        ) : state.status === "running" ? (
-          showNarrowMetrics ? (
-            <PhaseBreadcrumb phases={state.phases} />
+      {centerBudget >= 4 && (
+        <Box
+          height={1}
+          width={centerBudget}
+          justifyContent="center"
+          overflow="hidden"
+          flexShrink={1}
+        >
+          {hasGuardrail ? (
+            <Text color={theme.warn} bold wrap="truncate">⚠ {fit(state.lastGuardrail!, Math.max(0, centerBudget - 2))}</Text>
+          ) : state.status === "running" ? (
+            showNarrowMetrics ? (
+              <PhaseBreadcrumb phases={state.phases} />
+            ) : (
+              <Text dimColor wrap="truncate">plan › explore › edit › build › verify</Text>
+            )
           ) : (
-            <Text dimColor>plan › explore › edit › build › verify</Text>
-          )
-        ) : (
-          <Box gap={2}>
-            <Text dimColor>ready</Text>
-            {/* P7: branch + dirty count, idle only — the running rail keeps
-                guardrail/breadcrumb priority (git lives in the StatusBar). */}
-            {git != null && (
-              <Text>
-                <Text dimColor>⎇ {clipCells(git.branch, 24)}</Text>
-                {git.dirty > 0 && <Text color={theme.warn}> · ±{git.dirty}</Text>}
-              </Text>
-            )}
-          </Box>
-        )}
-      </Box>
+            <Box gap={2}>
+              <Text dimColor>ready</Text>
+              {/* P7: branch + dirty count, idle only — the running rail keeps
+                  guardrail/breadcrumb priority (git lives in the StatusBar). */}
+              {git != null && (
+                <Text wrap="truncate">
+                  <Text dimColor>⎇ {clipCells(git.branch, 24)}</Text>
+                  {git.dirty > 0 && <Text color={theme.warn}> · ±{git.dirty}</Text>}
+                </Text>
+              )}
+            </Box>
+          )}
+        </Box>
+      )}
 
       {/* Right: permission · build lamp (step count lives in the sidebar +
           bottom StatusBar — showing it here too was redundant). */}
-      <Text>
+      <Text wrap="truncate">
         <Text color={permColor}>[{perm}]</Text>
         <Text> </Text>
         <Text color={lampColor}>{lampLabel}</Text>
@@ -288,6 +317,8 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
 
   return (
     // App-bar style: chỉ 1 divider mảnh trên đỉnh, đối xứng với BuildRail.
+    // height={CHROME_HEIGHT} + overflow: footer đúng 2 hàng (1 content + 1
+    // divider) ở mọi resolution — text dài bị truncate, không wrap dồn hàng.
     <Box
       borderStyle={dividerBorderStyle()}
       borderColor={theme.border}
@@ -298,9 +329,11 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
       justifyContent="space-between"
       alignItems="center"
       flexShrink={0}
+      height={CHROME_HEIGHT}
+      overflow="hidden"
     >
       {/* Left: status icon (spinner when running) + status label (+ queue badge) */}
-      <Text>
+      <Text wrap="truncate">
         {state.status === "running" && <Spinner active />}
         {state.status === "running" ? "  " : statusIcon ? `${statusIcon} ` : "   "}
         <Text color={statusColor} bold>{left}</Text>
@@ -310,7 +343,7 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
       {/* Right: hints — pickHints already sized the line to the budget, so a
           whole hint disappears instead of "Ctrl+C qu…" when the terminal is
           narrow. Left (status+model) has its own leftBudget below. */}
-      <Text dimColor>{rightText}</Text>
+      <Text dimColor wrap="truncate">{rightText}</Text>
     </Box>
   );
 }

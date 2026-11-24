@@ -15,7 +15,7 @@ import {
   formatMcpStatus,
 } from "../dist/commands/registry.js";
 import { discoverCustomCommands, runCustomCommand, nextInCycle, AGENT_CYCLE, PERMISSION_CYCLE } from "../dist/commands/definitions.js";
-import { isNewlineKey } from "../dist/tui/input.js";
+import { isNewlineKey, windowInputLines } from "../dist/tui/input.js";
 
 /** Fake host — agent chỉ cần các method /cost /skills /permission đụng tới. */
 /** @typedef {import("../dist/commands/registry.js").CommandHost} CommandHost */
@@ -372,5 +372,44 @@ describe("isNewlineKey — ⇧⏎/⌥⏎/\\n = xuống dòng", () => {
   });
   it("Enter thường → submit (không phải newline)", () => {
     assert.equal(isNewlineKey("\r", { return: true }), false);
+  });
+});
+
+describe("windowInputLines — ⇧⏎ nhiều dòng không chiếm height sidebar (improve TUI)", () => {
+  it("buffer ngắn (≤ budget) → trả về trọn buffer, không cắt", () => {
+    const lines = ["a", "b", "c"];
+    const { start, end } = windowInputLines(lines, 2, 96, 6);
+    assert.equal(start, 0);
+    assert.equal(end, 2);
+  });
+
+  it("buffer dài, cursor cuối → cửa sổ trượt về tail, số hàng ≤ budget", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    const { start, end } = windowInputLines(lines, 19, 96, 6);
+    assert.equal(end, 19);
+    assert.ok(end - start + 1 <= 5, `cửa sổ content ≤ maxRows-1 (chừa 1 hàng chỉ báo)`);
+  });
+
+  it("cursor giữa buffer dài → cursorLine luôn nằm trong cửa sổ", () => {
+    const lines = Array.from({ length: 50 }, (_, i) => String(i));
+    for (const cur of [0, 12, 25, 49]) {
+      const { start, end } = windowInputLines(lines, cur, 96, 6);
+      assert.ok(start <= cur && cur <= end, `cursor ${cur} phải visible`);
+    }
+  });
+
+  it("dòng dài wrap tính theo displayRows, không phải count \\n", () => {
+    // 1 logical line wraps thành nhiều display rows → budget vẫn giữ tổng rows.
+    const wide = "x".repeat(200);
+    const lines = [wide, "b", "c", "d", "e", "f", "g"];
+    const { start, end } = windowInputLines(lines, 0, 50, 4);
+    assert.equal(start, 0);
+    // line 0 một mình đã wrap ~4 display rows → budget gần hết, cửa sổ nhỏ.
+    assert.ok(end - start + 1 <= 4);
+  });
+
+  it("1 dòng duy nhất, maxRows nhỏ → vẫn visible tối thiểu", () => {
+    const { start, end } = windowInputLines(["only"], 0, 96, 2);
+    assert.deepEqual({ start, end }, { start: 0, end: 0 });
   });
 });

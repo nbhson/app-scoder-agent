@@ -331,3 +331,39 @@ describe("tui chrome — StatusBar", () => {
     assert.match(out, /scroll 12\/40 above/);
   });
 });
+
+// ── Improve TUI: header/footer chiều cao cố định ở mọi resolution ───────────
+
+describe("tui chrome — fixed height mọi width (improve TUI)", () => {
+  it("BuildRail guardrail dài: đúng 2 hàng (1 content + 1 divider) từ 20 → 380 cols, không wrap dồn hàng", async () => {
+    const s = runningState();
+    applyEvent(s, {
+      type: "guardrail",
+      rule: "duplicate-action",
+      action: "block",
+      reason: "the agent repeated the exact same tool call four times in a row, which usually means it is stuck",
+    });
+    for (const cols of [20, 30, 40, 60, 100, 240, 380]) {
+      const out = await renderOnce(React.createElement(BuildRail, { state: s, config }), cols);
+      const lines = out.replace(/\n+$/, "").split("\n");
+      assert.equal(lines.length, 2, `cols=${cols}: header phải đúng 2 hàng, nhận được ${JSON.stringify(lines)}`);
+    }
+  });
+
+  it("BuildRail idle + git branch dài: vẫn 2 hàng khi terminal cực hẹp", async () => {
+    const git = { branch: "feature/a-very-long-branch-name-that-never-fits-anywhere", dirty: 12 };
+    for (const cols of [20, 40, 100]) {
+      const out = await renderOnce(React.createElement(BuildRail, { state: initialState(), config, git }), cols);
+      assert.equal(out.replace(/\n+$/, "").split("\n").length, 2, `cols=${cols}: header idle+git phải 2 hàng`);
+    }
+  });
+
+  it("StatusBar running + model name siêu dài + scroll: đúng 2 hàng ở mọi width", async () => {
+    const s = runningState();
+    s.model = "claude-opus-4-5-very-long-model-name-for-testing-wrap-behavior";
+    for (const cols of [20, 30, 40, 80, 120, 240, 380]) {
+      const out = await renderOnce(React.createElement(StatusBar, { state: s, scroll: "12/40 above" }), cols);
+      assert.equal(out.replace(/\n+$/, "").split("\n").length, 2, `cols=${cols}: footer phải đúng 2 hàng`);
+    }
+  });
+});

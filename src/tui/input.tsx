@@ -3,12 +3,13 @@
  * file autocomplete, ghost text. Tách khỏi app.tsx.
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useWindowSize } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import type { Agent } from "../agent.js";
 import { applySuggestion, atQuery, fileIndexStale, suggest } from "./at-complete.js";
 import { completeSlashCommand, completionProviders, ghostText, completeMcpArg } from "../commands/definitions.js";
 import { applyNormalKey, type VimMode } from "./vim.js"; // T5
+import { wrapCells } from "./text-width.js";
 import { theme } from "./theme.js";
 
 export interface InputProps {
@@ -34,6 +35,11 @@ export interface InputProps {
   /** T-03: when set, the permission modal owns the keyboard. */
   modalRef: React.MutableRefObject<unknown>;
   /**
+   * Improve TUI #2: số hàng hiển thị TỐI ĐA input được chiếm (kể cả chỉ báo
+   * "⋮ +N"). Chat viewport + sidebar giữ nguyên chiều cao khi buffer dài ra.
+   */
+  maxRows?: number;
+  /**
    * Single characters that GLOBAL keybinds consume when the input is empty
    * (`v`, `?`, LOG-tab keys…). Ink fires every useInput handler, so without
    * swallowing them here the reserved key would ALSO be typed into the line.
@@ -52,7 +58,41 @@ export function isNewlineKey(input: string, key: { return?: boolean; shift?: boo
   return (key.return === true && (key.shift === true || key.meta === true)) || input === "\n";
 }
 
-export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef, reservedRef }: InputProps): React.JSX.Element {
+/** Số hàng hiển thị một logical line chiếm sau khi wrap ở `avail` cell. */
+function displayRows(line: string, avail: number): number {
+  return wrapCells(line === "" ? " " : line, avail).length;
+}
+
+/**
+ * Improve TUI #2: chọn cửa sổ dòng [start, end] của buffer để input KHÔNG bao
+ * giờ cao quá maxRows hàng hiển thị. ⇧⏎ nhiều lần / paste nhiều dòng trước đây
+ * phình input lên chiếm hết chiều cao chat viewport + sidebar; giờ chỉ cửa sổ
+ * quanh dòng con trỏ được render, phần ẩn thay bằng chỉ báo "⋮ +N lines".
+ * Budget trừ 1 hàng dành cho chỉ báo; cursorLine luôn nằm trong cửa sổ (khi
+ * gõ insert-mode con trỏ ở cuối → cửa sổ tự trượt về tail).
+ */
+export function windowInputLines(lines: string[], cursorLine: number, avail: number, maxRows: number): { start: number; end: number } {
+  const n = Math.max(1, lines.length);
+  const heights = lines.map((ln) => Math.max(1, displayRows(ln, avail)));
+  const cur = Math.min(Math.max(0, cursorLine), n - 1);
+  const win = (budget: number) => {
+    let start = cur;
+    let end = cur;
+    let used = heights[cur];
+    while (end + 1 < n && used + heights[end + 1] <= budget) used += heights[++end];
+    while (start - 1 >= 0 && used + heights[start - 1] <= budget) used += heights[--start];
+    return { start, end };
+  };
+  // 1 hàng dự phòng cho chỉ báo "⋮ +N"; buffer dài → CẢ HAI đầu ẩn → trừ 2.
+  let w = win(Math.max(1, maxRows - 1));
+  if (w.start > 0 && w.end < n - 1 && maxRows >= 3) w = win(Math.max(1, maxRows - 2));
+  return w;
+}
+
+/** Suggestion overlay cap — @-list nhiều kết quả cũng không được đẩy layout. */
+const SUGG_WINDOW = 5;
+
+export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNames, agentRef, config, atSources, modalRef, reservedRef, maxRows = 6 }: InputProps): React.JSX.Element {
   const histIdx = useRef<number | null>(null);
   const draft = useRef<string>("");
 
@@ -280,10 +320,26 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
   ghostRef.current = ghost;
   // Multi-line (⇧⏎): dòng 0 sau prompt ❯, dòng nối lùi 2 ô cho thẳng hàng.
   // Con trỏ vim normal mode: map index → dòng/cột để block đúng chỗ.
+  const { columns } = useWindowSize();
   const lines = value.split("\n");
   const curPos = vimMode === "normal" && cursor !== null ? Math.min(cursor, value.length) : null;
+  // Dòng chứa con trỏ: insert mode → dòng cuối; vim normal → dòng của curPos.
+  let cursorLine = lines.length - 1;
+  if (curPos !== null) {
+    let acc = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (curPos <= acc + lines[i].length) { cursorLine = i; break; }
+      acc += lines[i].length + 1;
+    }
+  }
+  // avail = terminal cols − wrapper paddingX(1)×2 − prompt gutter 2.
+  const avail = Math.max(20, (columns ?? 100) - 4);
+  const { start: firstRow, end: lastRow } = windowInputLines(lines, cursorLine, avail, maxRows);
   let lineStart = 0;
-  const lineNodes = lines.map((ln, i) => {
+  for (let i = 0; i < firstRow; i++) lineStart += lines[i].length + 1;
+  const lineNodes: React.ReactNode[] = [];
+  for (let i = firstRow; i <= lastRow; i++) {
+    const ln = lines[i];
     const start = lineStart;
     lineStart += ln.length + 1;
     const isLast = i === lines.length - 1;
@@ -314,30 +370,51 @@ export function Input({ valueRef, value, onChange, onSubmit, historyRef, skillNa
         </>
       );
     } else {
-      body = <Text>{ln === "" ? " " : ln}</Text>;
+      body = <Text wrap="truncate">{ln === "" ? " " : ln}</Text>;
     }
-    return (
+    lineNodes.push(
       <Box key={i}>
         {i === 0 ? <Text color={theme.brand} bold>❯{" "}</Text> : <Text>  </Text>}
         {body}
       </Box>
     );
-  });
+  }
+  const hiddenAbove = firstRow;
+  const hiddenBelow = lines.length - 1 - lastRow;
+  // Danh sách @ gợi ý: cửa sổ SUGG_WINDOW hàng quanh kết quả đang chọn.
+  const sugg = at
+    ? at.suggestions.length > SUGG_WINDOW
+      ? {
+          from: Math.min(Math.max(0, at.idx - (SUGG_WINDOW - 1)), at.suggestions.length - SUGG_WINDOW),
+          items: at.suggestions.slice(
+            Math.min(Math.max(0, at.idx - (SUGG_WINDOW - 1)), at.suggestions.length - SUGG_WINDOW),
+            Math.min(Math.max(0, at.idx - (SUGG_WINDOW - 1)), at.suggestions.length - SUGG_WINDOW) + SUGG_WINDOW,
+          ),
+          hidden: at.suggestions.length - SUGG_WINDOW,
+        }
+      : { from: 0, items: at.suggestions, hidden: 0 }
+    : null;
   return (
     <Box flexDirection="column">
-      {at && (
+      {at && sugg && (
         <Box flexDirection="column" paddingLeft={2}>
-          {at.suggestions.map((s, i) => (
-            <Text key={s} color={i === at.idx ? theme.brand : undefined} bold={i === at.idx}>
-              {i === at.idx ? "▸ " : "  "}
-              {s}
-            </Text>
-          ))}
-          <Text dimColor>  Up/Down select · Tab/Enter accept · Esc close</Text>
+          {sugg.items.map((s, j) => {
+            const i = sugg.from + j;
+            return (
+              <Text key={s} color={i === at.idx ? theme.brand : undefined} bold={i === at.idx}>
+                {i === at.idx ? "▸ " : "  "}
+                {s}
+              </Text>
+            );
+          })}
+          <Text dimColor>  Up/Down select · Tab/Enter accept · Esc close{sugg.hidden > 0 ? ` · +${sugg.hidden} more` : ""}</Text>
         </Box>
       )}
-      {/* Input row(s) — styled prompt + typed text + ghost + block cursor */}
+      {/* Input row(s) — styled prompt + typed text + ghost + block cursor.
+          hiddenAbove/hiddenBelow: chỉ báo cửa sổ khi buffer vượt maxRows. */}
+      {hiddenAbove > 0 && <Text dimColor>  ⋮ +{hiddenAbove} line{hiddenAbove > 1 ? "s" : ""} above</Text>}
       {lineNodes}
+      {hiddenBelow > 0 && <Text dimColor>  ⋮ +{hiddenBelow} line{hiddenBelow > 1 ? "s" : ""} below</Text>}
       {candidates && <Text dimColor>  {candidates}  (tab completes)</Text>}
       {vimMode === "normal" && <Text dimColor>  -- NORMAL -- h/l/w/b/e · x · i/a/A insert · Enter send · Shift+Enter newline</Text>}
     </Box>
