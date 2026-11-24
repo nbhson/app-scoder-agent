@@ -3,6 +3,27 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [1.4.1] — 2026-11-24
+
+Patch on top of 1.4.0: the harness-log full-width panel experiment is
+reverted — it rendered below the chat row (bottom of the screen) instead of
+in the right sidebar, which read as a regression.
+
+### Reverted
+
+- **HARNESS LOG is back in the sidebar rail** — `LogPanel` and its app
+  wiring (rail hidden while the tab is open, `logGeomRef` budget mirror,
+  `inner`-aware LogTab) are removed; `LogTab` returns to the original
+  rail geometry. `Ctrl+B` tab cycling, `jk/f/d/Enter/F` keys and `F`
+  (dump to the full-screen Pager) are unchanged — use `F` when you want
+  a full-width log view.
+- 1.4.0's session-picker, chrome and input fixes are untouched.
+
+### Tests
+
+- Dropped the 3 LogPanel cases from `test/tui-popup-width.test.mjs`
+  (picker cases kept). Full suite: 1447 pass.
+
 ## [1.4.0] — 2026-11-24
 
 TUI hardening release: the chrome stays one row tall at every terminal size,
