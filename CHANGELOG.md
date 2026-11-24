@@ -3,6 +3,48 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [1.4.0] — 2026-11-24
+
+TUI hardening release: the chrome stays one row tall at every terminal size,
+multiline input can no longer eat the viewport, and the two surfaces that
+looked amateur next to the Ctrl+P palette — the Ctrl+S session picker and the
+HARNESS LOG tab — are now full-width, column-aligned and height-safe.
+
+### Fixed
+
+- **Header/footer pinned to exactly 2 rows at every resolution** —
+  `BuildRail`/`StatusBar` carry `height={CHROME_HEIGHT}` + `overflow="hidden"`
+  with a measured cell budget for the center region (the old `max(24,
+  cols-34)` floor let brand/model names wrap and grow the bar). The brand
+  degrades gracefully instead: `⚑ scoder` → `scoder` → `⚑`; status texts use
+  `wrap="truncate"`, so the single content row always renders centered.
+- **Multiline input no longer steals the sidebar/chat height** — `Input`
+  windows its logical lines around the cursor (`windowInputLines`, exported)
+  with a `maxRows` budget from the app (`min(8, rows/3)`); wrapped rows are
+  counted, Shift+Enter lines beyond the window show `⋮ +N lines above/below`
+  indicators, and the @-suggestion overlay is capped (5 rows). The sidebar's
+  greedy-fit keeps its height while the input grows.
+
+### Changed
+
+- **Session picker (Ctrl+S) sizes from the terminal like the palette** —
+  full-width frame and dividers (no more hard-coded 38-cell box), one-line
+  column-aligned rows `▸ id · date · steps · task` on wide terminals with a
+  two-line degrade when narrow, and a selection-following height window plus
+  `⋯ +N more` indicator so the picker never overflows a 20-row terminal.
+- **HARNESS LOG gains a full-width panel** — on wide terminals the log tab
+  replaces the 48-cell rail with `LogPanel` (100% cols, height-capped, like
+  Pager/Palette): log rows, DETAIL block and the `─ LOG ─` rule budget from
+  the real column count instead of clipping at ~27 cells. `Ctrl+B`/`Esc`
+  routing is unchanged; narrow terminals keep the rail.
+
+### Tests
+
+- New `test/tui-popup-width.test.mjs` (7 cases: full-width borders, column
+  rows, height cap, narrow degrade); chrome fixed-height cases in
+  `test/tui-render.test.mjs`; `windowInputLines` cases in
+  `test/command-registry.test.mjs`. Full suite: 1450 pass.
+
 ## [1.3.0] — 2026-11-24
 
 The model-router release: multi-provider config, per-turn model routing, and a
