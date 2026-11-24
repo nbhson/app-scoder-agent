@@ -33,7 +33,7 @@ export function shortcutSections(): ShortcutSection[] {
         { keys: "Ctrl+S", what: "session picker (idle)" },
         { keys: "Ctrl+T", what: "toggle the thinking stream" },
         { keys: "Ctrl+O", what: "select mode — releases the mouse for native drag-highlight + copy" },
-        { keys: "Ctrl+B", what: "sidebar tab: OVERVIEW or HARNESS LOG" },
+        { keys: "Ctrl+B", what: "sidebar tab: OVERVIEW → ROUTER → HARNESS LOG" },
         { keys: "?", what: "help overlay (input empty)" },
         { keys: "v", what: "open the newest tool output / diff in the viewer (input empty)" },
         { keys: "Esc", what: "jump back to the live tail · press again to abort the run" },

@@ -14,7 +14,7 @@ import { PassThrough } from "node:stream";
 import React from "react";
 import { render, Box } from "ink";
 import { applyEvent, initialState, latestPlan } from "../dist/tui/state.js";
-import { Sidebar } from "../dist/tui/sidebar.js";
+import { nextSidebarTab, Sidebar } from "../dist/tui/sidebar.js";
 
 const baseEvent = {
   type: "run_start",
@@ -160,7 +160,7 @@ function stripAnsi(s) {
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
 }
 
-async function renderSidebar(state, cfg, rows, containerHeight = rows) {
+async function renderSidebar(state, cfg, rows, containerHeight = rows, tab = "overview") {
   const stream = new PassThrough();
   stream.columns = 100;
   stream.rows = Math.max(containerHeight, 24);
@@ -171,7 +171,7 @@ async function renderSidebar(state, cfg, rows, containerHeight = rows) {
       Box,
       { flexDirection: "row", height: containerHeight },
       React.createElement(Box, { flexGrow: 1 }, React.createElement("ink-text", null, "chat")),
-      React.createElement(Sidebar, { state, config: cfg, rows }),
+      React.createElement(Sidebar, { state, config: cfg, rows, tab }),
     ),
     { stdout: stream, stderr: stream, patchConsole: false, exitOnCtrlC: false },
   );
@@ -359,5 +359,82 @@ describe("tui sidebar — anchor elapsed/tok-s reset theo từng lượt", () =>
     // ...nhưng text KHÁC vẫn phải append normally.
     let d = applyEvent({ ...initialState(), items: [{ kind: "user", text: "câu cũ" }, { kind: "notice", text: "n", level: "info" }] }, { ...baseEvent, task: "câu mới" });
     assert.equal(d.items.filter((i) => i.kind === "user").length, 2, "task khác text ⇒ append");
+  });
+});
+
+// ── P2.2 Phase C/D: ROUTER tab ───────────────────────────────────────────────
+
+describe("tui sidebar — ROUTER tab (graph + decisions + stats)", () => {
+  process.env.SCODER_ANIM = "0"; // packet tĩnh cho test — animation có test riêng
+
+  const cfg = { workdir: "/tmp/demo", model: "gpt-4o", mcpServers: {} };
+
+  function routedState() {
+    const s = applyEvent(initialState(), {
+      ...baseEvent,
+      routingMode: "auto",
+      tiers: [
+        { ref: "box-api/qwen-mini", tier: "small" },
+        { ref: "box-api/kimi-k3", tier: "large" },
+      ],
+    });
+    applyEvent(s, { type: "route_decision", step: 1, tier: "small", ref: "box-api/qwen-mini", provider: "box-api", model: "qwen-mini", reason: "ctx 3k", signals: {}, switched: true });
+    applyEvent(s, { type: "llm_usage", usage: { input_tokens: 1000, output_tokens: 100, cached_tokens: 0 }, ref: "box-api/qwen-mini", tier: "small" });
+    return s;
+  }
+
+  it("Ctrl+B cycle 3 tab: overview → router → log → overview", () => {
+    assert.equal(nextSidebarTab("overview"), "router");
+    assert.equal(nextSidebarTab("router"), "log");
+    assert.equal(nextSidebarTab("log"), "overview");
+  });
+
+  it("tab router: graph user→router→models, active highlight, decisions + stats", async () => {
+    const frame = await renderSidebar(routedState(), cfg, 24, 24, "router");
+    assert.match(frame, /overview/);
+    assert.match(frame, /ROUTER ⤳/); // badge router khi candidates đang sống
+    assert.match(frame, /user ─▶ router/);
+    assert.match(frame, /├──▶ qwen-mini/);
+    assert.match(frame, /└──▶ kimi-k3/);
+    assert.match(frame, /DECISIONS/);
+    assert.match(frame, /⤳ small qwen-mini/);
+    assert.match(frame, /MODELS/);
+    assert.match(frame, /1c 1.0k→100t/);
+  });
+
+  it("tab bar trên overview cũng có 3 nhãn + ⤳ badge", async () => {
+    const frame = await renderSidebar(routedState(), cfg, 24, 24, "overview");
+    assert.match(frame, /router ⤳/);
+    assert.match(frame, /log/);
+    assert.match(frame, /SESSION/);
+  });
+
+  it("router không active → empty state trung thực, graph không vẽ", async () => {
+    const s = applyEvent(initialState(), baseEvent);
+    const frame = await renderSidebar(s, cfg, 24, 24, "router");
+    assert.match(frame, /router off/);
+    assert.ok(!frame.includes("user ─▶ router"), "không vẽ graph khi không có candidates");
+  });
+
+  it("height budget: sidebar thấp vẫn giữ graph + decisions, bỏ MODELS (không clip nửa chừng)", async () => {
+    const s = routedState();
+    applyEvent(s, { type: "route_decision", step: 2, tier: "large", ref: "box-api/kimi-k3", provider: "box-api", model: "kimi-k3", reason: "ctx 40k", signals: {}, switched: true });
+    const frame = await renderSidebar(s, cfg, 11, 11, "router");
+    assert.match(frame, /user ─▶ router/);
+    assert.match(frame, /DECISIONS/);
+    assert.match(frame, /⤳ large kimi-k3/);
+    assert.ok(!frame.includes("MODELS"), `MODELS phải bị bỏ khi hết chỗ:\n${frame}`);
+  });
+
+  it("nhiều hơn GRAPH_MAX refs → dòng gộp '+N refs (/router)' thay vì tràn", async () => {
+    const s = applyEvent(initialState(), {
+      ...baseEvent,
+      routingMode: "auto",
+      tiers: ["a/one", "a/two", "a/three", "a/four", "a/five", "a/six"].map((ref) => ({ ref, tier: "small" })),
+    });
+    const frame = await renderSidebar(s, cfg, 24, 24, "router");
+    assert.match(frame, /user ─▶ router/);
+    assert.match(frame, /\+2 refs \(\/router\)/);
+    assert.ok(!frame.includes("a/six"), "ref thứ 6+ chỉ đếm, không vẽ");
   });
 });

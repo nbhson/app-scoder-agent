@@ -316,7 +316,7 @@ describe("tui chrome — StatusBar", () => {
     const wide = await renderOnce(React.createElement(StatusBar, { state: initialState(), scroll: null }), 120);
     assert.ok(!/[⌃⇧⏎⇥⌥]/.test(wide), `footer không có glyph phím: ${JSON.stringify(wide)}`);
     assert.match(wide, /Enter send/);
-    assert.match(wide, /Ctrl\+B log/);
+    assert.match(wide, /Ctrl\+B router/); // P2.2: overview → router (Ctrl+B cycle 3 tab)
     // 100 cols: hint RƠI nguyên khối khỏi đuôi, không biến thành "Ctrl+C qu…"
     const narrow = await renderOnce(React.createElement(StatusBar, { state: initialState(), scroll: null }), 100);
     const hintRow = narrow.split("\n").find((l) => l.includes("Enter send")) ?? "";

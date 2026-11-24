@@ -183,6 +183,12 @@ export function HelpLine({ items }: { items: ReadonlyArray<readonly [string, str
   );
 }
 
+/** P2.2: tên tab KẾ TIẾP trong vòng Ctrl+B (mirror nextSidebarTab ở sidebar —
+ *  không import chéo vì sidebar đã import module này). */
+function nextTabHint(t: "overview" | "router" | "log"): string {
+  return t === "log" ? "overview" : t === "router" ? "log" : "router";
+}
+
 /**
  * Bottom-bar key hints — modifiers spelled out ("Ctrl+B", "Shift+Tab", "Enter"),
  * never ⌃ ⇧ ⏎ ⇥ glyphs (they read as icons and are slow to scan). Ordered
@@ -214,7 +220,7 @@ export function pickHints(segs: string[], budget: number): string {
   return out || fit(segs[0] ?? "", budget);
 }
 
-export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "overview", git = null }: { state: TuiState; scroll?: string | null; selectMode?: boolean; sidebarTab?: "overview" | "log"; git?: GitContext | null }): React.JSX.Element {
+export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "overview", git = null }: { state: TuiState; scroll?: string | null; selectMode?: boolean; sidebarTab?: "overview" | "router" | "log"; git?: GitContext | null }): React.JSX.Element {
 
   const { columns } = useWindowSize();
   const width = Math.max(40, (columns ?? 100) - 6);
@@ -268,7 +274,7 @@ export function StatusBar({ state, scroll, selectMode = false, sidebarTab = "ove
       : metrics
         // sidebar hidden (<SIDEBAR_MIN_COLS): surface ctx/cost here instead.
         ? pickHints([metrics, "Ctrl+S sessions", "Esc abort"], rightBudget)
-        : pickHints(hintSegments(sidebarTab === "log" ? "overview" : "log"), rightBudget);
+        : pickHints(hintSegments(nextTabHint(sidebarTab)), rightBudget);
 
   const leftBudget = Math.max(24, width - measure(rightText) - (badge ? measure(badge) + 3 : 3));
   let left = statusLabel;

@@ -577,6 +577,11 @@ export class Agent {
   private handleRouteDecision(d: RouteDecision): void {
     this.emit({ type: "route_decision", ...d });
     this.logger.log({ type: "route_decision", ...d });
+    // Transcript line only on a REAL switch (the ROUTER tab + LOG ring carry
+    // every decision anyway) — §7 anti-spam: same ref = no new chatter.
+    if (d.switched) {
+      this.reporter.info(`⤳ ${d.tier} ${d.ref} — ${d.reason.split(" · ")[0]}`);
+    }
   }
 
   /**
@@ -768,6 +773,10 @@ export class Agent {
     this.emit({
       type: "llm_usage",
       usage: { input_tokens: input, output_tokens: output, cached_tokens: cached },
+      // P2.2: same attribution as the JSONL line — ROUTER tab modelStats.
+      ...(this.router?.lastRouteDecision
+        ? { ref: this.router.lastRouteDecision.ref, tier: this.router.lastRouteDecision.tier }
+        : {}),
     });
     this.logger.log({
       type: "llm_usage",
@@ -1298,6 +1307,7 @@ export class Agent {
       agent: this.config.agent ?? "build",
       ...(quiet ? { quiet: true } : {}),
       ...(this.router?.routerMode === "auto" ? { routingMode: "auto" as const } : {}),
+      ...(this.router ? { tiers: this.router.candidates.map((m) => ({ ref: m.ref, tier: m.tier })) } : {}),
     });
   }
 
@@ -1832,6 +1842,7 @@ export class Agent {
     activeRef: string;
     candidates: readonly RouterModel[];
     last: RouteDecision | null;
+    judge: string | null;
   } | null {
     if (!this.router) return null;
     return {
@@ -1839,6 +1850,7 @@ export class Agent {
       activeRef: this.router.activeRef,
       candidates: this.router.candidates,
       last: this.router.lastRouteDecision,
+      judge: this.router.judgeLabel,
     };
   }
 

@@ -245,3 +245,74 @@ describe("completeMcpArg", () => {
     assert.equal(completeMcpArg("/mcp nerver tool", servers), null);
   });
 });
+
+// ── P2.2 Phase C: route events → ROUTER tab state ───────────────────────────
+
+describe("tui state — P2.2 route_decision / modelStats / fold", () => {
+  const route = (over = {}) => ({
+    type: "route_decision",
+    step: 1,
+    tier: "small",
+    ref: "box-api/mini",
+    provider: "box-api",
+    model: "mini",
+    reason: "ctx 3k",
+    signals: {},
+    switched: true,
+    ...over,
+  });
+
+  it("run_start.tiers + routingMode lưu vào state; run mới reset router state", () => {
+    const s = applyEvent(initialState(), { ...baseEvent, routingMode: "auto", tiers: [{ ref: "a/b", tier: "small" }] });
+    assert.deepEqual(s.routerTiers, [{ ref: "a/b", tier: "small" }]);
+    assert.equal(s.routingMode, "auto");
+    applyEvent(s, route());
+    assert.ok(s.activeRoute);
+    const fresh = applyEvent(initialState(), { ...baseEvent });
+    assert.deepEqual(fresh.routerTiers, []);
+    assert.equal(fresh.routingMode, "pinned");
+    assert.equal(fresh.activeRoute, null);
+    assert.deepEqual(fresh.modelStats, {});
+  });
+
+  it("route_decision cập nhật model/provider + activeRoute; llm_usage ref/tier tích modelStats", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, route({ model: "mini" }));
+    assert.equal(s.model, "mini");
+    assert.equal(s.provider, "box-api");
+    assert.equal(s.activeRoute?.ref, "box-api/mini");
+    assert.equal(s.activeRoute?.tier, "small");
+    applyEvent(s, { type: "llm_usage", usage: { input_tokens: 1000, output_tokens: 500, cached_tokens: 0 }, ref: "box-api/mini", tier: "small" });
+    applyEvent(s, { type: "llm_usage", usage: { input_tokens: 2000, output_tokens: 0, cached_tokens: 0 }, ref: "box-api/mini", tier: "small" });
+    const st = s.modelStats["box-api/mini"];
+    assert.equal(st.calls, 2);
+    assert.equal(st.input, 3000);
+    assert.equal(st.output, 500);
+    // default pricing 0.5/1.5 $/M → 3000/1e6*0.5 + 500/1e6*1.5 = 0.00225
+    assert.ok(Math.abs(st.costUsd - 0.00225) < 1e-9);
+  });
+
+  it("llm_usage KHÔNG có ref → modelStats giữ nguyên (pin thường không vào tab)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, { type: "llm_usage", usage: { input_tokens: 1, output_tokens: 1 } });
+    assert.deepEqual(s.modelStats, {});
+  });
+
+  it("route trùng tier+ref+reason → fold 1 dòng audit với hits ×N (chống spam §7)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, route());
+    applyEvent(s, route());
+    applyEvent(s, route());
+    applyEvent(s, route({ tier: "large", ref: "box-api/pro", model: "pro", reason: "ctx 40k" }));
+    const rows = s.log.filter((e) => e.cat === "route");
+    assert.equal(rows.length, 2);
+    assert.equal(rows.find((r) => r.text.includes("mini"))?.meta?.hits, 3);
+  });
+
+  it("judge verdict hiện trên dòng fold (reject → đọc được ở tab LOG ROUTE filter)", () => {
+    const s = applyEvent(initialState(), baseEvent);
+    applyEvent(s, route({ reason: "score +1: ctx 12k · judge-reject(hallucinated)", judge: { model: "", confidence: 0, ms: 30, tokens: 10, verdict: "reject-hallucinated" } }));
+    const row = s.log.find((e) => e.cat === "route");
+    assert.match(row.text, /⤳j:reject-hallucinated/);
+  });
+});

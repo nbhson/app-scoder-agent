@@ -298,7 +298,11 @@ default; enabling it changes nothing until you opt in to routing:
   "gray", "timeoutMs": 2000, "minConfidence": 0.6}` adds a 4th layer that
   picks the exact model inside gray-band turns only (`scope`: `gray` |
   `first` | `always`). Hallucinated refs, low confidence and timeouts fall
-  back to the L1+L2 decision with the verdict audited.
+  back to the L1+L2 decision with the verdict audited. Omitting `model`
+  (or using the legacy `classifier: true`) runs the judge on the cheapest
+  small-tier model. Judge calls never pass through the agent loop, so they
+  do not appear in `cost` breakdowns — their tokens are audited on
+  `route_decision.judge` instead.
 - **Observability**: every routed turn appends a `route_decision` event to
   the session JSONL (schema v3). `/router` shows mode, tiers and the last
   decision; `scoder cost --router` prints the per-model cost breakdown and

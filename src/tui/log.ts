@@ -12,9 +12,9 @@ import { measure } from "./text-width.js";
 import type { ChatItem, LogCat, LogEntry } from "./state.js";
 import { JsonlLogger } from "../session/logger.js";
 
-export type LogFilter = "ALL" | "LLM" | "TOOL" | "MCP" | "SUB" | "EVT";
+export type LogFilter = "ALL" | "LLM" | "TOOL" | "MCP" | "SUB" | "ROUTE" | "EVT";
 
-export const LOG_FILTER_CYCLE: LogFilter[] = ["ALL", "LLM", "TOOL", "MCP", "SUB", "EVT"];
+export const LOG_FILTER_CYCLE: LogFilter[] = ["ALL", "LLM", "TOOL", "MCP", "SUB", "ROUTE", "EVT"];
 
 const BUCKETS: Record<LogFilter, LogCat[] | null> = {
   ALL: null,
@@ -22,6 +22,8 @@ const BUCKETS: Record<LogFilter, LogCat[] | null> = {
   TOOL: ["tool", "shell", "file", "build"],
   MCP: ["mcp"],
   SUB: ["sub"],
+  // P2.2: routing decisions get their own filter slot in the cycle.
+  ROUTE: ["route"],
   EVT: ["evt", "run", "guard", "perm"],
 };
 
@@ -43,6 +45,7 @@ const GLYPH: Record<LogCat, { u: string; a: string }> = {
   sub: { u: "⊙", a: "S" },
   guard: { u: "⚠", a: "!" },
   perm: { u: "⛔", a: "?" },
+  route: { u: "⤳", a: "~" },
   evt: { u: "·", a: "." },
 };
 
@@ -54,7 +57,7 @@ export function logGlyph(cat: LogCat): string {
 /**
  * Text kind column — the audit log must be scannable without relying on
  * color (dim terminals, ASCII mode, copy/paste). Every category maps to a
- * fixed 5-letter label: RUN LLM TOOL SHELL FILE BUILD MCP SUB GUARD PERM EVT.
+ * fixed 5-letter label: RUN LLM TOOL SHELL FILE BUILD MCP SUB GUARD PERM ROUTE EVT.
  */
 const LABEL: Record<LogCat, string> = {
   run: "RUN",
@@ -67,6 +70,7 @@ const LABEL: Record<LogCat, string> = {
   sub: "SUB",
   guard: "GUARD",
   perm: "PERM",
+  route: "ROUTE",
   evt: "EVT",
 };
 
@@ -95,9 +99,18 @@ export function logColor(e: LogEntry): string {
     case "mcp":
     case "evt":
       return theme.dim;
+    // P2.2: routing rows — helper keeps this switch inside the lint budget.
+    case "route":
+      return routeColor(e.text);
     case "sub":
       return theme.thinking;
   }
+}
+
+/** P2.2: routing rows read by severity — judge rejections warn, large accent, small quiet. */
+function routeColor(text: string): string {
+  if (text.includes("judge-reject") || text.includes("j:reject")) return theme.warn;
+  return text.includes("large") ? theme.accent : theme.dim;
 }
 
 /** Color for the kind column: verdict first, category second. */

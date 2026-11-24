@@ -213,10 +213,12 @@ describe("scoder tui — Ink full-screen UI", { concurrency: 1 }, () => {
 
   it("⌃B chuyển sidebar sang tab HARNESS LOG — rows thật, time column, hints (P8)", async () => {
     const { clean, raw, exitCode, ptyErr } = await runPty("logtab", [
-      // Run xong (idle) → ⌃B bật tab LOG. Anchor "select…f filter" là footer
-      // hint CHỈ có trên tab LOG (label "HARNESS LOG" hiện cả khi OVERVIEW).
+      // Run xong (idle) → ⌃B×2 bật tab LOG (P2.2: cycle 3 tab OVERVIEW →
+      // ROUTER → HARNESS LOG — anchor "ROUTER" xác nhận nhịp ở giữa). Anchor
+      // "select…f filter" là footer hint CHỈ có trên tab LOG.
       // F → dump viewer; " entries" khớp header dump → esc đóng; hint #2 → ⌃C quit.
       "--send-after", "All done:\x02",
+      "--send-after", "ROUTER:\x02",
       "--send-after", "select.{0,60}f filter:F",
       "--send-after", " entries:\x1b",
       "--send-after", "2:select.{0,60}f filter:\x03",

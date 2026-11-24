@@ -51,7 +51,7 @@ import { formatShortcuts } from "./shortcuts.js"; // /shortcut cheat sheet
 import { getTheme, setActiveTheme, theme } from "./theme.js";
 import { boxBorderStyle, charset, isAsciiMode } from "./charset.js";
 import { PermissionModal } from "./permission-modal.js"; // T2
-import { Sidebar } from "./sidebar.js"; // sidebar opencode
+import { nextSidebarTab, Sidebar, type SidebarTab } from "./sidebar.js"; // sidebar opencode
 import { getVersion } from "../shared/version.js";
 import { useScrollMetrics } from "./hooks/use-scroll.js";
 import { useGitStatus } from "./hooks/use-git-status.js";
@@ -124,7 +124,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const pagerWheelRef = useRef<((dir: "up" | "down") => void) | null>(null);
   // P8: sidebar tab + harness-log view (UI prefs — deliberately NOT in
   // TuiState, which is the transcript/reducer model).
-  const [sidebarTab, setSidebarTab] = useState<"overview" | "log">("overview");
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("overview");
   const [logView, setLogView] = useState<LogView>(DEFAULT_LOG_VIEW);
   // P8: viewer opened from the log (entry payload) instead of a transcript item.
   // `/shortcut` reuses the same slot with its own title (shortcuts.ts).
@@ -420,7 +420,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     return Math.max(1, avail - 2 - detailRows);
   }, [viewportRowsRef, stateRef]);
   const logHandlers = useMemo(() => ({
-    toggleTab: () => setSidebarTab((t) => (t === "overview" ? "log" : "overview")),
+    toggleTab: () => setSidebarTab(nextSidebarTab),
     move: (d: number) => {
       const s = stateRef.current;
       setLogView((v) => {
@@ -686,7 +686,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
               ["Ctrl+S", "sessions"],
               ["Ctrl+T", "thinking"],
               ["Ctrl+O", "select/copy"],
-              ["Ctrl+B", "log tab"],
+              ["Ctrl+B", "sidebar tab (3-way)"],
             ]}
           />
           <HelpLine
@@ -698,7 +698,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           />
           <HelpLine
             items={[
-              ["Ctrl+B", "log tab:"],
+              ["Ctrl+B", "log tab keys:"],
               ["Up/Down", "select"],
               ["g / G", "first / last"],
               ["f", "filter"],

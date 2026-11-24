@@ -145,13 +145,15 @@ and avoids increasing startup cost or introducing a browser-only dependency.
   to showing the phase breadcrumb + metrics inline
 
 ### Harness Log (`Ctrl+B`)
-- `Ctrl+B` toggles the sidebar between **OVERVIEW** (every section above, unchanged)
-  and **HARNESS LOG** — a live ring buffer (800 rows) of *all* harness activity:
+- `Ctrl+B` cycles the sidebar **OVERVIEW → ROUTER → HARNESS LOG** (P2.2 widened
+  the 2-tab toggle to 3). **OVERVIEW** keeps every section above unchanged;
+  **ROUTER** shows the routing panel (below); **HARNESS LOG** is a live ring
+  buffer (800 rows) of *all* harness activity:
   run/step turns, LLM calls (tokens, cache, duration), tool calls, shell commands,
   file edits, build results, MCP status, subagents, guardrail hits, permission
   asks/answers, queue/compaction/context pressure, errors
 - Audit format: `HH:MM:SS` clock + a fixed **kind label column** — `RUN · LLM ·
-  TOOL · SHELL · FILE · BUILD · MCP · SUB · GUARD · PERM · EVT` — then the
+  TOOL · SHELL · FILE · BUILD · MCP · SUB · GUARD · PERM · ROUTE · EVT` — then the
   message. Text labels (not just glyphs) so a row is readable without color,
   in ASCII mode, and after copy/paste; the label column is colored by outcome
   (red on FAILED, green on ok/PASS). `run`, `llm`, `▸` prefixes were dropped
@@ -162,7 +164,7 @@ and avoids increasing startup cost or introducing a browser-only dependency.
   silently dropped. Streaming rows (LLM stream, shell output) keep a `… Nc NB`
   counter and merge when they finish.
 - Navigation (input must be empty): `Up`/`Down` or `jk` select, `PageUp`/`PageDown` scroll, `g`/`G`
-  head/tail, `f` cycles the filter (`ALL → LLM → TOOL → MCP → SUB → EVT`), `d`
+  head/tail, `f` cycles the filter (`ALL → LLM → TOOL → MCP → SUB → ROUTE → EVT`), `d`
   toggles the DETAIL panel (counters + payload pointer), `Enter` opens the **full
   payload in the viewer** (resolved from the transcript; evicted payloads fall
   back to `.scoder/logs/<session>.jsonl`), `F` dumps the **whole filtered log**
@@ -171,7 +173,28 @@ and avoids increasing startup cost or introducing a browser-only dependency.
   `.scoder/views/`), `Esc` closes DETAIL → OVERVIEW → tail
 - `/log [cat]` prints the same (filtered) log into the viewer — works on
   narrow terminals where the sidebar tab is unreachable (`cat` ∈
-  `ALL|LLM|TOOL|MCP|SUB|EVT`)
+  `ALL|LLM|TOOL|MCP|SUB|ROUTE|EVT`)
+
+### Router tab (P2.2)
+
+Visible only with `router.enabled` (see `docs/configuration.md`). Three
+height-aware sections, greedy-fit like the rest of the sidebar:
+
+- **ROUTER · auto|pin** — graph `user ─▶ router` with one branch per tier
+  model (max 4, then `+N refs (/router)`). The active model carries `◆`;
+  when a new `route_decision` arrives, a packet dot (`●`) runs along that
+  edge for ~0.7 s (set `SCODER_ANIM=0` for a fully static graph — CI and
+  reduced-motion use this; the glyphs fall back to ASCII like everywhere
+  else in the TUI).
+- **DECISIONS** — the newest routing decisions (`⤳ tier ref — reason`, judge
+  verdicts appended as `⤳j:…`), identical lines folded with `· ×N`. Full
+  audit + detail lives in the HARNESS LOG tab under the `ROUTE` filter.
+- **MODELS** — per-model totals accumulated from `llm_usage` attribution
+  (`ref calls in→out tok ~$cost`). Judge calls are NOT counted — they never
+  pass through the agent loop.
+
+The SESSION section also badges the live model `[auto]` / `[pin]`, and the
+tab bar shows `⤳` next to `router` while a RouterRuntime is active.
 
 ### Full-screen Viewer (`v`)
 - Every "… truncated" in the transcript has an escape hatch: `v` opens the
@@ -226,7 +249,7 @@ and avoids increasing startup cost or introducing a browser-only dependency.
 | `Esc` | Return to live tail / Abort / enter vim normal mode in input |
 | `Ctrl+C` | Quit |
 | `Ctrl+P` | Open command palette (fuzzy search over commands, agents, themes, permission modes) |
-| `Ctrl+B` | Toggle sidebar tab OVERVIEW ⇄ HARNESS LOG (log keys live when input is empty — see Harness Log) |
+| `Ctrl+B` | Cycle sidebar tab OVERVIEW → ROUTER → HARNESS LOG (log keys live when input is empty — see Harness Log) |
 | `F` | On the LOG tab with empty input: dump the whole filtered log into the full-screen viewer |
 | `Ctrl+S` | Open session picker |
 | `v` | Full-screen viewer for the newest tool output / diff (only when the input is empty) |

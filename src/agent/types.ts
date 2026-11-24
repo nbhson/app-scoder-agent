@@ -62,6 +62,9 @@ export type AgentEvent =
       /** P2.2 §4c: "auto" when the run started with routing live (session
        *  transcripts then show `model: auto` instead of the fallback ref). */
       routingMode?: "auto";
+      /** P2.2 §7: router candidate list when a RouterRuntime is live — the
+       *  ROUTER tab graph renders from this (additive, v3). */
+      tiers?: Array<{ ref: string; tier: "small" | "large" }>;
     }
   | { type: "step"; step: number; maxSteps: number }
   /**
@@ -90,7 +93,13 @@ export type AgentEvent =
   | { type: "llm_delta"; delta: string }
   /** I-05: reasoning/thinking stream delta (rendered dim, toggleable). */
   | { type: "llm_reasoning"; delta: string }
-  | { type: "llm_usage"; usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number } }
+  | {
+      type: "llm_usage";
+      usage: { input_tokens?: number; output_tokens?: number; cached_tokens?: number };
+      /** P2.2 (additive): routing attribution — present only when routed. */
+      ref?: string;
+      tier?: "small" | "large";
+    }
   | { type: "tool_call"; step: number; id: string; name: string; args: Record<string, unknown> }
   | { type: "tool_output"; name: string; stream: "stdout" | "stderr"; delta: string }
   | {

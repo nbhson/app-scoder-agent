@@ -14,7 +14,7 @@
  * vừa trọn vẹn thì bỏ qua (không clip nửa chừng); riêng PLAN co giãn theo chỗ
  * còn lại.
  */
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import type { AgentConfig } from "../config/config.js";
 import { contextWindowFor } from "../llm/model-catalog.js";
@@ -24,6 +24,7 @@ import {
   DEFAULT_LOG_VIEW,
   filterLog,
   fmtLogClock,
+  logColor,
   logDetailLines,
   logKind,
   logKindColor,
@@ -69,10 +70,12 @@ function SectionLine({ label, value, color }: { label: string; value: string; co
 
 function SessionSection({ state, config }: { state: TuiState; config: AgentConfig }): React.JSX.Element {
   const model = state.model || config.model || "—";
+  // P2.2: routing mode badge — [auto] khi RouterRuntime đang thật sự route.
+  const routed = state.routerTiers.length > 0 ? (state.routingMode === "auto" ? " [auto]" : " [pin]") : "";
   const dir = config.workdir.split("/").filter(Boolean).pop() ?? config.workdir;
   return (
     <Section title="SESSION">
-      <SectionLine label="model" value={fit(model, INNER - 9)} />
+      <SectionLine label="model" value={fit(model + routed, INNER - 9)} />
       <SectionLine label="dir" value={fit(dir, INNER - 9)} />
     </Section>
   );
@@ -352,10 +355,21 @@ const PHASES_IDLE_ROWS = 3; // title + "— idle"
  * `rows` = chiều cao ngoài của sidebar (= chiều cao chat viewport cùng hàng).
  * undefined/0 (chưa đo xong) → không giới hạn (behavior cũ, dùng trong tests).
  */
-export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_LOG_VIEW }: { state: TuiState; config: AgentConfig; rows?: number; tab?: "overview" | "log"; view?: LogView }): React.JSX.Element {
+export type SidebarTab = "overview" | "router" | "log";
+
+/** Next tab for the Ctrl+B cycle (P2.2 widened 2 → 3). */
+export function nextSidebarTab(t: SidebarTab): SidebarTab {
+  return t === "overview" ? "router" : t === "router" ? "log" : "overview";
+}
+
+export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_LOG_VIEW }: { state: TuiState; config: AgentConfig; rows?: number; tab?: SidebarTab; view?: LogView }): React.JSX.Element {
   // Border top/bottom + the P8 tab-bar row + the 1-row gap under it all sit
   // inside the box: reserve 4.
   const avail = rows != null && rows > 0 ? Math.max(8, rows - 4) : Number.POSITIVE_INFINITY;
+  // P2.2 Phase D: the route packet ticks only while a fresh decision is <~0.7s
+  // old. Isolated frame state → only the sidebar re-renders per frame.
+  const pulse = useRoutePulse(state.activeRoute?.ts ?? null);
+  const flash = pulse >= 0 && state.activeRoute != null ? state.activeRoute.tier : null;
 
   let used = SESSION_ROWS;
   const fits = (h: number) => used + h <= avail;
@@ -417,8 +431,25 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
     body.push(<BuildSection key="build" state={state} config={config} />);
   }
 
-  // ── P8: tabbed sidebar ── OVERVIEW is the pre-tab panel; HARNESS LOG
-  // renders the reducer's ring buffer (helpers in log.ts).
+  // ── P8/P2.2: tabbed sidebar ── OVERVIEW is the pre-tab panel; ROUTER draws
+  // the routing graph; HARNESS LOG renders the reducer's ring buffer.
+  if (tab === "router") {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor={theme.border}
+        width={SIDEBAR_WIDTH}
+        paddingX={1}
+        flexShrink={0}
+        overflow="hidden"
+      >
+        <TabBar active="router" count={state.log.length} dropped={state.logDropped} filter={view.filter} routerOn={state.routerTiers.length > 0} flash={flash} />
+        <TabGap />
+        <RouterTab state={state} rows={avail} pulse={pulse} />
+      </Box>
+    );
+  }
   if (tab === "log") {
     return (
       <Box
@@ -430,7 +461,7 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
         flexShrink={0}
         overflow="hidden"
       >
-        <TabBar active="log" count={state.log.length} dropped={state.logDropped} filter={view.filter} />
+        <TabBar active="log" count={state.log.length} dropped={state.logDropped} filter={view.filter} routerOn={state.routerTiers.length > 0} flash={null} />
         <TabGap />
         <LogTab state={state} view={view} rows={avail} />
       </Box>
@@ -450,7 +481,7 @@ export function Sidebar({ state, config, rows, tab = "overview", view = DEFAULT_
       flexShrink={0}
       overflow="hidden"
     >
-      <TabBar active="overview" count={state.log.length} dropped={state.logDropped} filter={view.filter} />
+      <TabBar active="overview" count={state.log.length} dropped={state.logDropped} filter={view.filter} routerOn={state.routerTiers.length > 0} flash={null} />
       <TabGap />
       <SessionSection state={state} config={config} />
       {body}
@@ -469,18 +500,178 @@ function TabGap(): React.JSX.Element {
   return <Box height={1} flexShrink={0} />;
 }
 
-function TabBar({ active, count, dropped, filter }: { active: "overview" | "log"; count: number; dropped: number; filter: LogFilter }): React.JSX.Element {
-  const on = (t: "overview" | "log") => (active === t
-    ? <Text bold backgroundColor={theme.accent} color="black">{` ${t === "overview" ? "OVERVIEW" : "HARNESS LOG"} `}</Text>
-    : <Text dimColor>{` ${t === "overview" ? "overview" : "log"} `}</Text>);
+const TAB_TXT: Record<SidebarTab, { hot: string; dim: string }> = {
+  overview: { hot: "OVERVIEW", dim: "overview" },
+  router: { hot: "ROUTER", dim: "router" },
+  log: { hot: "HARNESS LOG", dim: "log" },
+};
+
+function TabBar({ active, count, dropped, filter, routerOn, flash }: {
+  active: SidebarTab;
+  count: number;
+  dropped: number;
+  filter: LogFilter;
+  routerOn: boolean;
+  flash: string | null;
+}): React.JSX.Element {
+  const on = (t: SidebarTab) => {
+    const mark = t === "router" && routerOn ? " ⤳" : "";
+    return active === t
+      ? <Text bold backgroundColor={theme.accent} color="black">{` ${TAB_TXT[t].hot}${mark} `}</Text>
+      : <Text dimColor>{` ${TAB_TXT[t].dim}${mark} `}</Text>;
+  };
   return (
     <Text wrap="truncate">
       {on("overview")}
+      <Text dimColor> │ </Text>
+      {on("router")}
+      {flash != null ? <Text color={theme.accent}>{` ⇢${flash}`}</Text> : null}
       <Text dimColor> │ </Text>
       {on("log")}
       <Text dimColor>{`  ${count}${dropped > 0 ? ` +${dropped}` : ""}`}{filter !== "ALL" ? ` · ${filter}` : ""}</Text>
     </Text>
   );
+}
+
+// ── P2.2: router tab ────────────────────────────────────────────────────────
+
+const PULSE_FRAMES = 6;
+const PULSE_MS = 110;
+const GRAPH_MAX = 4; // sidebar cao hữu hạn — ref thứ 5+ gộp "+N more"
+const DECISIONS_MAX = 4;
+const STATS_MAX = 4;
+
+/**
+ * Phase D packet: một burst ~0.7 s mỗi khi có route_decision mới (dot chạy
+ * trên cạnh router→model, không phải "particle" — terminal grid). Trả về frame
+ * 0..PULSE_FRAMES-1, -1 = nghỉ. SCODER_ANIM=0 (CI/máy yếu) → luôn -1, graph
+ * tĩnh hoàn toàn, không timer.
+ */
+function useRoutePulse(ts: number | null): number {
+  const [frame, setFrame] = useState(-1);
+  useEffect(() => {
+    if (ts == null || process.env.SCODER_ANIM === "0") {
+      setFrame(-1);
+      return;
+    }
+    setFrame(0);
+    let f = 0;
+    const id = setInterval(() => {
+      f += 1;
+      if (f >= PULSE_FRAMES) setFrame(-1);
+      else setFrame(f);
+    }, PULSE_MS);
+    return () => clearInterval(id);
+  }, [ts]);
+  return frame;
+}
+
+/** 3-char packet lane: dot "chạy" trên cạnh của ref đang active (charset-safe). */
+function laneSegs(pulse: number): string {
+  if (pulse < 0) return `${charset.h}${charset.h}${charset.arrowRight}`;
+  const A = charset.active;
+  const H = charset.h;
+  return [`${A}${H}${H}`, `${H}${A}${H}`, `${H}${H}${A}`][pulse % 3];
+}
+
+const shortRef = (ref: string): string => ref.split("/").pop() ?? ref;
+
+function fmtK(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+}
+
+/**
+ * Một cạnh router→model. Dòng active mang packet lane (Phase D): dot ●
+ * chạy 3 nhịp trên cạnh khi decision mới; idle = cạnh thường + marker ●
+ * đứng (không màu nền, không reflow — grid terminal).
+ */
+function GraphEdge({ m, last, active, pulse }: {
+  m: { ref: string; tier: "small" | "large" };
+  last: boolean;
+  active: boolean;
+  pulse: number;
+}): React.JSX.Element {
+  const branch = last ? charset.bl : charset.teeRight;
+  const lane = active && pulse >= 0 ? laneSegs(pulse) : `${charset.h}${charset.h}${charset.arrowRight}`;
+  return (
+    <Text wrap="truncate">
+      <Text dimColor>{` ${branch}`}</Text>
+      <Text color={active ? theme.accent : theme.dim}>{`${lane} `}</Text>
+      <Text color={active ? theme.brand : theme.dim} bold={active}>{fit(shortRef(m.ref), INNER - 10)}</Text>
+      {active ? <Text color={theme.accent}>{` ${charset.active}`}</Text> : null}
+    </Text>
+  );
+}
+
+function RouterTab({ state, rows, pulse }: { state: TuiState; rows: number; pulse: number }): React.JSX.Element {
+  const tiers = state.routerTiers;
+  const active = state.activeRoute;
+  const decisions = filterLog(state.log, "ROUTE").slice(-DECISIONS_MAX).reverse();
+  const stats = Object.entries(state.modelStats)
+    .sort((a, b) => b[1].calls - a[1].calls)
+    .slice(0, STATS_MAX);
+
+  const gShown = Math.min(tiers.length, GRAPH_MAX);
+  const hGraph = tiers.length === 0 ? 2 : 2 + gShown + (tiers.length > gShown ? 1 : 0);
+  const hDec = 1 + Math.max(1, decisions.length);
+  const hStats = 1 + Math.max(1, stats.length);
+
+  let used = hGraph;
+  const body: React.ReactNode[] = [];
+
+  body.push(
+    <Section key="graph" title={`ROUTER · ${tiers.length === 0 ? "inactive" : state.routingMode}`}>
+      {tiers.length === 0 ? (
+        <Text dimColor>{`router off — rc "router": { enabled } + /model auto`}</Text>
+      ) : (
+        <>
+          <Text dimColor>{`user ${charset.h}${charset.arrowRight} router`}</Text>
+          {tiers.slice(0, gShown).map((t, i) => (
+            <GraphEdge key={t.ref} m={t} last={i === gShown - 1} active={active?.ref === t.ref} pulse={active?.ref === t.ref ? pulse : -1} />
+          ))}
+          {tiers.length > gShown ? <Text dimColor>{`  └… +${tiers.length - gShown} refs (/router)`}</Text> : null}
+        </>
+      )}
+    </Section>,
+  );
+
+  if (used + hDec <= rows) {
+    used += hDec;
+    body.push(
+      <Section key="dec" title="DECISIONS">
+        {decisions.length === 0 ? (
+          <Text dimColor>no routes this run yet</Text>
+        ) : (
+          decisions.map((e) => (
+            <Text key={e.id} wrap="truncate">
+              <Text dimColor>{fmtLogClock(e.ts)}</Text>
+              <Text color={logColor(e)}>{` ${clipCells(e.text, INNER - 12)}`}</Text>
+              <Text dimColor>{logSuffix(e)}</Text>
+            </Text>
+          ))
+        )}
+      </Section>,
+    );
+  }
+
+  if (used + hStats <= rows) {
+    body.push(
+      <Section key="stats" title="MODELS">
+        {stats.length === 0 ? (
+          <Text dimColor>no routed calls yet</Text>
+        ) : (
+          stats.map(([ref, s]) => (
+            <Text key={ref} wrap="truncate">
+              <Text color={s.tier === "large" ? theme.accent : theme.dim}>{fit(shortRef(ref), 11)}</Text>
+              <Text dimColor>{` ${s.calls}c ${fmtK(s.input)}→${fmtK(s.output)}t ~$${s.costUsd < 0.01 ? s.costUsd.toFixed(4) : s.costUsd.toFixed(2)}`}</Text>
+            </Text>
+          ))
+        )}
+      </Section>,
+    );
+  }
+
+  return <Box flexDirection="column">{body}</Box>;
 }
 
 // ── P8: harness log tab ───────────────────────────────────────────────────────

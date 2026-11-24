@@ -32,8 +32,8 @@ export function useTuiKeybinds(deps: {
   pagerOpen: boolean;
   /** `v` (input empty) — open the newest tool output / diff in the viewer. */
   openViewer: () => void;
-  /** P8: sidebar tab + harness-log keyboard routing (see app.tsx logHandlers). */
-  sidebarTab: "overview" | "log";
+  /** P8/P2.2: sidebar tab + harness-log keyboard routing (see app.tsx logHandlers). */
+  sidebarTab: "overview" | "router" | "log";
   logHandlers: {
     toggleTab: () => void;
     move: (d: number) => void;

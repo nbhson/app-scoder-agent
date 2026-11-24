@@ -347,24 +347,27 @@ Thứ tự có thể ship dần: A–B chạy đầu-cuối được với `enab
 - [ ] Config P2.1 ví dụ (4 model box-api) + `ollama/gemma4:e4b`: bật `router.enabled` → run mẫu
     "liệt kê các file trong src/" toàn tuyến **small**; run "refactor config.ts tách trust.ts"
     sang **large** ở phase edit và khi build fail.
-- [ ] Ctrl+B cycle OVERVIEW → ROUTER → LOG; tab ROUTER show graph user→router→models, packet
+- [x] Ctrl+B cycle OVERVIEW → ROUTER → LOG; tab ROUTER show graph user→router→models, packet
     chạy tới model active, audit list có reason từng decision, stats per-model cộng đúng với
     `scoder cost`.
-- [ ] `/model box-api/kimi-k3` → MỌI lượt đi đúng ref đó (pinned, 0 `route_decision` emit);
+- [x] `/model box-api/kimi-k3` → MỌI lượt đi đúng ref đó (pinned, 0 `route_decision` emit);
     `/model auto` → router phân lớp per lượt; toggle 2 chiều ngay trong session, không restart.
-- [ ] `router.judge: null` (default) ⇒ pipeline 3 lớp, fake-factory đếm **0 request phụ**; config judge ⇒
+- [x] `router.judge: null` (default) ⇒ pipeline 3 lớp, fake-factory đếm **0 request phụ**; config judge ⇒
     decision gray-zone mang `verdict:"accept"` + target là ref chính xác judge trả (kể cả tie-break
     2 model cùng tier small). Judge timeout/hallucinate ⇒ run vẫn đi tiếp với decision L1+L2, audit
     hiện `⤳j fallback`, 0 exception mới.
-- [ ] `route_decision` nằm trong session JSONL; `scoder cost` in được bảng chi phí per model.
-- [ ] `router.enabled: false` (default) — mọi test cũ pass nguyên trạng, 0 byte overhead trong hot path.
-- [ ] `typecheck`, `lint`, `check:layers` (module `src/router` sạch layer), coverage ≥ ngưỡng `coverage:check`.
+- [x] `route_decision` nằm trong session JSONL; `scoder cost` in được bảng chi phí per model.
+- [x] `router.enabled: false` (default) — mọi test cũ pass nguyên trạng, 0 byte overhead trong hot path.
+- [x] `typecheck`, `lint`, `check:layers` (module `src/router` sạch layer), coverage ≥ ngưỡng `coverage:check`.
 
 ## Tiến độ implementation
 
 - **Phase A (xong):** `src/router/{types,classifier,hysteresis,router-runtime,tiers}.ts` — pipeline L1–L3 + Runtime seam (client cache, pin↔auto, external pin). 4 test files (`router-classify/runtime/hysteresis/mode`) = 56 case.
 - **Phase B (xong):** rc `router` parse/validate (`parseRouter`) + startup `"model":"auto"` → `routerMode` (config.ts); `resolveRouterTiers` strict-ref + auto-derive theo `cost.output`; `createClientRuntime` branch RouterRuntime (clientFactory thắng trước — eval không đổi); Agent sensors nghe chính event stream (`TurnSensors`), `onRoute` → event `route_decision` (schema v3) + JSONL + attribution `ref/tier` vào `llm_usage`; `/router` + `/model auto`; `scoder cost --router` per-model/tier + savings estimate; hot-reload `router.tiers` qua `setTiers`. Test: `router-config.test.mjs` (23), `event-v2`/`cost` mở rộng.
-- **Còn lại:** Phase C (tab ROUTER + Ctrl+B cycle + fold `route_decision` vào `state.ts`/`log.ts`), Phase D (animation RoutePacket), Phase E (`router/judge.ts` L4 + eval 4-config + baseline).
+- **Phase C (xong):** `state.ts` — `route_decision` fold vào ring (`cat:"route"`, key `tier|ref|reason-head`, `· ×N` chống spam), `activeRoute`, `modelStats` (giá từ `resolveModelPricing`, judge không đi qua loop nên miễn nhiễm), `run_start.tiers/routingMode` lưu graph nodes; SESSION badge `[auto]/[pin]`. `log.ts` — `ROUTE` filter slot + glyph `⤳` + màu theo verdict/tier. `sidebar.tsx` — tab ROUTER (graph user→router→models, cap 4 + `+N refs`, DECISIONS, MODELS) greedy-fit; `nextSidebarTab` cycle 3; `chrome.tsx`/`shortcuts.ts`/help hint theo cycle. Test: `tui-state` (+5), `tui-sidebar` (+6), `tui-render` hint cập nhật.
+- **Phase D (xong):** packet dot `●` chạy trên cạnh router→model active ~0.7 s/decision (frame state cục bộ — không re-render cả app); `SCODER_ANIM=0` → graph tĩnh, 0 timer; glyph qua `charset` nên ASCII-safe; flash `⇢tier` trên tab bar khi decision mới. Eval/snapshot test chạy với ANIM=0.
+- **Phase E (xong):** `src/router/judge.ts` — `createJudge` (prompt nhỏ ≤~600 tok, JSON nghiêm, TTL-cache 10′ theo ctx+tier+refs, timeout AbortController, KHÔNG throw — timeout/unparseable/error → verdict `timeout`/`fallback` phân biệt với `reject-hallucinated`); `resolveJudgeModel`/`pickCheapestSmall` (rules ref nghiêm như tiers; `classifier:true` → cheapest small); wire `makeJudgeRuntime` trong provider-runtime (judge ref hỏng → warn + về 3 lớp, router không chết); `RouterRuntime.judgeLabel` → `/router` hiện dòng judge; call của judge không phát sinh `llm_usage` nên không vào cost/modelStats (tokens audit trên `route_decision.judge`). Eval: `test/eval/router-profile.mjs` 4-config gate (pinned large/small | 3 lớp | 4 lớp judge) + baseline `plan/baseline/router-eval.json`; `run-eval` hỗ trợ scenario self-contained. Test: `router-judge.test.mjs` 18 case.
+- **Còn lại (manual, cần API key thật):** AC #1 — chạy 2 run mẫu trên config box-api 4 model để chốt cảm giác phân tầng; chạy `scoder eval` bản thật khi muốn số pass-rate/cost so với `plan/baseline/`.
 - **Green at HEAD:** `npm run build` clean, toàn suite `node --test test/*.test.mjs` pass, `lint` ≤ 43 warning, `typecheck`/`check:layers`/`docs:check`/`coverage:check` pass.
 
 | Risk | Mitigation |

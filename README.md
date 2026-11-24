@@ -269,7 +269,7 @@ Read the current diff. Check for: null derefs, injection risks, ...
 | `/btw <question>` | side question answered from session context — no tools, never added to history; works while a task runs (bare `/btw` replays the last answer) |
 | `/cost` | session token usage |
 | `/model` | active model/provider/build; `/model auto` turns on routing, `/model <provider/model>` pins |
-| `/router` | model router status — mode, tiers, last decision (needs `router.enabled`) |
+| `/router` | model router status — mode, tiers, last decision, judge layer (needs `router.enabled`) |
 | `/skill [name]` | list discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers + tools; exec one directly: `/mcp <server> <tool> [json\|text]` or `/mcp mcp__server__tool [json\|text]` — non-JSON text binds to the tool's first string parameter |
 | `/permission <auto\|ask\|readonly>` | switch permission mode at runtime — **Shift+P** cycles the 3 modes in the TUI (input empty) |
@@ -349,7 +349,9 @@ TOTAL (1 session(s))  ...  |  success-rate=1/1
 
 With the model router (see `docs/configuration.md`), every routed turn also logs a
 `route_decision` event; `scoder cost --router` adds a per-model cost breakdown and an
-estimated saving vs. running everything on the large tier.
+estimated saving vs. running everything on the large tier. In the TUI, `Ctrl+B` cycles
+OVERVIEW → ROUTER → HARNESS LOG — the ROUTER tab draws the live `user → router → models`
+graph with the packet animation, folded decision audit and per-model stats.
 
 The system prompt is versioned (`PROMPT_VERSION` in `src/prompt.ts`) and stamped into every session log (`type: "prompt_version"`) so prompt quality can be compared across versions.
 

@@ -6,6 +6,7 @@
  * mirrors how `scoder serve` consumes the same event stream.
  */
 import type { AgentEvent } from "../agent.js";
+import { resolveModelPricing } from "../shared/constants.js";
 import { toolPhase } from "./selectors.js";
 
 
@@ -58,7 +59,7 @@ export type BuildLamp = "none" | "ok" | "fail";
 
 export type LogCat =
   | "run" | "llm" | "tool" | "shell" | "file" | "build" | "mcp"
-  | "sub" | "guard" | "perm" | "evt";
+  | "sub" | "guard" | "perm" | "evt" | "route";
 
 export interface LogEntry {
   /** Monotonic id — selection anchors on this so the cursor survives growth. */
@@ -154,6 +155,28 @@ export interface TuiState {
   logSeq: number;
   /** Entries evicted from the ring — the header shows `+N`. */
   logDropped: number;
+  /**
+   * P2.2 ROUTER tab: the newest routing decision (null = router has not
+   * routed this run). Drives the graph highlight + RoutePacket target.
+   */
+  activeRoute: { ref: string; tier: "small" | "large"; step: number; ts: number } | null;
+  /** P2.2: per-routed-ref accumulated usage, from llm_usage attribution. */
+  modelStats: Record<string, ModelStat>;
+  /** P2.2 §7: candidate graph from run_start.tiers (empty = no RouterRuntime). */
+  routerTiers: Array<{ ref: string; tier: "small" | "large" }>;
+  /** P2.2: "auto" when the run started with routing live, else pinned. */
+  routingMode: "auto" | "pinned";
+}
+
+/** One routed model's running totals (sidebar ROUTER tab). */
+export interface ModelStat {
+  tier: "small" | "large" | null;
+  calls: number;
+  input: number;
+  output: number;
+  cached: number;
+  /** estimated USD, table pricing without rc overrides (display only). */
+  costUsd: number;
 }
 
 export function initialState(): TuiState {
@@ -191,6 +214,10 @@ export function initialState(): TuiState {
     log: [],
     logSeq: 0,
     logDropped: 0,
+    activeRoute: null,
+    modelStats: {},
+    routerTiers: [],
+    routingMode: "pinned",
   };
 }
 
@@ -396,6 +423,11 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
       state.streamStartedAt = null;
       state.llmCallStartedAt = null;
       state.lastLlmTokPerSec = null;
+      // P2.2: routing state is per-run too — the ROUTER tab starts empty.
+      state.activeRoute = null;
+      state.modelStats = {};
+      state.routerTiers = ev.tiers ?? [];
+      state.routingMode = ev.routingMode === "auto" ? "auto" : "pinned";
       // The TUI pushes the user's message itself when submitting; avoid a
       // duplicate when run_start carries the same task. `quiet` (resume) =
       // transcript đã hiển thị rồi, không append nữa. Scan back PAST notices:
@@ -504,8 +536,39 @@ export function applyEvent(state: TuiState, ev: AgentEvent): TuiState {
         if (li >= 0) patchLog(state, li, { text, meta: { ...state.log[li].meta, ...meta } });
         else pushLog(state, "llm", text, { ref: { kind: "item", step: state.step }, meta });
       }
+      // P2.2: per-ref accumulation when the call was routed (ROUTER tab stats).
+      if (ev.ref) {
+        const prev = state.modelStats[ev.ref] ?? { tier: ev.tier ?? null, calls: 0, input: 0, output: 0, cached: 0, costUsd: 0 };
+        const price = resolveModelPricing(ev.ref.split("/").pop() ?? ev.ref);
+        const inT = ev.usage.input_tokens ?? 0;
+        const outT = ev.usage.output_tokens ?? 0;
+        state.modelStats = {
+          ...state.modelStats,
+          [ev.ref]: {
+            ...prev,
+            tier: ev.tier ?? prev.tier,
+            calls: prev.calls + 1,
+            input: prev.input + inT,
+            output: prev.output + outT,
+            cached: prev.cached + (ev.usage.cached_tokens ?? 0),
+            costUsd: prev.costUsd + (inT / 1_000_000) * price.input + (outT / 1_000_000) * price.output,
+          },
+        };
+      }
       state.streamingOutputChars = 0;
       state.streamStartedAt = null;
+      break;
+    }
+    case "route_decision": {
+      // P2.2 ROUTER tab: newest decision + honest model name for the usage
+      // lines that follow, and one folded audit row per tier×ref×reason so
+      // repeated routes read as `×N` instead of flooding the ring (§7).
+      state.activeRoute = { ref: ev.ref, tier: ev.tier, step: ev.step, ts: Date.now() };
+      state.model = ev.model;
+      state.provider = ev.provider;
+      const head = ev.reason.split(" · ")[0];
+      const j = ev.judge ? ` ⤳j:${ev.judge.verdict}` : "";
+      foldLog(state, "route", `${ev.tier}|${ev.ref}|${head}`, `⤳ ${ev.tier} ${ev.ref.split("/").pop() ?? ev.ref} — ${head}${j}`);
       break;
     }
     case "tool_call": {
