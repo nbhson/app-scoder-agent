@@ -544,13 +544,13 @@ const STATS_MAX = 4;
 /**
  * Phase D packet: một burst ~0.7 s mỗi khi có route_decision mới (dot chạy
  * trên cạnh router→model, không phải "particle" — terminal grid). Trả về frame
- * 0..PULSE_FRAMES-1, -1 = nghỉ. SCODER_ANIM=0 (CI/máy yếu) → luôn -1, graph
- * tĩnh hoàn toàn, không timer.
+ * 0..PULSE_FRAMES-1, -1 = nghỉ. SCODER_ANIM=0 hoặc SCODER_NO_MOTION=1 /
+ * `--no-motion` (CI/máy yếu) → luôn -1, graph tĩnh hoàn toàn, không timer.
  */
 function useRoutePulse(ts: number | null): number {
   const [frame, setFrame] = useState(-1);
   useEffect(() => {
-    if (ts == null || process.env.SCODER_ANIM === "0") {
+    if (ts == null || process.env.SCODER_ANIM === "0" || process.env.SCODER_NO_MOTION === "1") {
       setFrame(-1);
       return;
     }

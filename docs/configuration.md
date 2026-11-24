@@ -26,6 +26,7 @@
 | `SCODER_THEME` | — | Palette name (mission/paper/mono/light/high-contrast/solarized) |
 | `SCODER_NOTIFY` | `1` | `0` disables the desktop notification sent when a run finishes while the terminal is unfocused |
 | `SCODER_NO_MOTION` | — | `1` to disable animations |
+| `SCODER_ANIM` | — | `0` for fully static TUI graphs (no route-packet timers; used by CI) |
 
 Legacy env vars (still work):
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`

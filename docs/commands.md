@@ -106,7 +106,7 @@ scoder --no-save -y "run the migration"
 | `/btw <question>` | Side question answered from session context — no tools, kept out of history; works while a task runs |
 | `/cost` | Session token usage |
 | `/model` | Active model/provider/build; `/model auto` enables routing, `/model <provider/model>` pins |
-| `/router` | Model router status: mode, tiers, last decision (needs `router.enabled`) |
+| `/router` | Model router status: mode, tiers, last decision, judge layer (needs `router.enabled`) |
 | `/skill [name]` | List discovered skills; with a name, stage it for the next task |
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
 | `/permission <mode>` | Switch permission mode — **Shift+P** cycles auto/ask/readonly in the TUI (input empty) |

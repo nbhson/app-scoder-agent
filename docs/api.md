@@ -50,14 +50,17 @@ curl -N localhost:4114/api/runs/<id>/events
 
 Event types:
 - `run_start` — task, model, workdir (+ `provider`, `buildCmd`, `permission`,
-  `agent`, `schemaVersion`). Emitted by `run()`, `runTurn()` and `resume()` —
+  `agent`, `schemaVersion`, and with the router: `routingMode`, `tiers`). Emitted
+  by `run()`, `runTurn()` and `resume()` —
   every entry point into the loop, so frontends can reset per-run timers and
   counters. `quiet: true` (only `resume()`) means "the transcript is already on
   screen, don't re-append the task".
 - `step` — current step number
 - `llm_delta` — assistant text delta (streaming)
 - `llm_reasoning` — reasoning/thinking delta (if enabled)
-- `llm_usage` — input/output/cached tokens
+- `llm_usage` — input/output/cached tokens (+ `ref`/`tier` when router-attributed)
+- `route_decision` — model router pick per turn (`tier`, `ref`, `reason`,
+  `signals`, `switched`, optional `judge` verdict) — only when `router.enabled`
 - `tool_call` — tool invocation
 - `tool_output` — live stdout/stderr chunks
 - `tool_result` — tool completion (includes diff for file writes)

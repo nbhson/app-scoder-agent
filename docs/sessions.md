@@ -57,7 +57,8 @@ cat .scoder/logs/<id>.jsonl | jq 'select(.type == "error")'
 | `build` | Build result |
 | `guardrail` | Guardrail decision |
 | `prompt_version` | System prompt version stamp |
-| `llm_usage` | Token usage per call |
+| `llm_usage` | Token usage per call (`ref`/`tier` added when routing) |
+| `route_decision` | Model router pick per turn (tier, ref, reason, judge verdict) — only with `router.enabled` |
 | `compaction.ran` | History summarization |
 | `finish` | Run completion |
 
@@ -69,6 +70,7 @@ Read token usage from JSONL logs:
 scoder cost                        # all sessions
 scoder cost --last 5               # 5 most recent
 scoder cost --session <id>         # specific session
+scoder cost --router               # per-model breakdown + estimated savings (needs router.enabled)
 ```
 
 Output:

@@ -71,6 +71,7 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 | `llm/provider-registry.ts` | Provider resolution + custom provider registry |
 | `llm/model-catalog.ts` | Model catalog (context window, pricing) |
 | `llm/retry.ts` | Escalating retry ladder (10s→10m); honors server `Retry-After` |
+| `router/` | Model router: sensors → per-turn tier scoring (tiers/hysteresis), `RouterRuntime` auto/pinned mode, optional L4 judge (`judge.ts`) |
 | `tools/` | Tool contracts, file/search/command implementations, webfetch, ordered registry |
 | `workspace/build.ts` | Build command execution + exit code analysis |
 | `security/permissions.ts` | Permission checker, structural catastrophic-command analysis, rule engine |

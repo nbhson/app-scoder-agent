@@ -183,9 +183,9 @@ height-aware sections, greedy-fit like the rest of the sidebar:
 - **ROUTER · auto|pin** — graph `user ─▶ router` with one branch per tier
   model (max 4, then `+N refs (/router)`). The active model carries `◆`;
   when a new `route_decision` arrives, a packet dot (`●`) runs along that
-  edge for ~0.7 s (set `SCODER_ANIM=0` for a fully static graph — CI and
-  reduced-motion use this; the glyphs fall back to ASCII like everywhere
-  else in the TUI).
+  edge for ~0.7 s (set `SCODER_ANIM=0`, `SCODER_NO_MOTION=1` or `--no-motion`
+  for a fully static graph — CI and reduced-motion use this; the glyphs fall
+  back to ASCII like everywhere else in the TUI).
 - **DECISIONS** — the newest routing decisions (`⤳ tier ref — reason`, judge
   verdicts appended as `⤳j:…`), identical lines folded with `· ×N`. Full
   audit + detail lives in the HARNESS LOG tab under the `ROUTE` filter.
