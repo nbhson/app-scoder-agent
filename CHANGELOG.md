@@ -3,6 +3,31 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [1.5.1] — 2026-11-25
+
+Patch on top of 1.5.0: mermaid flowcharts with subgraphs stop degrading to
+the unreadable "N nodes · 0 edges" summary.
+
+### Fixed
+
+- **Standalone node definitions inside subgraphs are registered** — a lone
+  `A[First]` line (no arrow) is valid mermaid, but the parser rejected
+  single-token statements, so subgraph members lost their labels and shapes
+  and inline-text dotted arrows like `A -. ref .-> B` failed to parse; the
+  whole chart then fell back to the summary. The parser now accepts node-def
+  lines, the inline dotted-text arrow (opener `-.` / closer `.-`) and the
+  common `-.>` typo.
+- **The fold-out summary uses the real parser** — `summarizeMermaid` now
+  delegates to `parseFlowchart` when it accepts the source (flattening
+  subgraphs and reading every arrow form), so the summary can't diverge from
+  what the renderer draws; the regex fallback stays for oversized sources.
+
+### Tests
+
+- 4 new cases in `test/graph-layout.test.mjs` (node defs in subgraphs,
+  inline dotted arrows, `-.>` leniency, and the regression chart).
+  Full suite: 1474 pass.
+
 ## [1.5.0] — 2026-11-25
 
 ### Added

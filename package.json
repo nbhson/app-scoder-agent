@@ -1,6 +1,6 @@
 {
   "name": "s-app-scoder-agent",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Autonomous coding agent CLI — writes, edits, and builds code autonomously until the project compiles without errors.",
   "type": "module",
   "main": "dist/index.js",
