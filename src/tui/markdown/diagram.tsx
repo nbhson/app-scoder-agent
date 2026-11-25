@@ -22,7 +22,7 @@ import { charset } from "../charset.js";
 import { clipCells, measure, padEndCells } from "../text-width.js";
 import { usePulse } from "../hooks/use-pulse.js";
 import {
-  cleanMermaidLabel, renderFlowchart, resolveFocus, pulseMarks, paintCells,
+  cleanMermaidLabel, renderFlowchart, resolveFocus, pulseMarks, paintCells, parseFlowchart,
   MAX_GRAPH_ROWS, type CellKind, type Raster,
 } from "./graph.js";
 
@@ -194,13 +194,24 @@ export function summarizeMermaid(source: string[]): MermaidSummary {
 
   if (/^(graph|flowchart)$/.test(type)) {
     const nodeMap = new Map<string, string>();
-    for (const m of text.matchAll(MERMAID_NODE_RX)) {
-      const label = nodeLabel(m[2] ?? "");
-      if (label) nodeMap.set(m[1], label);
-    }
     const edges: Array<{ from: string; to: string; label?: string }> = [];
-    for (const m of text.matchAll(MERMAID_EDGE_RX)) {
-      edges.push({ from: m[1], to: m[4], ...(m[3]?.trim() ? { label: m[3].trim() } : {}) });
+    // Prefer the real parser when it accepts the source: it flattens subgraphs
+    // and reads every arrow form, so the summary can't diverge from the chart
+    // the renderer would draw (regex fallback stays for oversized sources).
+    const parsed = parseFlowchart(source);
+    if (parsed) {
+      for (const n of parsed.nodes) nodeMap.set(n.id, n.label || n.id);
+      for (const e of parsed.edges) {
+        edges.push({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}) });
+      }
+    } else {
+      for (const m of text.matchAll(MERMAID_NODE_RX)) {
+        const label = nodeLabel(m[2] ?? "");
+        if (label) nodeMap.set(m[1], label);
+      }
+      for (const m of text.matchAll(MERMAID_EDGE_RX)) {
+        edges.push({ from: m[1], to: m[4], ...(m[3]?.trim() ? { label: m[3].trim() } : {}) });
+      }
     }
     const lines: string[] = [`flowchart · ${nodeMap.size} nodes · ${edges.length} edges`, ""];
     for (const [id, label] of [...nodeMap.entries()].slice(0, 6)) {

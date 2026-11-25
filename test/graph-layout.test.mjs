@@ -95,6 +95,47 @@ describe("parseFlowchart", () => {
     assert.equal(g.edges.length, 1);
     assert.ok(g.notes.some((n) => n.includes("self-loop")));
   });
+  it("registers standalone node-def lines so subgraph members keep their shapes", () => {
+    const g = parseFlowchart(flow(`flowchart TD
+      subgraph S["title"]
+        A[First]
+        B[Second]
+      end
+      A --> B`));
+    assert.deepEqual(g.nodes.map((n) => [n.id, n.label, n.shape]), [
+      ["A", "First", "rect"],
+      ["B", "Second", "rect"],
+    ]);
+    assert.deepEqual(g.edges.map((e) => `${e.from}>${e.to}`), ["A>B"]);
+  });
+  it("parses the inline dotted-text arrow `A -. text .-> B`", () => {
+    const g = parseFlowchart(flow(`flowchart LR
+      A -. strong ref .-> B`));
+    assert.equal(g.edges.length, 1);
+    assert.deepEqual([g.edges[0].from, g.edges[0].to, g.edges[0].style], ["A", "B", "dotted"]);
+    assert.equal(g.edges[0].label, "strong ref");
+  });
+  it("is lenient with the common typo `-.>`", () => {
+    const g = parseFlowchart(flow(`flowchart LR
+      A -.> B`));
+    assert.deepEqual(g.edges.map((e) => `${e.from}>${e.to}(${e.style})`), ["A>B(dotted)"]);
+  });
+  it("subgraph title does not leak into the node summary (regression: 4 nodes · 0 edges)", () => {
+    // The diagram-668512 shape: nodes declared alone inside a subgraph + one
+    // inline-text dotted arrow. Must render, not degrade to the summary.
+    const src = flow(`flowchart LR
+      subgraph Map["Map"]
+        M1["map"]
+        K1["key"]
+        V1["value"]
+      end
+      M1 -. ref .-> K1`);
+    assert.ok(parseFlowchart(src), "must parse");
+    const r = renderFlowchart(src, 76);
+    assert.ok(r, "must draw (not fall back to summary)");
+    assert.equal(r.nodes, 3, "subgraph title must not count as a node");
+    assert.equal(r.edges, 1);
+  });
 });
 
 // ── Rasterization invariants ─────────────────────────────────────────────────

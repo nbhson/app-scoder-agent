@@ -162,9 +162,12 @@ const ARROW_SPECS: ArrowSpec[] = [
   { text: "---", style: "solid", head: "open" },
   { text: "===", style: "thick", head: "open" },
   { text: "-.-", style: "dotted", head: "open" },
+  { text: ".->", style: "dotted", head: "fwd" }, // closer of the inline form `A -. text .-> B`
+  { text: "-.>", style: "dotted", head: "fwd" }, // lenient common typo for `-.->`
   { text: "->", style: "solid", head: "fwd" },
   { text: "=>", style: "thick", head: "fwd" },
   { text: "--", style: "solid", head: "open" },
+  { text: "-.", style: "dotted", head: "open" }, // opener of the inline form `A -. text .-> B`
   { text: "<-", style: "solid", head: "back" },
 ];
 
@@ -256,7 +259,10 @@ function scanStatement(line: string): Tok[] | null {
     toks.push({ t: "edge", spec: edge.arrow.spec, label: cleanMermaidLabel(edge.label) });
     i = edge.end;
   }
-  return toks.length >= 2 ? toks : null;
+  // A lone `A[label]` line is a real mermaid statement (define a node, link it
+  // later) — accept single-token statements so standalone definitions and
+  // subgraph-member declarations register their labels/shapes.
+  return toks.length >= 1 ? toks : null;
 }
 
 function stripComment(line: string): string {
