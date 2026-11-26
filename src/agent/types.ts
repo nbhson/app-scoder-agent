@@ -116,6 +116,9 @@ export type AgentEvent =
       image?: string;
       /** Phase 5: true when output comes from a third-party MCP tool/resource. */
       untrusted?: boolean;
+      /** Loop-breaker: kết quả phục vụ từ cache của lần gọi trước trong run. */
+      cached?: boolean;
+      cachedFromStep?: number;
     }
   | { type: "build"; success: boolean; command: string; output: string }
   | { type: "todo"; items: TodoItem[] }

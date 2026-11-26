@@ -66,6 +66,7 @@ import {
 } from "./agent/mcp-bridge.js";
 import { InteractionBroker, type InteractionRuntime } from "./agent/interaction.js";
 import { ToolExecutor, type ToolExecutorRuntime } from "./agent/tool-executor.js";
+import { LoopCallCache } from "./agent/loop-cache.js";
 import { PromptContext, buildRunMessages, memoryBlock } from "./agent/prompt-context.js";
 import { persistSession, restoreSessionState } from "./agent/session-persistence.js";
 import { runAgentLoop, type RunLoopRuntime } from "./agent/run-loop.js";
@@ -143,6 +144,8 @@ export class Agent {
   private currentToolCall: { step: number; id: string; name: string } | null = null;
   /** True once any file-writing tool succeeded during the current run. */
   private filesModified = false;
+  /** Kết quả tool đọc trong run hiện tại — phục vụ loop-breaker (xem loop-cache.ts). */
+  private loopCache = new LoopCallCache();
   /** Project/global skills and one-shot `/skill` context. */
   private promptContext: PromptContext;
   /** M4: hot-reload watcher (rc + skills dir). */
@@ -716,6 +719,7 @@ export class Agent {
         this.runDiffs.push(diff);
         if (this.runDiffs.length > 40) this.runDiffs.shift();
       },
+      loopCache: this.loopCache,
     };
     return new ToolExecutor(runtime);
   }
@@ -1592,6 +1596,8 @@ export class Agent {
       throw new Error("agent is already running — await the current run (or abort()) before starting another");
     }
     this.runActive = true;
+    // Loop-breaker cache là per-run: kết quả đọc của run trước không còn đúng.
+    this.loopCache.reset();
   }
 
   private runLoopRuntime(): RunLoopRuntime {

@@ -64,7 +64,9 @@ No prompt, event, tool schema, CLI, or permission contract is changed by these m
 | `agent/provider-runtime.ts` | Provider/client selection shared by construction and `/model` hot-swap |
 | `agent/session-persistence.ts` | Manifest/snapshot persistence + resume projection |
 | `agent/verification.ts` | Build/test/typecheck/lint verification |
-| `agent/guardrails.ts` | Guardrail Engine: doom-loop, text-only streak, wrap-up |
+| `agent/guardrails.ts` | Guardrail Engine: doom-loop (streak/cycle/scattered), no-new-information, text-only streak, wrap-up |
+| `agent/tool-signature.ts` | Normalized tool-call/batch signatures + the read-only tool contract |
+| `agent/loop-cache.ts` | Per-run read-tool cache — duplicate calls replay instead of re-execute |
 | `agent/types.ts` | Public Agent contracts + event schema |
 | `llm/llm.ts` | OpenAI-compatible LLM client (chat, streaming) |
 | `llm/provider-anthropic.ts` | Native Anthropic Messages API + SSE streaming |

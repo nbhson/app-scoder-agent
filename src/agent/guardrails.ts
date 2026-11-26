@@ -15,6 +15,7 @@
  */
 import type { AssistantMessage, ToolCall } from "../llm/llm.js";
 import { claimsCompletion } from "../context/context.js";
+import { batchSignature, callSignature, READ_ONLY_TOOLS, SIG_WINDOW } from "./tool-signature.js";
 
 /** Marker do system prompt quy ước: lượt chat thuần, không cần build. */
 export const CHAT_DONE_MARKER = "<<CHAT_DONE>>";
@@ -88,9 +89,41 @@ export interface GuardrailContext {
 interface TrackerState {
   /** Số bước liên tiếp chỉ trả text (không gọi tool). */
   textOnlyStreak: number;
-  /** Chuỗi tool call của bước trước + số lần lặp lại giống hệt. */
+  /** Chuỗi tool call của bước trước + số lần lặp lại giống hệt LIÊN TIẾP. */
   lastCallSig: string;
   sigRepeat: number;
+  /**
+   * Chữ ký batch của các bước gần nhất (cửa sổ trượt) — bộ đếm chu kỳ
+   * A→B→C→A→B→C đọc từ đây, vì loop thật của model local hiếm khi là
+   * "một batch giống hệt liên tiếp".
+   */
+  sigWindow: string[];
+  /**
+   * Số lần xuất hiện của TỪNG tool call (tool + args đã chuẩn hoá) tính trên
+   * cả run — bắt lặp rải rác, xen giữa các lệnh khác.
+   */
+  callCounts: Map<string, number>;
+  /** Chu kỳ phát hiện được ở bước này (0 = không có) + số vòng lặp lại. */
+  cyclePeriod: number;
+  cycleCount: number;
+  /** Số lần lặp nhiều nhất của MỘT tool call trong batch hiện tại (cả run). */
+  maxCallCount: number;
+  /** Số lần doom-loop đã can thiệp trong run (escalate inject → finish). */
+  loopInterventions: number;
+  /**
+   * Tập dòng nội dung đã thấy trong output tool của run (chuẩn hoá) — nền của
+   * bộ đếm "thông tin mới". Loop nguy hiểm nhất KHÔNG lặp args: model tăng dần
+   * URL (`/angular-22-1`, `-2`, …) nên mọi chữ ký đều "mới", nhưng cả 39 lần
+   * fetch đều trả về đúng một trang ⇒ run học thêm không gì (log thật:
+   * session 20261126-141619-e507).
+   */
+  infoLines: Set<string>;
+  /** Số bước liên tiếp mà output gần như toàn chữ đã thấy trước đó. */
+  noInfoStreak: number;
+  /** Số lần no-new-information đã can thiệp (bậc thang inject → finish). */
+  noInfoInterventions: number;
+  /** Trạng thái filesModified bước trước — chuyển false→true là tiến trình thật. */
+  lastFilesModified: boolean;
   /** Wrap-up reminder đã được inject trong run này chưa. */
   wrapUpInjected: boolean;
   /** Signature "tool+error" gần nhất — error-loop tracking (H-12). */
@@ -100,13 +133,41 @@ interface TrackerState {
   lowTokenStreak: number;
 }
 
+/** Tracker khởi tạo lại đầu mỗi run — mảng/Map phải là object MỚI, không dùng chung. */
+function freshTracker(): TrackerState {
+  return {
+    textOnlyStreak: 0,
+    lastCallSig: "",
+    sigRepeat: 0,
+    sigWindow: [],
+    callCounts: new Map<string, number>(),
+    cyclePeriod: 0,
+    cycleCount: 0,
+    maxCallCount: 0,
+    loopInterventions: 0,
+    infoLines: new Set<string>(),
+    noInfoStreak: 0,
+    noInfoInterventions: 0,
+    lastFilesModified: false,
+    wrapUpInjected: false,
+    toolErrorSig: "",
+    toolErrorRepeat: 0,
+    lowTokenStreak: 0,
+  };
+}
+
 // ── Options: ngưỡng cấu hình được cho các rule ──────────────────────────────
 
 export interface GuardrailOptions {
   /** Số bước liên tiếp chỉ-tr-text (không sửa file) trước khi dừng run. */
   textOnlyStreakLimit: number;
-  /** Số lần LẶP lại chuỗi tool call giống hệt trước khi can thiệp
-   *  (2 nghĩa là lần gọi thứ 3 giống hệt sẽ bị chặn). */
+  /**
+   * Ngưỡng lặp của doom-loop breaker, tính theo "số lần LẶP lại" (lần xuất hiện
+   * thứ N+1). Cùng một ngưỡng dẫn ba tín hiệu với mức nghiêm trọng tăng dần:
+   *  - batch giống hệt N+1 lần LIÊN TIẾP;
+   *  - cùng một tool+args N+2 lần rải rác trong run;
+   *  - chu kỳ 2–4 bước lặp lại.
+   */
   doomLoopRepeats: number;
   /** Còn bao nhiêu bước trước khi hết budget thì inject wrap-up reminder. */
   wrapUpStepsBeforeEnd: number;
@@ -280,13 +341,52 @@ export function tokenNoProgressRule(opts: GuardrailOptions): GuardrailRule {
   };
 }
 
+/**
+ * Model (đặc biệt model local) hay MỞ ĐẦU bằng lời hứa hành động rồi dừng:
+ * "Tôi sẽ tìm hiểu những tính năng mới nhất của Angular cho bạn." — không tool
+ * call, không sửa file. Log thật (session 20261126-141447-93ef) cho thấy run kết
+ * thúc steps=1 llmCalls=1 success=true với chính câu hứa đó làm summary ⇒ user
+ * "không thấy kết quả cuối cùng".
+ *
+ * Dấu hiệu phải HẸP để không biến câu trả lời thật thành nudge: message ngắn,
+ * có marker ý định ("tôi sẽ / để tôi / i will / let me") VÀ động từ tra cứu
+ * (tìm/đọc/check/fetch…), hoặc kết thúc bằng ":" / "…" (mở đầu cho việc chưa làm).
+ */
+export function announcesIntention(text: string): boolean {
+  const t = (text || "").trim();
+  if (!t || t.length > 400) return false;
+  if (/[:…]\s*$/.test(t)) return true;
+  // \b ASCII fail với tiếng Việt ("sẽ" kết thúc bằng ẽ, "đọc" bắt đầu bằng đ —
+  // không phải word-char ⇒ không có boundary). Dùng boundary Unicode.
+  const B = "(?<![\\p{L}\\p{N}\\p{M}])";
+  const E = "(?![\\p{L}\\p{N}\\p{M}])";
+  const intends = new RegExp(`${B}(i\\s+will|i'?ll|let\\s+me|i\\s+am\\s+going\\s+to|để\\s+tôi|tôi\\s+sẽ|mình\\s+sẽ|chúng\\s+ta\\s+sẽ)${E}`, "iu");
+  const acts = new RegExp(`${B}(find|look|check|search|read|fetch|investigate|explore|inspect|gather|tìm|kiểm tra|xem|đọc|tra cứu|tổng hợp)${E}`, "iu");
+  return intends.test(t) && acts.test(t);
+}
+
 /** Nudge: trả lời text thường (không claim, không hết streak) → nhắc tiếp tục làm việc. */
-const continueNudgeRule: GuardrailRule = {  name: "continue-nudge",
+const continueNudgeRule: GuardrailRule = {
+  name: "continue-nudge",
   description: "tool-less step that neither claims completion nor ends the run — nudge the agent to act",
   evaluate(ctx) {
     if (ctx.hasToolCalls) return null;
     if (ctx.chatDone) return null;
     if (claimsCompletion(ctx.text)) return null; // completion-claim rule phụ trách
+    // Lời hứa hành động chưa thực hiện ⇒ chưa phải lượt chat: nhắc gọi tool
+    // ngay. text-only-streak vẫn chặn run nếu model chỉ nói tiếp lần nữa.
+    if (announcesIntention(ctx.text)) {
+      return {
+        action: {
+          kind: "inject",
+          reminder:
+            `You announced an intention but this step used no tools. Do it now with the actual tool call ` +
+            `(read/grep/web_fetch/run_command) — a promise to look something up is not an answer. ` +
+            `If you already have the answer, give it and end with ${CHAT_DONE_MARKER} on its own last line.`,
+        },
+        reason: "announced an intention without acting on it",
+      };
+    }
     // P0-8: text-only + không sửa file + không có plan mở ⇒ đây là LƯỢT CHAT.
     // Finish ngay với chính text làm summary — trước đây rule này inject nudge
     // ⇒ thêm 1 LLM call ~14,5k token mỗi câu chào (đo: call 2 in=14.569, chỉ
@@ -330,25 +430,196 @@ const continueNudgeRule: GuardrailRule = {  name: "continue-nudge",
 };
 
 /**
- * Doom-loop breaker: chuỗi tool call giống hệt nhau lặp lại quá ngưỡng →
- * can thiệp bằng lời nhắc đổi chiến lược (model hiếm khi tự thoát khỏi loop;
- * run không người trông sẽ đốt sạch step budget).
+ * Doom-loop breaker. Ba tín hiệu, từ hẹp đến rộng (model local lặp theo CHU KỲ
+ * chứ hiếm khi lặp y hệt một batch liên tiếp — detector cũ chỉ có tín hiệu #1 nên
+ * phần lớn loop lọt lưới, run đốt sạch 40 step mà không ra kết quả):
+ *
+ *  1. streak   — cùng một batch giống hệt N+1 lần LIÊN TIẾP;
+ *  2. scattered — cùng một tool+args xuất hiện N+2 lần rải rác trong run
+ *                 (xen giữa là các lệnh khác — đúng pattern "gọi lệnh → phân
+ *                  tích → fetch → gọi lệnh…");
+ *  3. cycle    — chuỗi batch có kỳ (chu kỳ 2–4 bước lặp lại 2 vòng trở lên).
+ *
+ * Bậc thang: can thiệp đầu tiên inject reminder; model vẫn lặp ⇒ finish ngay với
+ * summary, trả kết quả cho user thay vì treo đến hết budget.
  */
 export function doomLoopRule(opts: GuardrailOptions): GuardrailRule {
+  const scatterLimit = Math.max(4, opts.doomLoopRepeats + 2);
   return {
     name: "doom-loop",
-    description: `intervene after ${opts.doomLoopRepeats + 1} identical consecutive tool-call batches`,
+    description:
+      `intervene on ${opts.doomLoopRepeats + 1} identical consecutive batches, the same read-only call ` +
+      `${scatterLimit}x anywhere in the run, or a repeated cycle of 2-${CYCLE_MAX_PERIOD} steps; end the run when it continues`,
     evaluate(ctx) {
       const t = ctx as GuardrailContext & TrackerState;
       if (!ctx.hasToolCalls) return null;
-      if (t.sigRepeat < opts.doomLoopRepeats) return null;
+
+      const streak = t.sigRepeat >= opts.doomLoopRepeats ? t.sigRepeat + 1 : 0;
+      const scattered = t.maxCallCount >= scatterLimit ? t.maxCallCount : 0;
+      const cycle = t.cycleCount >= 2 ? t.cycleCount : 0;
+      if (!streak && !scattered && !cycle) return null;
+
+      const why = streak
+        ? `identical tool-call batch repeated ${streak}x in a row`
+        : cycle
+          ? `cyclic pattern (period ${t.cyclePeriod} steps) repeated ${cycle}x`
+          : `the same read-only call ran ${t.maxCallCount}x across the run`;
+
+      // Sâu (quá ngưỡng nhiều) hoặc đã nhắc một lần rồi ⇒ dừng run. Kèm text cuối
+      // của assistant để user nhận được kết quả thật, không phải "reached max
+      // steps" — đó chính là triệu chứng "loop mãi không ra gì".
+      const severe =
+        t.sigRepeat >= opts.doomLoopRepeats + 1 || t.cycleCount >= 3 || t.maxCallCount >= scatterLimit + 2;
+      if (severe || t.loopInterventions >= 1) {
+        const tail = (ctx.text || "").trim().slice(0, 400);
+        return {
+          action: {
+            kind: "finish",
+            success: false,
+            summary:
+              `Stopped a repeated tool-call loop (${why}) — the agent was not making progress. ` +
+              (tail ? `Last answer before stopping:\n${tail}` : "Re-run with a narrower request if you still need this."),
+          },
+          reason: `${why}; ended the run (interventions=${t.loopInterventions})`,
+        };
+      }
       return {
         action: {
           kind: "inject",
           reminder:
-            "<system-reminder>You have made the identical tool call 3 times in a row. This is a loop: read the last output carefully, change your approach, or report the blocker in your final message. Do NOT repeat the same call again.</system-reminder>",
+            `<system-reminder>This is a loop: ${why}. You already have the information these calls return. ` +
+            `Do NOT repeat them. Either take a genuinely different action that changes files or gathers new facts, ` +
+            `or stop and reply with a final summary of what you know and what is blocking you.</system-reminder>`,
         },
-        reason: `identical tool-call batch repeated ${t.sigRepeat + 1}x`,
+        reason: why,
+      };
+    },
+  };
+}
+
+/** Chu kỳ dài nhất mà detector đi tìm (A→B→C→A→B→C = period 3). */
+const CYCLE_MAX_PERIOD = 4;
+/** Chu kỳ tối thiểu để xét cycle — period 1 đã thuộc detector streak. */
+const CYCLE_MIN_PERIOD = 2;
+
+/**
+ * Phát hiện tính tuần hoàn ở đuôi cửa sổ chữ ký: tồn tại p (2–4) sao cho khối p
+ * bước cuối lặp lại nguyên văn `repeats` lần liên tiếp. Khối phải có ít nhất hai
+ * chữ KHÁC nhau — block toàn một chữ ký là streak, detector streak lo.
+ */
+export function detectCycle(window: readonly string[]): { period: number; repeats: number } | null {
+  let best: { period: number; repeats: number } | null = null;
+  for (let p = CYCLE_MIN_PERIOD; p <= CYCLE_MAX_PERIOD; p++) {
+    if (window.length < p * CYCLE_MIN_PERIOD) break;
+    const tail = window.slice(window.length - p);
+    if (new Set(tail).size < 2) continue;
+    let repeats = 1;
+    for (let k = 2; k * p <= window.length; k++) {
+      const prev = window.slice(window.length - k * p, window.length - (k - 1) * p);
+      if (!prev.every((s, i) => s === tail[i])) break;
+      repeats++;
+    }
+    if (repeats >= 2 && (!best || repeats > best.repeats)) best = { period: p, repeats };
+  }
+  return best;
+}
+
+/** Số dòng chuẩn hoá tối thiểu để một output được xét là "có nội dung". */
+const NO_INFO_MIN_LINES = 5;
+/** Tỉ lệ dòng mới dưới mức này ⇒ bước này không dạy thêm gì cho agent. */
+const NO_INFO_NOVELTY = 0.15;
+/** Trần bộ nhớ của tập dòng đã thấy (run rất dài không phình vô hạn). */
+const INFO_LINE_CAP = 40_000;
+
+/**
+ * Dòng "thông tin" của một output: lowercase, collapse whitespace, bỏ số dòng
+ * đầu dòng (`12: code…`), bỏ dòng quá ngắn/quá dài (boilerplate, divider).
+ */
+export function informationLines(output: string): string[] {
+  const out: string[] = [];
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.replace(/^\s*\d+[:|)]\s?/, "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (line.length < 12 || line.length > 400) continue;
+    if (/^[-=*_.\s|]+$/.test(line)) continue;
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Cập nhật streak "không có thông tin mới". Tool biến đổi chạy thành công ⇒ thế
+ * giới đổi ⇒ reset (đó là tiến trình, dù output lặp). File mới sửa trong run ⇒
+ * reset một lần (false→true).
+ */
+function trackInformation(t: TrackerState, ctx: GuardrailContext, calls: readonly ToolCall[]): void {
+  const results = ctx.toolResults;
+  if (!results || results.size === 0) return;
+  const mutated = calls.some((tc) => !READ_ONLY_TOOLS.has(tc.name) && results.get(tc.id)?.ok);
+  if (mutated || (ctx.filesModified && !t.lastFilesModified)) {
+    t.lastFilesModified = ctx.filesModified;
+    t.noInfoStreak = 0;
+    return;
+  }
+  t.lastFilesModified = ctx.filesModified;
+
+  let fresh = 0;
+  let total = 0;
+  for (const r of results.values()) {
+    const stepLines = new Set(informationLines(r.output));
+    for (const line of stepLines) {
+      total++;
+      if (!t.infoLines.has(line)) {
+        fresh++;
+        if (t.infoLines.size < INFO_LINE_CAP) t.infoLines.add(line);
+      }
+    }
+  }
+  if (total < NO_INFO_MIN_LINES) return; // output quá bé: chưa đủ cơ sở
+  t.noInfoStreak = fresh / total < NO_INFO_NOVELTY ? t.noInfoStreak + 1 : 0;
+}
+
+/**
+ * No-new-information breaker — loop NGUY HIỂM NHẤT vì nó không lặp args.
+ *
+ * Log thật (`~/.scoder/sessions/20261126-141619-e507`): model fetch
+ * `angular.dev/what-new/angular-22-1 … -39`, mỗi URL một chữ ký khác nhau nên
+ * streak/cycle/scattered đều im lặng, nhưng cả 39 response là CÙNG một trang ⇒
+ * 5 phút và ~40 bước không thêm gì. Detector này đo thông tin, không đo lệnh.
+ */
+export function noNewInformationRule(opts: GuardrailOptions): GuardrailRule {
+  const injectAt = Math.max(3, opts.doomLoopRepeats + 1);
+  return {
+    name: "no-new-information",
+    description:
+      `end a run whose tool outputs keep repeating already-seen content — warn after ` +
+      `${injectAt} consecutive uninformative steps, stop after the next one`,
+    evaluate(ctx) {
+      const t = ctx as GuardrailContext & TrackerState;
+      if (!ctx.hasToolCalls) return null;
+      if (t.noInfoStreak < injectAt) return null;
+      const why = `${t.noInfoStreak} consecutive tool steps returned under ${Math.round(NO_INFO_NOVELTY * 100)}% new content`;
+      if (t.noInfoInterventions >= 1) {
+        const tail = (ctx.text || "").trim().slice(0, 400);
+        return {
+          action: {
+            kind: "finish",
+            success: false,
+            summary:
+              `Stopped: ${why} — the agent kept gathering the same information. ` +
+              (tail ? `Last answer before stopping:\n${tail}` : "Answer from what is already in the conversation."),
+          },
+          reason: `${why}; ended the run (interventions=${t.noInfoInterventions})`,
+        };
+      }
+      return {
+        action: {
+          kind: "inject",
+          reminder:
+            `<system-reminder>${why} — including different URLs/paths that return the SAME content. ` +
+            `More calls of this kind will not help. Stop collecting and answer with the information you ` +
+            `already have, or state exactly what is missing.</system-reminder>`,
+        },
+        reason: why,
       };
     },
   };
@@ -448,6 +719,7 @@ export function defaultGuardrailRules(opts: GuardrailOptions = DEFAULT_GUARDRAIL
     textOnlyStreakRule(opts),
     continueNudgeRule,
     doomLoopRule(opts),
+    noNewInformationRule(opts),
     errorLoopRule(opts),
     tokenNoProgressRule(opts),
     buildStopRule,
@@ -466,15 +738,7 @@ export function defaultGuardrailRules(opts: GuardrailOptions = DEFAULT_GUARDRAIL
 export class GuardrailEngine {
   private rules: GuardrailRule[];
   /** G1: per-run tracker — reset() khi bắt đầu run mới. */
-  private tracker: TrackerState = {
-    textOnlyStreak: 0,
-    lastCallSig: "",
-    sigRepeat: 0,
-    wrapUpInjected: false,
-    toolErrorSig: "",
-    toolErrorRepeat: 0,
-    lowTokenStreak: 0,
-  };
+  private tracker: TrackerState = freshTracker();
 
   constructor(
     rules?: GuardrailRule[],
@@ -485,15 +749,7 @@ export class GuardrailEngine {
 
   /** Reset tracker — gọi ở đầu mỗi run (per-run state, không rò rỉ giữa các run). */
   reset(): void {
-    this.tracker = {
-      textOnlyStreak: 0,
-      lastCallSig: "",
-      sigRepeat: 0,
-      wrapUpInjected: false,
-      toolErrorSig: "",
-      toolErrorRepeat: 0,
-      lowTokenStreak: 0,
-    };
+    this.tracker = freshTracker();
   }
 
   /** Steer batch được deliver — reset text-only allowance một lần cho cả batch. */
@@ -504,6 +760,19 @@ export class GuardrailEngine {
   /** Wrap-up reminder vừa được apply — chỉ inject một lần mỗi run. */
   markWrapUpInjected(): void {
     this.tracker.wrapUpInjected = true;
+  }
+
+  /**
+   * Doom-loop reminder vừa được inject — can thiệp lần sau sẽ finish thay vì nhắc
+   * tiếp. runLoop gọi khi áp decision inject của rule doom-loop.
+   */
+  markLoopIntervention(): void {
+    this.tracker.loopInterventions++;
+  }
+
+  /** No-new-information reminder vừa inject — lần vô sản tiếp theo sẽ finish. */
+  markNoInfoIntervention(): void {
+    this.tracker.noInfoInterventions++;
   }
 
   /** Đăng ký thêm rule (chạy sau các rule mặc định nếu thêm sau khi tạo). */
@@ -556,13 +825,31 @@ export class GuardrailEngine {
     const t = this.tracker;
     if (ctx.hasToolCalls) {
       t.textOnlyStreak = 0;
-      // Doom-loop: chữ ký chuỗi tool call so với bước trước.
-      const callSig = (ctx.message?.tool_calls ?? [])
-        .map((tc: ToolCall) => `${tc.name}:${tc.arguments}`)
-        .sort()
-        .join("|");
+      // Doom-loop: chữ ký batch ĐÃ CHUẨN HOÁ args. So với bước trước (streak) và
+      // tích luỹ cả run (scattered/cycle) — loop thật của model local đan xen
+      // nhiều tool khác nhau nên chỉ so liên tiếp là không đủ.
+      const calls = ctx.message?.tool_calls ?? [];
+      const callSig = batchSignature(calls);
       t.sigRepeat = callSig === t.lastCallSig ? t.sigRepeat + 1 : 0;
       t.lastCallSig = callSig;
+      t.sigWindow.push(callSig);
+      if (t.sigWindow.length > SIG_WINDOW) t.sigWindow.shift();
+      let maxCount = 0;
+      for (const tc of calls) {
+        // Chỉ tool đọc mới là bằng loop chắc chắn: `npm test`/`edit_file` lặp lại
+        // là vòng verify–fix hợp lệ, không được tính vào scattered counter.
+        if (!READ_ONLY_TOOLS.has(tc.name)) continue;
+        const key = callSignature(tc.name, tc.arguments);
+        const n = (t.callCounts.get(key) ?? 0) + 1;
+        t.callCounts.set(key, n);
+        if (n > maxCount) maxCount = n;
+      }
+      t.maxCallCount = maxCount;
+      const cycle = detectCycle(t.sigWindow);
+      t.cyclePeriod = cycle?.period ?? 0;
+      t.cycleCount = cycle?.repeats ?? 0;
+      // No-new-information: đếm dòng NỘI DUNG MỚI mà output của bước này mang lại.
+      trackInformation(t, ctx, calls);
     } else {
       t.textOnlyStreak++;
     }

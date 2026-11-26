@@ -1,7 +1,7 @@
 import type { AgentConfig } from "../config/config.js";
 import type { BuildResult } from "../workspace/build.js";
 import { trimHistory, summariseOutput, historyPressure, MAX_HISTORY_TOKENS, historyTokenBudget } from "../context/context.js";
-import { CHAT_DONE_MARKER } from "./guardrails.js";
+import { CHAT_DONE_MARKER, announcesIntention } from "./guardrails.js";
 import { parseDiagnostics, formatDiagnostics, classifyError } from "../workspace/diagnostics.js";
 import { shouldCompact, estimateTokens, extractSummaryInput, COMPACTION_INSTRUCTION, applyCompaction, type CompactionConfig } from "../context/compaction.js";
 import { redactSecrets, type ChatMessage, type ChatResult, type ToolSpec } from "../llm/llm.js";
@@ -19,6 +19,27 @@ import type { AgentEvent, AgentRunResult, UsageTotals } from "./types.js";
 
 /** P0-1: số bước tối thiểu giữa hai lần trim cơ học trong một run. */
 export const TRIM_COOLDOWN_STEPS = 3;
+
+/** Trần độ dài câu trả lời cứu nguy gắn vào summary. */
+const RESCUE_ANSWER_CAP = 3000;
+
+/**
+ * Một run không được kết thúc "rỗng". Model local hay đóng màn bằng đúng
+ * `<<CHAT_DONE>>` không nội dung, hoặc đốt hết maxSteps — khi đó summary chỉ còn
+ * boilerplate và người dùng/agent cha (subagent) "không thấy kết quả". Đây là
+ * câu assistant thật sự gần nhất trong history: đủ dài, không phải marker,
+ * không phải lời hứa hành động ("Tôi sẽ tìm…").
+ */
+export function lastSubstantiveAnswer(messages: readonly ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const text = (m.content || "").split(CHAT_DONE_MARKER)[0].trim();
+    if (text.length < 80 || announcesIntention(text)) continue;
+    return text.slice(0, RESCUE_ANSWER_CAP);
+  }
+  return "";
+}
 
 /** Dependencies for the autonomous loop. Agent owns state; this module preserves its order of effects. */
 export interface RunLoopRuntime {
@@ -326,6 +347,8 @@ export async function runAgentLoop(
         const a = d.action;
         if (a.kind === "inject") {
           if (d.rule === "wrap-up") runtime.guardrails.markWrapUpInjected(); // chỉ inject một lần / run
+          if (d.rule === "doom-loop") runtime.guardrails.markLoopIntervention(); // lần lặp sau ⇒ finish
+          if (d.rule === "no-new-information") runtime.guardrails.markNoInfoIntervention();
           reminders.push(a.reminder);
           continue;
         }
@@ -376,7 +399,14 @@ export async function runAgentLoop(
           }
           for (const r of reminders) runtime.messages.push({ role: "user", content: r });
           if (doTrim) applyTrim(safeTrimBudget, true);
-          return runtime.finish(a.success, steps, buildCmd, a.summary, a.chatOnly ?? false);
+          // chat-done với marker trần (model không viết gì thêm): summary boilerplate
+          // ⇒ cứu câu trả lời thật gần nhất khỏi history (subagent sống bằng nó).
+          let finalSummary = a.summary;
+          if (finalSummary === "Conversation turn complete.") {
+            const rescued = lastSubstantiveAnswer(runtime.messages);
+            if (rescued) finalSummary = rescued;
+          }
+          return runtime.finish(a.success, steps, buildCmd, finalSummary, a.chatOnly ?? false);
         }
       }
       for (const r of reminders) runtime.messages.push({ role: "user", content: r });
@@ -443,5 +473,11 @@ export async function runAgentLoop(
     // Max steps reached or aborted
     const reason = runtime.aborted ? "interrupted by user (SIGINT)" : `reached max steps (${runtime.config.maxSteps})`;
     runtime.saveSession(steps, buildCmd, lastBuild, true); // terminal → force projection write
-    return runtime.finish(false, steps, buildCmd, `Agent stopped: ${reason}`);
+    // Đừng trả về mỗi "Agent stopped": người dùng và agent cha vẫn cần những gì
+    // run đã tìm được. Kèm câu trả lời thật gần nhất nếu history có.
+    const rescued = lastSubstantiveAnswer(runtime.messages);
+    const stopSummary = rescued
+      ? `Agent stopped: ${reason}. Best available answer from the run:\n\n${rescued}`
+      : `Agent stopped: ${reason}`;
+    return runtime.finish(false, steps, buildCmd, stopSummary);
   }

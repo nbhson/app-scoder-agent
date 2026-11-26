@@ -323,7 +323,7 @@ For multi-step tasks the agent writes a live plan with `write_todos` (`[x]` comp
 
 ## Guardrails (Guardrail Engine)
 
-The autonomous loop is wrapped by a configurable rule engine (`src/guardrails.ts`) — every rule is a pure function over the step context that returns a decision (`inject` a reminder / `finish` / `verify-build` / `trim`), and every triggered decision is logged to the JSONL log (`type: "guardrail"`) and surfaced as an `AgentEvent` for frontends:
+The autonomous loop is wrapped by a configurable rule engine (`src/agent/guardrails.ts`) — every rule is a pure function over the step context that returns a decision (`inject` a reminder / `finish` / `verify-build` / `trim`), and every triggered decision is logged to the JSONL log (`type: "guardrail"`) and surfaced as an `AgentEvent` for frontends:
 
 | Rule | What it does |
 |---|---|
@@ -331,12 +331,15 @@ The autonomous loop is wrapped by a configurable rule engine (`src/guardrails.ts
 | `chat-done` | Ends conversational turns (marker-based) without a build |
 | `completion-claim` | Never trusts "the task is complete" — forces an independent build verification |
 | `text-only-streak` | Ends the run after 2 consecutive tool-less steps with no file changes (the "chào" failure mode) |
-| `continue-nudge` | Nudges plain-text answers back to work (no build demand when no files changed — suggests the `<<CHAT_DONE>>` exit instead) |
-| `doom-loop` | Intervenes after 3× identical consecutive tool-call batches |
+| `continue-nudge` | Nudges plain-text answers back to work (no build demand when no files changed — suggests the `<<CHAT_DONE>>` exit instead); an announced intention without a tool call ("I'll look that up…") is nudged to act, never accepted as an answer |
+| `doom-loop` | Intervenes on repeated tool calls — identical consecutive batches, a cyclic pattern (period 2–4), or the same read-only call scattered through the run; ends the run with the last answer if it continues |
+| `no-new-information` | Ends runs that keep gathering the **same content** through different calls (URL counting `/page-2`, `/page-3`…): under 15% unseen output lines for N consecutive steps |
 | `build-stop` | Ends the run when the exact build command succeeds; re-verifies on failure |
 | `history-trim` | Char-budget history trimming with whole-turn drops + old-tool-result pruning |
 
 Thresholds are configurable via `GuardrailOptions` (`textOnlyStreakLimit`, `doomLoopRepeats`, `wrapUpStepsBeforeEnd`) without touching the loop, and custom rules can be added via `GuardrailEngine.register()`.
+
+Alongside the rules, read-only tool calls are deduplicated per run (`src/agent/loop-cache.ts`): repeating `read_file`/`grep`/`web_fetch` with the same normalized arguments replays the cached result instead of executing again, and the cache is dropped by any mutating tool. See `docs/guardrails.md`.
 
 ## Usage & cost metrics
 

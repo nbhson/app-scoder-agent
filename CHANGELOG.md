@@ -3,6 +3,66 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Doom-loop detection now catches cyclic repetition, not just identical streaks.**
+  The breaker compared the raw `name:arguments` string of consecutive batches, so
+  models that repeat work as a cycle (`run command → analyse → grep → web fetch → …`)
+  never tripped it, and a model that re-serialized the same JSON with different key
+  order or whitespace (`{"a":1,"b":2}` vs `{ "b" : 2, "a" : 1 }`) was counted as new
+  work. Local models (observed on `ornith-1.5:35b`) burned the whole `maxSteps`
+  budget this way and the run ended with `reached max steps (40)` and no answer.
+  `doomLoopRule` now watches three signals off a normalized call signature
+  (`agent/tool-signature.ts`): consecutive streak, a period-2..4 cycle in a sliding
+  window, and the same read-only call scattered across the run. First hit injects a
+  reminder; a second hit (or a pattern far past the threshold) ends the run with the
+  model's last answer in the summary. Mutating calls (`run_command`, `edit_file`, …)
+  are excluded from the scattered counter so verify–fix loops stay legal.
+- **Repeated read-only tool calls no longer re-execute.** `agent/loop-cache.ts` keeps
+  successful read results per run; the second identical `read_file`/`grep`/`web_fetch`
+  replays the cached output prefixed with `[DUPLICATE CALL … already ran at step N]`
+  instead of paying the fetch/index cost again. The cache is dropped whenever a
+  mutating tool runs.
+- **The content-repeat loop is caught (`no-new-information` rule).** A real session
+  log (`~/.scoder/sessions/20261126-141619-e507`) showed the model fetching
+  `angular.dev/what-new/angular-22-1 … -39` — every call signature unique, every
+  response the **same page**: ~40 steps and 5 minutes teaching the agent nothing,
+  invisible to all signature-based detectors. The new rule measures output novelty
+  (<15% unseen lines per step): N uninformative steps inject a reminder, the next
+  ends the run with the model's last answer. Successful mutating tools reset it.
+- **Tool-less intention steps are nudged, not finished.** `ornith-1.5:35b` opens
+  turns with *"Tôi sẽ tìm hiểu những tính năng mới nhất…"* and emits nothing else;
+  the chat-turn logic accepted that promise as a complete answer (`steps=1,
+  success=true`). `continue-nudge` now recognizes an un-executed intention
+  (Vietnamese/English markers, Unicode-safe word boundaries) and demands the actual
+  tool call; genuine chat replies are untouched.
+- **Runs never end without a result (`lastSubstantiveAnswer`).** Session logs show
+  subagents returning exactly `Conversation turn complete.` or
+  `Agent stopped: reached max steps (20)` to their parent — the parent had nothing
+  to work with. A bare `<<CHAT_DONE>>` finish and the max-steps/interrupt paths now
+  backfill the summary with the last substantive assistant answer from history.
+
+### Tools
+
+- `scripts/replay-guardrails.mjs` — replays every run in `~/.scoder/sessions`
+  through the current engine and reports which step each breaker would cut, so
+  loop fixes are validated against production logs instead of fixtures.
+  Replay evidence: the incrementing-URL loop stops at step 7, the identical
+  `run_command` streak at step 8, legitimate runs (7 and 12 steps) untouched.
+
+### Tests
+
+- 25 new cases in `test/guardrails-loop.test.mjs` (signature normalization, cycle
+  detection, the three signals, escalation to finish, legal verify–fix loops) and a
+  new eval scenario `test/eval/doom-cycle.mjs` (cyclic loop is caught, run stops
+  early, duplicate read served from cache).
+- 9 cases in `test/guardrails-noinfo.test.mjs` (content-repeat detection, intention
+  recognition — including Vietnamese diacritics — and `lastSubstantiveAnswer`) plus
+  eval scenarios `test/eval/no-new-info.mjs` and `test/eval/intention-nudge.mjs`.
+  `npm run eval`: 16/16 scenarios.
+
 ## [1.5.1] — 2026-11-25
 
 Patch on top of 1.5.0: mermaid flowcharts with subgraphs stop degrading to
