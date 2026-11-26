@@ -3,7 +3,12 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.6.0] — 2026-11-26
+
+Doom-loop hardening: every repetition shape a local model was observed using
+in production logs (cycles, key-order variants, URL-counting with identical
+content, bare "I'll look it up…" turns) is now caught, and no run — parent or
+subagent — ends without a real answer.
 
 ### Fixed
 
