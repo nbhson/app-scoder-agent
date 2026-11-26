@@ -3,6 +3,23 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [1.6.1] — 2026-11-26
+
+Version bump for the TUI diagram fixes that were folded into 1.6.0 after its
+release commit (`6008b6f`), so the fix ships under its own version instead of a
+moved tag. **No new code changes**: the artifact is byte-identical to 1.6.0 —
+`dist/tui/markdown/graph.js` and `dist/tui/markdown/diagram.js` diff clean
+against the published npm 1.6.0 tarball.
+
+### Fixed
+
+- Mermaid flowcharts that collapsed to the `◈ diagram preview` summary box now
+  render (star graphs fit the 40-row budget via a compact sibling gap; the
+  widest-label cap grew 22 → 26 so code-ish labels stay in layered mode), and
+  the markdown snapshot suite is CRLF-safe on Windows checkouts — the two
+  layout dead-ends and the `core.autocrlf` snapshot breakage are described in
+  detail under [1.6.0].
+
 ## [1.6.0] — 2026-11-26
 
 Doom-loop hardening: every repetition shape a local model was observed using
