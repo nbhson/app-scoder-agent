@@ -317,15 +317,19 @@ function diagramSlug(source: string[]): string {
  * Save the diagram source so the export hint becomes a command that actually
  * runs. Idempotent per source and silent on failure — rendering must never
  * break because the filesystem did. `.scoder/` is gitignored.
+ * The hint path is POSIX-joined on purpose: it is a DISPLAYED shell command,
+ * forward slashes work in cmd/PowerShell/bash alike, and the snapshots stay
+ * platform-independent.
  */
 function exportDiagram(source: string[]): string | null {
+  const rel = `.scoder/diagrams/${diagramSlug(source)}.mmd`;
   const path = join(".scoder", "diagrams", `${diagramSlug(source)}.mmd`);
-  if (exported.has(path)) return path;
+  if (exported.has(path)) return rel;
   try {
     mkdirSync(join(".scoder", "diagrams"), { recursive: true });
     writeFileSync(path, `${source.join("\n")}\n`, "utf8");
     exported.add(path);
-    return path;
+    return rel;
   } catch {
     return null;
   }

@@ -41,7 +41,11 @@ const STRIP_BAND = 2;   // rows between strip rows — holds the wrap connector
 const MAX_NODES = 80;
 const MAX_EDGES = 200;
 /** Label width caps, widest first: the first one that fits the pane wins. */
-const LAYERED_CAPS = [22, 16, 12, 10];
+/** Label width caps, widest first: the first one that fits the pane wins.
+ *  26 lets code-ish labels (`RumApmTrackingService`, `getPageRoutedDetail()`)
+ *  keep their longest word intact — below that the layered layout refuses and
+ *  the strip fallback silently drops every side edge of a branching graph. */
+const LAYERED_CAPS = [26, 22, 16, 12, 10];
 const STRIP_CAPS = [26, 20, 14, 10];
 /** Height budget for a drawn graph — anything taller degrades to the summary. */
 export const MAX_GRAPH_ROWS = 40;
@@ -763,6 +767,8 @@ interface LayoutOpts {
   cap: number;
   /** Layered only: routing rows between ranks (default BAND). */
   band?: number;
+  /** Layered only: cross-axis gap between siblings (default GAP; 1 = compact). */
+  gap?: number;
 }
 
 /**
@@ -772,6 +778,7 @@ interface LayoutOpts {
  */
 function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
   const band = opts.band ?? BAND;
+  const gap = opts.gap ?? GAP;
   const rankVertical = g.direction !== "LR" && g.direction !== "RL";
   const flip = g.direction === "BT" || g.direction === "RL";
   const graph: FlowGraph = flip
@@ -793,7 +800,7 @@ function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
   const crossOf = (id: string): number => (rankVertical ? sizes.get(id)!.w : sizes.get(id)!.h);
   const rankOf = (id: string): number => (rankVertical ? sizes.get(id)!.h : sizes.get(id)!.w);
 
-  const layerCross = layers.map((L) => L.reduce((s, id) => s + crossOf(id), 0) + GAP * (L.length - 1));
+  const layerCross = layers.map((L) => L.reduce((s, id) => s + crossOf(id), 0) + gap * (L.length - 1));
   const innerCross = layerCross.reduce((m, v) => Math.max(m, v), 0);
   // Side gutters: a long edge that has to skip a layer detours through them
   // instead of being dropped (see the Z-route candidates in `routeEdge`).
@@ -819,7 +826,7 @@ function layeredLayout(g: FlowGraph, opts: LayoutOpts): Raster | null {
         cross1: c + cr,
         crossMid: c + Math.floor(cr / 2),
       });
-      c += cr + GAP;
+      c += cr + gap;
     }
     rank += L.reduce((max, id) => Math.max(max, rankOf(id)), 0) + band;
   });
@@ -1238,7 +1245,11 @@ const CACHE_MAX = 24;
 function layeredFits(graph: FlowGraph, width: number, maxRows: number): Raster | null {
   for (const cap of LAYERED_CAPS) {
     for (const band of [BAND, 2, 1]) {
-      const raster = layeredLayout(graph, { width, maxRows, cap, band });
+      let raster = layeredLayout(graph, { width, maxRows, cap, band });
+      // Star/fan-out graphs overflow the HEIGHT by a few rows (8 leaves × 3 +
+      // gaps). One row between siblings still leaves every edge lane its own
+      // middle row — try the compact cross-gap before giving up.
+      if (!raster) raster = layeredLayout(graph, { width, maxRows, cap, band, gap: 1 });
       if (raster) return raster;
     }
   }

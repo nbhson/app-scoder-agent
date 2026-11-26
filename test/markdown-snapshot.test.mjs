@@ -72,7 +72,10 @@ describe("markdown snapshots", () => {
     const name = fixture.replace(/\.md$/, "");
     for (const width of WIDTHS) {
       it(`${name} @ ${width}c`, async () => {
-        const text = readFileSync(join(FIXTURES, fixture), "utf8");
+        // Normalize CRLF: fixtures/snapshots are LF in git, but core.autocrlf
+        // checkouts on Windows would otherwise (a) change the diagram slug
+        // (its hash covers the source lines) and (b) mismatch the snapshot.
+        const text = readFileSync(join(FIXTURES, fixture), "utf8").replace(/\r\n/g, "\n");
         const out = await renderMarkdown(text, width);
 
         // Invariant: no visible line overflows the pane width.
@@ -89,7 +92,7 @@ describe("markdown snapshots", () => {
           if (!UPDATE) assert.fail(`snapshot created: ${snapPath} — review & re-run`);
           return;
         }
-        assert.equal(out + "\n", readFileSync(snapPath, "utf8"), `snapshot mismatch: ${snapPath} (regenerate with UPDATE_SNAPSHOTS=1)`);
+        assert.equal(out + "\n", readFileSync(snapPath, "utf8").replace(/\r\n/g, "\n"), `snapshot mismatch: ${snapPath} (regenerate with UPDATE_SNAPSHOTS=1)`);
       });
     }
   }

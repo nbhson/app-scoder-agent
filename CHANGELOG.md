@@ -8,7 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
 Doom-loop hardening: every repetition shape a local model was observed using
 in production logs (cycles, key-order variants, URL-counting with identical
 content, bare "I'll look it up…" turns) is now caught, and no run — parent or
-subagent — ends without a real answer.
+subagent — ends without a real answer. Plus: mermaid flowcharts that used to
+degrade to the summary box now render, and the markdown snapshot suite passes
+on Windows checkouts.
 
 ### Fixed
 
@@ -43,6 +45,19 @@ subagent — ends without a real answer.
   success=true`). `continue-nudge` now recognizes an un-executed intention
   (Vietnamese/English markers, Unicode-safe word boundaries) and demands the actual
   tool call; genuine chat replies are untouched.
+- **Mermaid flowcharts in the TUI no longer collapse to the summary box.** A real
+  session (`horizon2-ui` page map: 1 hub → 8 leaves, `flowchart LR`, 9 nodes) fell
+  through every layout: layered needed 42 rows for its 40-row budget, and the strip
+  fallback refuses star graphs. Layered layout now tries a compact sibling gap
+  (1 row, edge lanes stay conflict-free) before giving up, and the widest label cap
+  grew 22 → 26 so code-ish labels (`RumApmTrackingService`,
+  `getPageRoutedDetail()`) keep their longest word intact instead of dropping all
+  side edges in strip mode.
+- **Markdown snapshot suite is platform-independent again** (45/45 on Windows, was
+  0/45): fixtures and snapshots are read with CRLF normalized (`core.autocrlf`
+  checkouts changed the diagram slug — it hashes the source — and broke byte
+  comparison), and the export hint path is POSIX-joined like every other rendered
+  path (`-i .scoder/diagrams/…mmd` works in cmd, PowerShell and bash alike).
 - **Runs never end without a result (`lastSubstantiveAnswer`).** Session logs show
   subagents returning exactly `Conversation turn complete.` or
   `Agent stopped: reached max steps (20)` to their parent — the parent had nothing

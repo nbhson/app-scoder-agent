@@ -175,6 +175,32 @@ const BRANCHING_TALL = `flowchart TD
   E --> O[setTimeout, setInterval, I/O, UI events]
   F --> P[Promise.then, queueMicrotask, MutationObserver]`;
 
+// 1 hub / 8 leaves, `LR` — the exact shape from a production session
+// (ClientApp page-map). 8 boxes × 3 rows + 7 × GAP 2 + gutters = 42 > 40:
+// layered gave up, strip REFUSES a star (it would drop 7 of 8 edges), and the
+// user saw the summary box instead of the chart. The compact cross-gap
+// (siblings 1 row apart) must bring it inside the budget.
+const STAR_LR = `flowchart LR
+  A["Horizon<br/>(HOME_PAGE)"] --> B[Admin]
+  A --> C[Studies Tracker]
+  A --> D[Sites Tracker]
+  A --> E[FSA QC Tracker]
+  A --> F[Contracts Tracker]
+  A --> G[IPG Budget]
+  A --> H[Consent]
+  A --> I[IOD]`;
+
+// Code-ish labels (21-char single words) exceeded the widest layered cap (22 →
+// inner 18), so layered rejected the WHOLE graph on wordsFit and the strip
+// fallback silently dropped every side edge of the branch/merge.
+const LONG_WORDS = `flowchart TD
+  A[NavigationEnd event] --> B[getPageRoutedDetail()]
+  B --> C[RumApmTrackingService]
+  C --> D[addLabels page_name]
+  C --> E[transaction.name]
+  D --> F[Send data Elastic]
+  E --> F`;
+
 function assertFits(raster, width, maxRows) {
   for (const segs of raster.rows) {
     const line = segs.map((s) => s.text).join("");
@@ -217,6 +243,31 @@ describe("renderFlowchart", () => {
     assert.equal(r.nodes, 16);
     assert.ok(r.edges >= 14, `only ${r.edges}/17 non-cycle edges drawn`);
     assertFits(r, 140, 40);
+  });
+  it("keeps a 1-to-8 star inside the row budget with a compact sibling gap", () => {
+    // Regression (production session, ClientApp page map): 8 leaves × 3 rows +
+    // 7 × GAP 2 + gutters = 42 > MAX_GRAPH_ROWS, layered gave up, strip refuses
+    // stars (would drop 7 of 8 edges) — the user saw the summary box instead.
+    const r = renderFlowchart(flow(STAR_LR), 72, 40);
+    assert.ok(r, "expected a graph, got fallback");
+    assert.equal(r.mode, "layered");
+    assert.equal(r.nodes, 9);
+    assert.equal(r.edges, 8, "every spoke of the star must be drawn");
+    assertFits(r, 72, 40);
+  });
+  it("keeps code-ish labels whole in layered instead of losing side edges", () => {
+    // Regression: `getPageRoutedDetail()` (21 chars) exceeded the old widest
+    // cap's inner width (22 → 18), layered rejected the whole graph on
+    // wordsFit, and the strip fallback silently dropped both side edges.
+    const r = renderFlowchart(flow(LONG_WORDS), 72, 40);
+    assert.ok(r, "expected a graph, got fallback");
+    assert.equal(r.mode, "layered");
+    assert.equal(r.edges, 6, "branch and merge edges must all be drawn");
+    assert.ok(!r.notes.some((n) => n.includes("not drawn")), "no silently dropped edges");
+    for (const label of ["getPageRoutedDetail()", "RumApmTrackingService"]) {
+      assert.ok(rowText(r).includes(label), `label missing: ${label}`);
+    }
+    assertFits(r, 72, 40);
   });
   it("never chain-lays-out a branching graph — it degrades to the summary", () => {
     for (const width of [40, 60, 80]) {
