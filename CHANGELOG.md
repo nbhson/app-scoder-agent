@@ -50,6 +50,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   confirmed" (4 sub-scenarios, self-contained because the harness drives one turn only).
 - `docs/guardrails.md`: "Degenerate answers" section with the production evidence.
 
+### Changed
+
+- **The bare `v` key no longer opens the full-screen viewer** (reported 2026-11-27: typing
+  a task that started with `v` on an empty line popped the viewer over the transcript
+  instead of accepting the character). The keybinding is removed from
+  `use-keybinds.ts` and `v` left `reservedKeysRef`, so `v` types normally as the first
+  character of a message and no popup can appear by itself. The escape hatch for
+  "… truncated" tool output / diffs is now the tui-only command **`/view`**
+  (alias `/viewer`), wired to the same `openViewer()` in `use-submit.ts` and listed in
+  `/help`, Tab completion, the palette, the help modal and `/shortcut`. `Enter`/`F` on the
+  LOG tab, `/log` and `/shortcut` keep opening the viewer as before.
+
 ## [1.6.1] — 2026-11-26
 
 Version bump for the TUI diagram fixes that were folded into 1.6.0 after its

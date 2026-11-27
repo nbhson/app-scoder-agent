@@ -111,6 +111,7 @@ scoder --no-save -y "run the migration"
 | `/mcp` | MCP servers & tools: `/mcp [server] [tool] [json\|text]` |
 | `/permission <mode>` | Switch permission mode — **Shift+P** cycles auto/ask/readonly in the TUI (input empty) |
 | `/shortcut` | All TUI keybindings in the full-screen viewer (TUI only; aliases `/shortcuts`, `/keys`) |
+| `/view` | Newest tool output / diff in the full-screen viewer — the escape hatch for "… truncated" transcript lines (TUI only; alias `/viewer`; formerly the `v` key) |
 
 Sessions are managed with `scoder list` / `scoder resume` (CLI) or the
 **Ctrl+S** session picker (TUI). Quit with `exit`, `quit`, or **Ctrl+C**.

@@ -41,7 +41,7 @@ export interface InputProps {
   maxRows?: number;
   /**
    * Single characters that GLOBAL keybinds consume when the input is empty
-   * (`v`, `?`, LOG-tab keys…). Ink fires every useInput handler, so without
+   * (`?`, LOG-tab keys…). Ink fires every useInput handler, so without
    * swallowing them here the reserved key would ALSO be typed into the line.
    */
   reservedRef?: React.MutableRefObject<Set<string>>;

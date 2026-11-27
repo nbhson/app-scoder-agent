@@ -22,7 +22,7 @@ describe("shortcutSections", () => {
 
   it("documents the headline bindings the app actually handles", () => {
     const all = shortcutSections().flatMap((s) => s.rows.map((r) => r.keys));
-    for (const k of ["Ctrl+P", "Ctrl+S", "Ctrl+B", "Ctrl+O", "Ctrl+T", "Shift+Tab", "Shift+P", "?", "v", "Esc", "Ctrl+C"]) {
+    for (const k of ["Ctrl+P", "Ctrl+S", "Ctrl+B", "Ctrl+O", "Ctrl+T", "Shift+Tab", "Shift+P", "?", "/view", "Esc", "Ctrl+C"]) {
       assert.ok(all.includes(k), `keybinding ${k} listed`);
     }
   });
@@ -61,5 +61,27 @@ describe("/shortcut command wiring", () => {
     assert.equal(parseSlashCommand("/shortcut")?.cmd, "/shortcut");
     assert.equal(parseSlashCommand("/shortcuts")?.cmd, "/shortcut");
     assert.equal(parseSlashCommand("/keys")?.cmd, "/shortcut");
+  });
+});
+
+// The viewer used to open on the bare `v` key. The key is gone (so "v" types
+// normally as the first character of a message); /view is the only way in.
+describe("/view command wiring", () => {
+  it("is a registered tui-only command", () => {
+    const def = resolveCommandDef("/view");
+    assert.ok(def, "resolves");
+    assert.equal(def.visibility, "tui-only");
+    assert.ok(SLASH_COMMANDS.some((c) => c.cmd === "/view"), "listed in help/completion");
+  });
+
+  it("parseSlashCommand canonicalizes the alias", () => {
+    assert.equal(parseSlashCommand("/view")?.cmd, "/view");
+    assert.equal(parseSlashCommand("/viewer")?.cmd, "/view");
+  });
+
+  it("the sheet advertises /view and no longer binds a bare v", () => {
+    const rows = shortcutSections().flatMap((s) => s.rows);
+    assert.ok(rows.some((r) => r.keys === "/view"), "/view documented");
+    assert.ok(!rows.some((r) => r.keys === "v"), "bare v is a typed character again");
   });
 });

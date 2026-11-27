@@ -34,8 +34,14 @@ export function useSubmit(deps: {
   openLogPager: (arg: string) => void;
   /** `/shortcut` (tui-only) — the keybinding cheat sheet in the full-screen viewer. */
   openShortcutsPager: () => void;
+  /**
+   * `/view` (tui-only) — newest tool output / diff in the viewer. This used to
+   * be the bare `v` key; the key is gone so "v" can be typed as the first
+   * character of a message (and the popup never appears on its own).
+   */
+  openViewer: () => void;
 }) {
-  const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager, openShortcutsPager } = deps;
+  const { cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode, tuiHost, agentRef, runningRef, stateRef, historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager, openShortcutsPager, openViewer } = deps;
   // Close any lingering streaming messages when the user sends a new query —
   // prevents green/dim text from the previous response appearing stale.
   // P-perf: immutable rewrite. Mutating `it.streaming = false` in place left
@@ -98,6 +104,13 @@ export function useSubmit(deps: {
           // narrow terminals where the sidebar tab is not reachable.
           writeInput("");
           openLogPager(slash.arg.trim());
+          return;
+        }
+        if (slash.cmd === "/view") {
+          // tui-only: lối thoát cho mọi "… truncated" trong transcript — từng là
+          // phím `v`, này về sau gọi tường minh để `v` gõ được bình thường.
+          writeInput("");
+          openViewer();
           return;
         }
         if (slash.cmd === "/shortcut") {

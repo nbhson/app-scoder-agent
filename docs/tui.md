@@ -196,15 +196,18 @@ height-aware sections, greedy-fit like the rest of the sidebar:
 The SESSION section also badges the live model `[auto]` / `[pin]`, and the
 tab bar shows `⤳` next to `router` while a RouterRuntime is active.
 
-### Full-screen Viewer (`v`)
-- Every "… truncated" in the transcript has an escape hatch: `v` opens the
+### Full-screen Viewer (`/view`)
+- Every "… truncated" in the transcript has an escape hatch: **`/view`** opens the
   newest tool output or diff in a full-height pane (the newest 30 documents
-  are stacked — `Tab`/`Shift+Tab` cycles through them)
+  are stacked — `Tab`/`Shift+Tab` cycles through them). It used to be the bare
+  `v` key; the key is gone so `v` can be typed as the first character of a
+  message and no popup can appear on its own
 - Diffs render with **word-level highlighting** (common prefix/suffix dimmed,
   only the changed words on a background — `w` toggles raw unified mode)
 - `y` saves the full text to `.scoder/views/<timestamp>.txt`
 - Wheel, `Up`/`Down` or `jk`, `PageUp`/`PageDown`, `Home`/`End` (`g`/`G`) scroll; `q`/`Esc` closes.
   While open, the viewer owns the keyboard — transcript keybinds don't leak in.
+- Other ways in: `Enter` / `F` on the LOG tab, `/log`, `/shortcut`
 
 ### Command Palette (`Ctrl+P`)
 - One search line over grouped actions: builtin + custom slash commands,
@@ -252,7 +255,6 @@ tab bar shows `⤳` next to `router` while a RouterRuntime is active.
 | `Ctrl+B` | Cycle sidebar tab OVERVIEW → ROUTER → HARNESS LOG (log keys live when input is empty — see Harness Log) |
 | `F` | On the LOG tab with empty input: dump the whole filtered log into the full-screen viewer |
 | `Ctrl+S` | Open session picker |
-| `v` | Full-screen viewer for the newest tool output / diff (only when the input is empty) |
 | `?` | Show help modal |
 | Mouse wheel | Scroll chat pane (or the open viewer) |
 
@@ -286,6 +288,7 @@ Same commands available in TUI and REPL:
 | `/init` | Create AGENTS.md template |
 | `/theme` | Switch palette |
 | `/log` | Harness log in the full-screen viewer: `/log [llm\|tool\|mcp\|sub\|sys]` (TUI only) |
+| `/view` | Newest tool output / diff in the full-screen viewer — the escape hatch for "… truncated" lines (TUI only; alias `/viewer`; formerly the `v` key) |
 | `/shortcut` | All keybindings in the full-screen viewer (TUI only; aliases `/shortcuts`, `/keys`) |
 | `/clear` | Reset conversation |
 | `/compact` | Summarize older history |

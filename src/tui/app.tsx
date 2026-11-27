@@ -163,14 +163,16 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   }, [state.status, state.summary, state.step, state.startedAt, state.endedAt, cfg.notify]);
   const inputRef = useRef(initialTask ?? "");
   // ── Reserved single-key shortcuts (P8 fix) ── Ink calls EVERY useInput
-  // handler for a keystroke, so a shortcut char (v, ?, log keys) would also
+  // handler for a keystroke, so a shortcut char (?, log keys) would also
   // land in the input unless Input itself swallows it. The set mirrors the
   // gating in use-keybinds: global chars always, log chars only on the LOG
   // tab — both only meaningful while the line is empty (checked in Input).
-  const reservedKeysRef = useRef<Set<string>>(new Set(["v", "?"]));
+  // `v` left this set when the viewer moved behind /view — so "v" types freely
+  // as the first character of a message again.
+  const reservedKeysRef = useRef<Set<string>>(new Set(["?"]));
   useEffect(() => {
     reservedKeysRef.current =
-      sidebarTab === "log" ? new Set(["v", "?", "j", "k", "f", "d", "y", "g", "G", "F"]) : new Set(["v", "?"]);
+      sidebarTab === "log" ? new Set(["?", "j", "k", "f", "d", "y", "g", "G", "F"]) : new Set(["?"]);
   }, [sidebarTab]);
   const writeInput = useCallback(
     (v: string) => {
@@ -268,7 +270,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   // ── A4 full-screen viewer ────────────────────────────────────────────────
   /** Stack of viewable documents (tool outputs + diffs), rebuilt from items. */
   const pagerItems = useMemo(() => pagerSources(state.items), [state.items]);
-  /** `v` (input empty) — open the newest tool output / diff full-screen. */
+  /** `/view` — open the newest tool output / diff full-screen (was `v`, input empty). */
   const openViewer = useCallback(() => {
     const items = stateRef.current.items;
     for (let i = items.length - 1; i >= 0; i--) {
@@ -394,7 +396,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
   const { submit } = useSubmit({
     cfg, pushNotice, writeInput, exit, update, queueEvent, skills, skillNames, permMode,
     tuiHost, agentRef, runningRef, stateRef,
-    historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager, openShortcutsPager,
+    historyRef, setScrollOffset, createAgent, bumpFrame, openLogPager, openShortcutsPager, openViewer,
   });
 
   /** Create (or return) the session agent — permission mode always current. */
@@ -456,7 +458,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
     scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen,
     setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef,
     setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, exit,
-    paletteOpen, helpOpen, pagerOpen: pagerAt != null || pagerLog != null, openViewer,
+    paletteOpen, helpOpen, pagerOpen: pagerAt != null || pagerLog != null,
     sidebarTab, logHandlers,
   });
 
@@ -695,7 +697,7 @@ export function TuiApp({ config, initialTask }: TuiAppProps): React.JSX.Element 
           />
           <HelpLine
             items={[
-              ["v", "view output/diff"],
+              ["/view", "output/diff fullscreen"],
               ["Shift+Tab", "agent build/plan/review"],
               ["Shift+P", "permission auto/ask/readonly"],
             ]}

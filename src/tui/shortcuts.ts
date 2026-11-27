@@ -35,7 +35,7 @@ export function shortcutSections(): ShortcutSection[] {
         { keys: "Ctrl+O", what: "select mode — releases the mouse for native drag-highlight + copy" },
         { keys: "Ctrl+B", what: "sidebar tab: OVERVIEW → ROUTER → HARNESS LOG" },
         { keys: "?", what: "help overlay (input empty)" },
-        { keys: "v", what: "open the newest tool output / diff in the viewer (input empty)" },
+        { keys: "/view", what: "command — newest tool output / diff in the viewer (was the bare v key)" },
         { keys: "Esc", what: "jump back to the live tail · press again to abort the run" },
         { keys: "Ctrl+C", what: "quit (press twice within 2 s while a run is active)" },
         { keys: "mouse wheel", what: "scroll the transcript (or the open viewer)" },
@@ -72,7 +72,7 @@ export function shortcutSections(): ShortcutSection[] {
       ],
     },
     {
-      title: "FULL-SCREEN VIEWER  (opened by v · Enter · F)",
+      title: "FULL-SCREEN VIEWER  (opened by /view · Enter · F)",
       rows: [
         { keys: "Up / Down or j k", what: "scroll one line" },
         { keys: "PageUp / PageDown", what: "page up / down" },

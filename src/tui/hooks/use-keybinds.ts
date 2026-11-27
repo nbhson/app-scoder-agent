@@ -30,8 +30,6 @@ export function useTuiKeybinds(deps: {
   helpOpen: boolean;
   /** A4: full-screen viewer open — it owns keys + wheel entirely. */
   pagerOpen: boolean;
-  /** `v` (input empty) — open the newest tool output / diff in the viewer. */
-  openViewer: () => void;
   /** P8/P2.2: sidebar tab + harness-log keyboard routing (see app.tsx logHandlers). */
   sidebarTab: "overview" | "router" | "log";
   logHandlers: {
@@ -50,7 +48,7 @@ export function useTuiKeybinds(deps: {
   };
   exit: () => void;
 }) {
-  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, paletteOpen, helpOpen, pagerOpen, openViewer, sidebarTab, logHandlers, exit } = deps;
+  const { scrollOffset, permPromptRef, setPermPrompt, agentRef, runningRef, sessionPickerOpen, setSessionPickerOpen, setPaletteOpen, inputRef, setHelpOpen, update, viewportRowsRef, setScrollOffset, selectMode, setSelectMode, cycleAgent, cyclePermission, paletteOpen, helpOpen, pagerOpen, sidebarTab, logHandlers, exit } = deps;
   // Esc aborts the running task (like SIGINT in the CLI); when scrolled up,
   // the first Esc returns to the bottom instead.
   const scrollOffsetRef = useRef(0);
@@ -117,14 +115,8 @@ export function useTuiKeybinds(deps: {
       if (key.return) return logHandlers.openEntry();
       if (_input === "y") return logHandlers.copyEntry();
       if (key.escape) return logHandlers.escChain();
-      // Anything else (⌃S/⌃T/⌃O/?/v/typing…) falls THROUGH to the global
+      // Anything else (⌃S/⌃T/⌃O/?/typing…) falls THROUGH to the global
       // handlers below — the log keys must not swallow the rest of the app.
-    }
-
-    // ── v (input empty): full-screen viewer for the newest output/diff ──
-    if (_input === "v" && !inputRef.current.trim()) {
-      openViewer();
-      return;
     }
 
     // ── Ctrl+S: open session picker (when not running) ──
