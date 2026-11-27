@@ -3,7 +3,15 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.7.0] — 2026-11-27
+
+Runs can no longer end with the session's stale greeting, an echo of an earlier
+answer or a half sentence: the working-memory goal is refreshed every turn (and
+on `--resume`), the new `stale-answer` guardrail retries once and otherwise fails
+the run while returning the best complete answer from history, and `finish_reason`
+is read from `choices[0]` so token-truncated replies are continued instead of
+confirmed. The full-screen viewer moved off the bare `v` key onto the `/view`
+command.
 
 ### Fixed
 
