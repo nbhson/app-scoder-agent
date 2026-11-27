@@ -36,6 +36,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versio
   run), log `step_truncated`. Ollama speaks the same OpenAI-compatible `/v1` surface, and
   the Anthropic adapter now carries `stop_reason` (`"max_tokens"`) on its non-stream path
   too — previously only the stream parser had it.
+- `scripts/check-docs.mjs` used `new URL("..", import.meta.url).pathname`, which on
+  Windows yields `/D:/…` → `resolve()` produced `D:\D:\…`, so `npm run docs:check` died on
+  `ENOENT` **without verifying a single path**. Now uses `fileURLToPath` (31 paths verified).
 
 ### Added
 

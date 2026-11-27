@@ -5,9 +5,13 @@
  * so docs cannot drift from the domain layout silently.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 
-const ROOT = resolve(new URL("..", import.meta.url).pathname);
+// fileURLToPath — `new URL(...).pathname` trên Windows trả "/D:/…" khiến
+// resolve() thành "D:\D:\…" và scandir chết ENOENT (script chạy được nhưng
+// không bao giờ assert gì trên Windows).
+const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DOCS = ["README.md", "docs", "src/README.md"];
 
 function* docFiles(entry) {
