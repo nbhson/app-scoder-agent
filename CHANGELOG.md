@@ -3,6 +3,50 @@
 All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A run could finish with the session's stale greeting instead of an answer.** The
+  working-memory ledger survives REPL turns by design, but its `goal` was written once
+  at session start; `run-loop` folds that ledger into the conversation every 6 steps, so
+  a session opened with "chào" kept being told `goal: chào` and answered a multi-step
+  `web_fetch` research run with… the greeting — logged as `success: true`
+  (`~/.scoder/sessions/20261127-104714-602d`, `20261127-105851-7fb8`). `setMemoryGoal()`
+  refreshes the goal per turn and per `/steer` while keeping decisions, files and
+  failures; `goalFromTask()` truncates from the **tail** so the newest request wins;
+  `memoryFromMessages()` ignores harness blocks (repo map, ledger fold, reminders) when it
+  reconstructs a goal; `--resume` takes the goal from history, not the archived task. The
+  injected block now also declares itself as context rather than a user request.
+- **New `stale-answer` guardrail: degenerate final text no longer counts as a result.**
+  A tool-less step whose text is a strict prefix of an earlier answer
+  (`restarted-answer`), an exact echo of an earlier answer after the run has already
+  called tools (`stale-echo`), or an unfinished sentence (`truncated`) gets **one**
+  retry reminder; a second consecutive hit **fails the run** and returns the best
+  complete answer from history instead of the junk. While a retry is pending, no other
+  rule may close the run with `success: true` — including `chat-done`, so a marker cannot
+  smuggle a cut-off sentence past the check (20261127-103715-f250 ended on `"Dưới"`,
+  3 output tokens, cached 28786/28806).
+- **`finish_reason` was read from the wrong place, so token-truncated replies looked
+  complete.** OpenAI-compatible servers report the stop reason in
+  `choices[0].finish_reason` (a sibling of `message`); the non-stream adapter only looked
+  inside `message`, so every `"length"` truncation came back as `"stop"` — and the loop
+  never consulted `stop_reason` anywhere anyway. It now reuses the H-09 continuation path:
+  push the partial answer, tell the model to continue exactly where it stopped (max 2× per
+  run), log `step_truncated`. Ollama speaks the same OpenAI-compatible `/v1` surface, and
+  the Anthropic adapter now carries `stop_reason` (`"max_tokens"`) on its non-stream path
+  too — previously only the stream parser had it.
+
+### Added
+
+- `test/guardrails-degenerate.test.mjs` (unit: helpers, rule ladder, ordering against
+  `text-only-streak`/`continue-nudge`, per-run isolation) and
+  `test/stale-goal.test.mjs` (integration through `Agent` with a scripted client: goal
+  refresh, echo detection, rescue summary, `stop_reason: "length"` continuation).
+- `test/eval/stale-goal-echo.mjs` — eval gate "a degenerate final answer is never
+  confirmed" (4 sub-scenarios, self-contained because the harness drives one turn only).
+- `docs/guardrails.md`: "Degenerate answers" section with the production evidence.
+
 ## [1.6.1] — 2026-11-26
 
 Version bump for the TUI diagram fixes that were folded into 1.6.0 after its

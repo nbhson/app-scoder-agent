@@ -13,7 +13,7 @@ import type { SnapshotManager } from "../workspace/snapshot.js";
 import type { JsonlLogger } from "../session/logger.js";
 import type { Reporter } from "../io/reporter.js";
 import { createGuardrailEngine } from "./guardrails.js";
-import { memoryIsMeaningful, formatWorkingMemory, scanDecisions, type WorkingMemory } from "../context/memory.js";
+import { memoryIsMeaningful, formatWorkingMemory, scanDecisions, setMemoryGoal, type WorkingMemory } from "../context/memory.js";
 import { READONLY_TOOLS, type ToolExecutor } from "./tool-executor.js";
 import type { AgentEvent, AgentRunResult, UsageTotals } from "./types.js";
 
@@ -140,6 +140,13 @@ export async function runAgentLoop(
     // P0-1: trim phá KV-cache từ điểm cắt trở về sau → cooldown giữa hai lần
     // cắt cơ học (trừ khi sắp finish, lúc đó cache không còn giá trị).
     let lastTrimStep = -Infinity;
+    // F2/F3: trạng thái phụ cho guardrail "đáp án degenerate" + continuation.
+    /** Số bước có tool call trong run này — phân biệt lượt chat thường với run lạc hướng. */
+    let toolsUsedThisRun = 0;
+    let priorAssistantTexts: string[] = [];
+    let rescuedAnswer = "";
+    /** F3: số lần đã xin model nói tiếp vì đáp án cắt do hết token output. */
+    let lengthContinuations = 0;
     const applyTrim = (budget: number, force = false): void => {
       const before = runtime.messages.length;
       const pressure = historyPressure(runtime.messages, budget);
@@ -166,6 +173,9 @@ export async function runAgentLoop(
         for (const s of steered) {
           runtime.messages.push({ role: "user", content: s });
           runtime.events.append({ type: "message.added", message: { role: "user", content: s } });
+          // F1: user đổi hướng GIỮA run ⇒ goal phải theo, nếu không lần fold bước 12
+          // đùn lại yêu cầu cũ và model trả lời cái đã cũ.
+          setMemoryGoal(runtime.memory, s);
         }
         // One allowance reset for the whole steering batch (opencode behavior)
         // — engine exposes a hook so the runLoop doesn't touch tracker state.
@@ -192,7 +202,12 @@ export async function runAgentLoop(
         // SIGINT during the LLM call — stop gracefully instead of crashing
         if (runtime.aborted) {
           return {
-            message: { role: "assistant" as const, content: null, tool_calls: undefined },
+            message: {
+              role: "assistant" as const,
+              content: null,
+              tool_calls: undefined,
+              stop_reason: undefined,
+            } satisfies ChatResult["message"],
             usage: undefined,
             incomplete: undefined,
           };
@@ -224,7 +239,39 @@ export async function runAgentLoop(
         text = text.split(CHAT_DONE_MARKER)[0].trim();
       }
 
+      // F3: `finish_reason: "length"` = model BỊ CẮT vì hết token output, không phải
+      // nó nói xong. Loop chưa từng đọc stop_reason (và adapter OpenAI-compatible còn
+      // đọc nhầm chỗ — xem llm.ts), nên đáp án cụt được nhận làm kết quả cuối
+      // (log: 20261127-103715-f250 dừng ở "Dưới", 3 token output).
+      // Cùng hướng xử lý với H-09: bảo model nói TIẾP, không bắt đầu lại.
+      const stoppedByLength = message.stop_reason === "length" || message.stop_reason === "max_tokens";
+      if (stoppedByLength && !hasToolCalls && !chatDone && lengthContinuations < 2 && steps < runtime.config.maxSteps) {
+        lengthContinuations++;
+        if (text.trim()) {
+          runtime.messages.push({ role: "assistant", content: text });
+          runtime.events.append({ type: "message.added", message: { role: "assistant", content: text } });
+        }
+        runtime.messages.push({
+          role: "user",
+          content:
+            "[system] Your reply was cut off at the output-token limit — that was not a finished answer. " +
+            "Continue EXACTLY where you stopped and finish answering the user's current request. " +
+            "Do not restart it from the beginning and do not greet the user again.",
+        });
+        runtime.events.append({ type: "retry.scheduled", reason: "finish_reason=length continuation" });
+        runtime.logger.log({ type: "step_truncated", step: steps, continuation: lengthContinuations });
+        runtime.reporter.warn("reply hit the output-token limit — asking the model to continue");
+        continue;
+      }
+
       if (!hasToolCalls) {
+        // F2: snapshot các câu assistant TRƯỚC bước này — rule stale-answer cần
+        // biết model đang lặp lại câu cũ hay chỉ đang trả lời mới.
+        priorAssistantTexts = runtime.messages
+          .filter((m) => m.role === "assistant" && typeof m.content === "string" && (m.content as string).trim().length > 0)
+          .map((m) => String(m.content))
+          .slice(-12);
+        rescuedAnswer = lastSubstantiveAnswer(runtime.messages);
         runtime.messages.push({ role: "assistant", content: text });
         runtime.events.append({ type: "message.added", message: { role: "assistant", content: text } });
         runtime.reporter.llm("agent", text);
@@ -237,6 +284,7 @@ export async function runAgentLoop(
         });
         runtime.events.append({ type: "message.added", message: runtime.messages[runtime.messages.length - 1] });
         if (typeof message.content === "string") scanDecisions(runtime.memory, message.content);
+        toolsUsedThisRun++;
       }
 
       // v2 (3.3): soft guardrail — editing without a plan gets a reminder.
@@ -338,17 +386,30 @@ export async function runAgentLoop(
         // P0-1: rule history-trim chỉ fires khi history THẬT SỰ vượt ngân sách
         // (trước đây nó fires mỗi bước → trim mỗi bước → mất KV-cache).
         historyPressure: historyPressure(runtime.messages, trimBudget),
+        // F2: ngữ cho stale-answer — chỉ có nghĩa ở bước text (bước tool không trả
+        // đáp án cuối), nên priorAssistantTexts rỗng khi hasToolCalls.
+        priorAssistantTexts: hasToolCalls ? [] : priorAssistantTexts,
+        toolsUsedThisRun,
+        lastSubstantiveAnswer: rescuedAnswer,
+        currentRequest: runtime.currentTask.split("\n").filter((l) => l.trim()).slice(-1)[0] ?? runtime.currentTask,
       });
 
       // Áp dụng decision: finish đầu tiên thắng; inject gom lại đẩy một lần.
       const reminders: string[] = [];
       let doTrim = false;
+      // F2: stale-answer xin retry (inject) ⇒ không cho rule khác đóng run bằng
+      // finish success:true trong cùng lượt. continue-nudge/chat-done đều coi text
+      // hiện tại là đáp án đúng — đúng cái lỗ hổng khiến câu chào cũ trở thành
+      // summary (log 20261127-105851-7fb8).
+      const staleRetry = decisions.some((d) => d.rule === "stale-answer" && d.action.kind === "inject");
       for (const d of decisions) {
         const a = d.action;
+        if (staleRetry && a.kind === "finish" && a.success) continue;
         if (a.kind === "inject") {
           if (d.rule === "wrap-up") runtime.guardrails.markWrapUpInjected(); // chỉ inject một lần / run
           if (d.rule === "doom-loop") runtime.guardrails.markLoopIntervention(); // lần lặp sau ⇒ finish
           if (d.rule === "no-new-information") runtime.guardrails.markNoInfoIntervention();
+          if (d.rule === "stale-answer") runtime.guardrails.markDegenerateIntervention(); // lần sau ⇒ fail
           reminders.push(a.reminder);
           continue;
         }

@@ -2,7 +2,7 @@ import type { AgentConfig } from "../config/config.js";
 import type { ChatMessage } from "../llm/llm.js";
 import type { BuildResult } from "../workspace/build.js";
 import { EventSessionStore, SessionStore, type SessionFile } from "../session/session.js";
-import { memoryFromMessages, type WorkingMemory } from "../context/memory.js";
+import { memoryFromMessages, setMemoryGoal, type WorkingMemory } from "../context/memory.js";
 import type {TodoItem} from "../tools/types.js";
 import type { UsageTotals } from "./types.js";
 
@@ -102,9 +102,13 @@ export function restoreSessionState(session: SessionFile): RestoredSessionState 
       }
     }
   }
+  // Goal là request HIỆN TẠI, không phải tin nhắn đầu phiên: ưu tiên quét history
+  // (lấy request thật gần nhất), chỉ fallback `session.task` khi history đã bị trim.
+  const memory = memoryFromMessages(messages);
+  if (!memory.goal) setMemoryGoal(memory, session.task ?? "");
   return {
     messages,
-    memory: memoryFromMessages(messages, session.task),
+    memory,
     plan,
     lastBuild: session.lastBuild
       ? { success: session.lastBuild.success, command: session.lastBuild.command, output: session.lastBuild.output }

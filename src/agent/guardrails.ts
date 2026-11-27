@@ -82,6 +82,18 @@ export interface GuardrailContext {
    * không kích hoạt (mặc định an toàn: không phá KV-cache).
    */
   historyPressure?: { tokens: number; budget: number; over: boolean };
+  /**
+   * F2: các câu assistant ĐÃ có trong history (cũ hơn bước hiện tại, cũ→mới) —
+   * nền để nhận ra model lặp lại nguyên văn/nửa đầu câu trả lời cũ thay vì đáp
+   * ứng yêu cầu hiện tại. Loop chỉ truyền khi bước này là ứng viên kết thúc.
+   */
+  priorAssistantTexts?: readonly string[];
+  /** F2: số bước có tool call đã chạy trong run này (0 ⇒ đây là lượt chat thường). */
+  toolsUsedThisRun?: number;
+  /** F2: đáp án đầy đủ tốt nhất tìm được trong history — dùng cho summary khi fail. */
+  lastSubstantiveAnswer?: string;
+  /** F2: yêu cầu hiện tại của user — đưa vào reminder để model biết phải trả lời gì. */
+  currentRequest?: string;
 }
 
 // ── Per-run tracker state (G1) — sống trong engine, không còn trong runLoop ──
@@ -126,11 +138,15 @@ interface TrackerState {
   lastFilesModified: boolean;
   /** Wrap-up reminder đã được inject trong run này chưa. */
   wrapUpInjected: boolean;
+  /** Số lần stale-answer đã can thiệp trong run (mỗi lần một bậc: nhắc → fail). */
+  degenerateInterventions: number;
   /** Signature "tool+error" gần nhất — error-loop tracking (H-12). */
   toolErrorSig: string;
   toolErrorRepeat: number;
   /** Số bước liên tiếp outputTokens < 20 (H-12). */
   lowTokenStreak: number;
+  /** F2: kết quả dò degenerate của bước này (null = ổn) — engine tính, rule đọc. */
+  degenerateInfo: DegenerateAnswer | null;
 }
 
 /** Tracker khởi tạo lại đầu mỗi run — mảng/Map phải là object MỚI, không dùng chung. */
@@ -153,6 +169,8 @@ function freshTracker(): TrackerState {
     toolErrorSig: "",
     toolErrorRepeat: 0,
     lowTokenStreak: 0,
+    degenerateInterventions: 0,
+    degenerateInfo: null,
   };
 }
 
@@ -220,12 +238,25 @@ export function wrapUpRule(opts: GuardrailOptions): GuardrailRule {
   };
 }
 
+/**
+ * F2: engine đã dò xong đáp án degenerate của bước này (tracker được spread vào
+ * ctx TRƯỚC khi rule chạy). Rule nào sắp `finish success:true` phải nhường quyền
+ * cho stale-answer, nếu không câu lạc hướng vẫn thoát với tư cách "kết quả".
+ */
+function degenerateHere(ctx: GuardrailContext): boolean {
+  return Boolean((ctx as GuardrailContext & TrackerState).degenerateInfo);
+}
+
 /** Lượt chat thuần (marker CHAT_DONE) → kết thúc, không cần build. */
 const chatDoneRule: GuardrailRule = {
   name: "chat-done",
   description: "assistant emitted the chat-done marker — end the conversational turn",
   evaluate(ctx) {
     if (!ctx.chatDone) return null;
+    // F2: marker đặt sau một câu cụt/echo KHÔNG được tha cho run — stale-answer
+    // đang giữ quyền xử lý (retry, rồi fail). Nếu không, model local chỉ cần viết
+    // "<<CHAT_DONE>>" sau câu lạc hướng là lọt rule.
+    if (degenerateHere(ctx)) return null;
     // Phòng vệ: làm sạch marker dù loop đã làm trước — summary không bao giờ
     // lộ marker nội bộ ra UI.
     const clean = ctx.text.split(CHAT_DONE_MARKER)[0].trim();
@@ -364,6 +395,138 @@ export function announcesIntention(text: string): boolean {
   const acts = new RegExp(`${B}(find|look|check|search|read|fetch|investigate|explore|inspect|gather|tìm|kiểm tra|xem|đọc|tra cứu|tổng hợp)${E}`, "iu");
   return intends.test(t) && acts.test(t);
 }
+
+// ── F2: đáp án degenerate (cắt giữa câu / lặp câu trả lời cũ) ───────────────
+//
+// Ba log thật cùng ngày (2026-11-27) cho thấy loop nhận VĂN BẢN CUỐI của model
+// làm kết quả mà không hề kiểm tra nó:
+//   - 20261127-104714-602d: lượt chạy sau các bước fetch mở đầu bằng ĐÚNG câu chào
+//     của lượt đầu phiên (ledger goal cũ — xem memory.ts) và được chốt success:true;
+//   - 20261127-105851-7fb8: câu chào cũ chen vào giữa run research 4 bước fetch;
+//   - 20261127-103715-f250: 3 lượt cuối cắt giữa câu, 93 → 26 → 4 ký tự ("Dưới",
+//     outputTokens: 3) — vẫn success:true.
+// Rule này cho model MỘT cơ hội sửa (inject); vẫn degenerate ⇒ báo THẤT BẠI kèm
+// đáp án tốt nhất tìm được, thay vì xác nhận câu trả lời rác.
+
+/** Chuẩn hoá câu trả lời để so sánh: bỏ marker chat, gộp whitespace. */
+export function normalizeAnswerText(text: string): string {
+  return (text || "").split(CHAT_DONE_MARKER)[0].replace(/\s+/g, " ").trim();
+}
+
+/** Dài quá trần này thì không xét "cụt" — đáp án thật thường dài hơn nhiều. */
+const TRUNCATED_MAX_CHARS = 120;
+
+/** Xác nhận ngắn hợp lệ (không dấu câu vẫn trọn nghĩa) — tránh đốt thêm 1 LLM call. */
+const ACK_WORDS = new Set([
+  "ok", "okay", "okie", "được", "duoc", "rồi", "roi", "xong", "done",
+  "vâng", "vang", "dạ", "da", "yes", "no", "không", "khong", "thanks", "cảm", "ơn",
+  "chốt", "chot", "tốt", "tot", "good", "hello", "hi", "chào", "chao", "xin",
+  "bạn", "ban", "ạ", "ơi", "vậy", "vay", "luôn", "luon", "nhe", "nhé",
+]);
+
+/** Kết thúc TRỌN câu: dấu chấm câu, cho phép hậu tố đóng ngoặc/trích dẫn. */
+const TERMINATED = /[.!?…]["'”’)\]]?\s*$/;
+
+/** True cho "Xong", "OK", "cảm ơn bạn"… — câu ngắn trọn nghĩa dù thiếu dấu chấm. */
+export function isAcknowledgement(text: string): boolean {
+  const words = normalizeAnswerText(text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(" ").filter(Boolean);
+  if (words.length === 0 || words.length > 3) return false;
+  return words.some((w) => ACK_WORDS.has(w));
+}
+
+/**
+ * True khi văn bản là một CÂU CHƯA XONG: ngắn, một dòng, không kết thúc bằng dấu
+ * câu, và có dấu hiệu mở (dưới 12 ký tự, hoặc kết thúc bằng ":", ";", "…", "-",
+ * dấu ngoặc mở). Điều kiện HẸP có chủ đích: "Mình là Scoder, agent lập trình" là
+ * đáp án hợp lệ, không được bị coi là cụt.
+ */
+export function looksTruncated(text: string): boolean {
+  const raw = (text || "").split(CHAT_DONE_MARKER)[0].trim();
+  if (!raw || raw.length > TRUNCATED_MAX_CHARS) return false;
+  if (/\n/.test(raw)) return false;
+  const t = normalizeAnswerText(raw);
+  if (TERMINATED.test(t)) return false;
+  if (isAcknowledgement(t)) return false;
+  return t.length <= 12 || /[:,;…\-([{]$/.test(t);
+}
+
+/** Loại degenerate + mô tả ngắn (đưa vào reason/log để đọc được JSONL). */
+export interface DegenerateAnswer {
+  kind: "restarted-answer" | "stale-echo" | "truncated";
+  detail: string;
+}
+
+/**
+ * Phát hiện "đáp án" thực ra là câu cũ bị viết lại dở:
+ *  - restarted-answer: văn bản là PREFIX chặt của một câu assistant trước đó
+ *      ("Dưới" ← "Dưới đây, mỗi câu 3 option…") — model khởi động lại câu cũ rồi chết;
+ *  - stale-echo: lặp NGUYÊN VĂN câu cũ khi run đã thực sự làm việc (6 bước fetch
+ *      rồi chào lại) — lặp y hệt ở lượt chat thường là HACK hợp lệ, không phạt;
+ *  - truncated: câu cụt giữa dòng.
+ */
+export function degenerateAnswer(
+  text: string,
+  priorAssistantTexts: readonly string[],
+  toolsUsedThisRun: number,
+): DegenerateAnswer | null {
+  const t = normalizeAnswerText(text);
+  if (!t) return null;
+  const priors = (priorAssistantTexts ?? []).map(normalizeAnswerText).filter((p) => p.length >= 4);
+  for (const p of priors) {
+    if (p.length > t.length + 4 && p.startsWith(t)) {
+      return { kind: "restarted-answer", detail: `lặp phần đầu câu trả lời cũ "${p.slice(0, 80)}…"` };
+    }
+  }
+  if (toolsUsedThisRun > 0) {
+    const dup = priors.find((p) => p === t);
+    if (dup) return { kind: "stale-echo", detail: `lặp nguyên văn câu trước đó ("${dup.slice(0, 80)}") dù run đã gọi ${toolsUsedThisRun} bước tool` };
+  }
+  if (looksTruncated(text)) return { kind: "truncated", detail: `chỉ ${t.length} ký tự và không kết thúc thành câu` };
+  return null;
+}
+
+const staleAnswerRule: GuardrailRule = {
+  name: "stale-answer",
+  description: "final text is cut off mid-sentence or repeats an earlier answer — retry once, then fail the run instead of confirming the junk",
+  evaluate(ctx) {
+    const t = ctx as GuardrailContext & TrackerState;
+    if (ctx.hasToolCalls) return null;
+    const bad = t.degenerateInfo;
+    if (!bad) return null;
+    const request = normalizeAnswerText(ctx.currentRequest ?? "").slice(0, 160);
+    const why = bad.kind === "stale-echo" ? "repeated an earlier message instead of answering"
+      : bad.kind === "restarted-answer" ? "restarted an old answer and stopped mid-sentence"
+        : "was cut off mid-sentence";
+
+    if (t.degenerateInterventions >= 1) {
+      const rescued = ctx.lastSubstantiveAnswer || "";
+      const junk = normalizeAnswerText(ctx.text).slice(0, 160);
+      return {
+        action: {
+          kind: "finish",
+          success: false,
+          summary:
+            `The model ended the run without answering the request (${why}${junk ? `: "${junk}"` : ""}).` +
+            (rescued
+              ? `\n\nBest complete answer from earlier in this session:\n${rescued}`
+              : `\n\nSend the message again — nothing complete was produced.`),
+        },
+        reason: `${bad.kind}: ${bad.detail}; still degenerate after one retry`,
+      };
+    }
+    return {
+      action: {
+        kind: "inject",
+        reminder:
+          `<system-reminder>Your last reply ${why}. Do NOT greet again and do NOT restart a previous answer. ` +
+          `Answer the user's CURRENT request${request ? ` ("${request}")` : ""} in full, using the work already done ` +
+          `in this run. When the answer is complete, end your reply with ${CHAT_DONE_MARKER} on its own last line.` +
+          `</system-reminder>`,
+      },
+      reason: `${bad.kind}: ${bad.detail}`,
+    };
+  },
+};
 
 /** Nudge: trả lời text thường (không claim, không hết streak) → nhắc tiếp tục làm việc. */
 const continueNudgeRule: GuardrailRule = {
@@ -711,6 +874,11 @@ const buildStopRule: GuardrailRule = {
 export function defaultGuardrailRules(opts: GuardrailOptions = DEFAULT_GUARDRAIL_OPTIONS): GuardrailRule[] {
   return [
     wrapUpRule(opts),
+    // F2 phải đứng TRƯỚC mọi rule finish: chat-done / text-only-streak /
+    // continue-nudge đều coi text cuối của model là đáp án đúng — chính chúng gây
+    // ra triệu chứng "run dừng bằng vài chữ". Có retry ở đây thì các rule kia còn
+    // nguyên vai trò cho câu trả lời hợp lệ.
+    staleAnswerRule,
     chatDoneRule,
     // G6: budget rule đứng sớm — vượt cap là finish ngay, trước mọi rule khác
     // (trừ wrap-up, vốn vô hại khi budget đã cạn).
@@ -773,6 +941,14 @@ export class GuardrailEngine {
   /** No-new-information reminder vừa inject — lần vô sản tiếp theo sẽ finish. */
   markNoInfoIntervention(): void {
     this.tracker.noInfoInterventions++;
+  }
+
+  /**
+   * stale-answer reminder vừa inject (F2) — model vẫn trả lời cụt/lặp ở bước sau
+   * ⇒ run kết thúc THẤT BẠI với đáp án tốt nhất, không xác nhận rác là kết quả.
+   */
+  markDegenerateIntervention(): void {
+    this.tracker.degenerateInterventions++;
   }
 
   /** Đăng ký thêm rule (chạy sau các rule mặc định nếu thêm sau khi tạo). */
@@ -867,6 +1043,11 @@ export class GuardrailEngine {
     // Token-no-progress (H-12).
     const outTok = ctx.outputTokensThisStep;
     t.lowTokenStreak = outTok !== undefined && outTok < 20 ? t.lowTokenStreak + 1 : 0;
+    // F2: dò đáp án degenerate NGAY ở engine — rule nhận bản COPY của tracker nên
+    // tự tính trong evaluate thì mutate không sống qua bước kế tiếp.
+    t.degenerateInfo = ctx.hasToolCalls
+      ? null
+      : degenerateAnswer(ctx.text, ctx.priorAssistantTexts ?? [], ctx.toolsUsedThisRun ?? 0);
   }
 }
 

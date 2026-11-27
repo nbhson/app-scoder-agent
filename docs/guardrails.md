@@ -7,6 +7,7 @@ The Guardrail Engine wraps the autonomous loop with safety and progress rules. E
 | Rule | Description |
 |------|-------------|
 | `wrap-up` | Inject reminder N steps before budget ends |
+| `stale-answer` | Final text is cut off mid-sentence or repeats an earlier answer — retry once, then **fail** the run instead of confirming the junk (see [Degenerate answers](#degenerate-answers-stale-answer--finish_reasonlength)) |
 | `chat-done` | End conversational turns (marker-based) without build |
 | `completion-claim` | Never trust "done" — force build verification |
 | `text-only-streak` | End after N consecutive tool-less steps |
@@ -33,6 +34,46 @@ Via `.scoderrc.json`:
   }
 }
 ```
+
+## Degenerate answers (`stale-answer` + `finish_reason=length`)
+
+Three production sessions (2026-11-27, `qwen3.6:35b` via Ollama) ended with the
+run **confirming junk as the result**:
+
+| Session | What happened |
+|---------|---------------|
+| `20261127-104714-602d` | `web_fetch` steps, then the turn **ended with the greeting from the first turn of the session** (`success: true`) |
+| `20261127-105851-7fb8` | same echo after 4 tool steps mid-research — the model only recovered by apologising |
+| `20261127-103715-f250` | last three turns cut themselves off: 93 → 26 → 4 characters (`"Dưới"`, `outputTokens: 3`, cached 28786/28806) |
+
+Root causes and fixes:
+
+1. **Stale working-memory goal** — the session ledger is kept across REPL turns by
+   design, but `goal` was set once at session start. `run-loop` folds the ledger
+   into the conversation every 6 steps, so the model read `goal: chào` and greeted
+   instead of answering. `setMemoryGoal()` now refreshes the goal per turn (and per
+   `/steer` message) while keeping decisions/files/failures; short follow-ups are
+   merged as `"<new> (follow-up to: <base>)"`. `goalFromTask()` keeps the **tail** of
+   an accumulated task string — the newest request is the one that matters. The
+   injected block also states that it is context, *not* a new user request.
+2. **`stale-answer` rule** — the engine classifies a tool-less step's text as
+   degenerate when it is a strict prefix of an earlier answer
+   (`restarted-answer`), a byte-identical echo of an earlier answer while the run
+   has already called tools (`stale-echo`), or an unfinished sentence
+   (`truncated`: ≤120 chars, single line, no terminator, and either ≤12 chars or a
+   dangling `:`/`-`/`(`/`…`). First hit → `inject`; second consecutive hit →
+   `finish success: false` carrying the best complete answer found in history. While
+   a retry is pending, no other rule may close the run with `success: true`.
+   A `<<CHAT_DONE>>` marker does not override the rule.
+3. **`finish_reason` was ignored** — the non-stream OpenAI-compatible adapter read
+   `stop_reason` from *inside* `choices[0].message`, while servers return it as
+   `choices[0].finish_reason` (a sibling), and the loop consulted `stop_reason` nowhere.
+   So a reply stopped by the output-token limit was labelled `stop` and accepted as
+   complete. The loop now reuses the H-09 continuation path: push the partial answer and
+   ask the model to continue **exactly where it stopped** (max 2 continuations per run,
+   logged as `step_truncated`) instead of accepting a cut-off sentence as the answer.
+   Ollama exposes the same OpenAI-compatible `/v1` surface; the Anthropic adapter now
+   carries `stop_reason` on its non-stream path too (only the stream parser had it).
 
 ## Loop breaker (`doom-loop` + read cache)
 

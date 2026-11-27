@@ -31,6 +31,9 @@ interface AnthropicMessage {
 interface AnthropicResponse {
   content?: AnthropicContentBlock[];
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+  /** "end_turn" | "max_tokens" | "tool_use" | "stop_sequence" — F3: không có nó thì
+   *  một đáp án bị cắt vì hết token output trông y hệt đáp án hoàn chỉnh. */
+  stop_reason?: string;
   error?: { message?: string };
 }
 
@@ -140,6 +143,9 @@ export function fromAnthropicResponse(data: AnthropicResponse): ChatResult {
     message: {
       role: "assistant",
       content: text.length > 0 ? text : null,
+      // F3: "max_tokens" = bị cắt vì hết token output. Stream path đã lấy
+      // stop_reason từ message_delta; bản non-stream này từng bỏ hẳn field.
+      stop_reason: data.stop_reason,
       reasoning: thinking || undefined,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     },

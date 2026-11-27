@@ -33,6 +33,7 @@ import { type AgentDef } from "./context/agents.js";
 import { createTaskRunner, type SubagentChild } from "./agent/subagent-runner.js";
 import {
   emptyWorkingMemory,
+  setMemoryGoal,
   noteFileRead,
   noteFileChanged,
   noteFailure,
@@ -1463,6 +1464,11 @@ export class Agent {
     this.currentTask = `${this.currentTask}\n${task}`.trim();
     const MAX_TASK_CTX = 8_000;
     if (this.currentTask.length > MAX_TASK_CTX) this.currentTask = `…${this.currentTask.slice(-(MAX_TASK_CTX - 1))}`;
+    // F1 (log 20261127-104714-602d / -105851-7fb8): ledger giữ nguyên qua các lượt
+    // là CHỦ Ý (files/failures/decisions), nhưng `goal` thì cũ RỊCH — run-loop fold
+    // nó vào hội thoại mỗi 6 bước ⇒ model đọc "goal: chào" và chào lại thay vì trả
+    // lời yêu cầu hiện tại. Mọi state khác vẫn reset ở dưới; goal phải theo lượt.
+    setMemoryGoal(this.memory, task);
     this.resetRunSignal();
     this.resetUsageTotals();
     this.filesModified = false;
@@ -1529,8 +1535,12 @@ export class Agent {
     this.reporter.info(`previous task: ${session.task} (${session.steps} step(s) done)`);
 
     if (followUp) {
+      const follow = expandMentions(followUp, this.config.workdir);
       for (const content of this.promptContext.takePendingContext()) this.messages.push({ role: "user", content });
-      this.messages.push({ role: "user", content: expandMentions(followUp, this.config.workdir) });
+      this.messages.push({ role: "user", content: follow });
+      // Ledger dựng từ history ⇒ goal là request CUỐI của phiên cũ; follow-up này
+      // mới là yêu cầu hiện tại (xem runTurnBody — cùng lỗi F1).
+      setMemoryGoal(this.memory, follow);
     } else {
       this.messages.push({
         role: "user",

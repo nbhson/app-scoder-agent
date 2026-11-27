@@ -15,7 +15,7 @@ import { parseToolArgsCached } from "../llm/tool-args.js";
 import type { TodoItem } from "../tools/types.js";
 
 export interface WorkingMemory {
-  /** The original user task (first user message). */
+  /** Yêu cầu hiện tại của user (lượt gần nhất — không phải tin nhắn đầu phiên). */
   goal: string;
   /** Standing constraints the user/repo imposed (from AGENTS.md / instructions). */
   constraints: string[];
@@ -43,9 +43,47 @@ const CAP = {
   nextSteps: 15,
 } as const;
 
+/** Trần độ dài goal trong ledger — đủ ngắn để inject mỗi 6 bước, đủ dài để model không lạc. */
+const GOAL_CAP = 400;
+
+/**
+ * Block harness tự chèn vào hội thoại (KHÔNG phải yêu cầu của user): repo map,
+ * ledger fold, reminder của guardrail. Nhận diện sai ⇒ `goal` lấy nhầm boilerplate.
+ */
+const SYNTHETIC_BLOCKS = [
+  "[system]",
+  "[system-reminder]",
+  "<system-reminder>",
+  "[Context —",
+  "[working memory",
+];
+
+/** True khi một message role=user là block do harness sinh ra. */
+export function isSyntheticUserBlock(content: unknown): boolean {
+  const c = String(content ?? "").trimStart().replace(/\s+/g, " ");
+  if (!c) return true;
+  if (SYNTHETIC_BLOCKS.some((p) => c.startsWith(p))) return true;
+  if (c.includes("<system-reminder>")) return true;
+  return /^Continue working on (?:the task|the original task)\./.test(c);
+}
+
+/**
+ * Chuẩn hoá task thành goal cho ledger. REPL nối dần `currentTask` qua nhiều lượt
+ * (agent.ts: `${this.currentTask}\n${task}`) ⇒ khi cắt, phải giữ ĐUÔI — yêu cầu MỚI
+ * NHẤT — chứ không giữ đầu (log thật: goal "chào" sống sót cả phiên, model chào lại
+ * thay vì trả lời — session 20261127-104714-602d).
+ */
+function goalFromTask(task: unknown): string {
+  // Một DÒNG duy nhất: block ledger render `goal: …`, xuống dòng là dòng tiếp theo
+  // bị model đọc thành field khác (và làm vỡ các parser của chính ledger).
+  const t = String(task ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length <= GOAL_CAP ? t : `…${t.slice(-(GOAL_CAP - 1))}`;
+}
+
 export function emptyWorkingMemory(goal = ""): WorkingMemory {
   return {
-    goal: goal.slice(0, 400),
+    goal: goalFromTask(goal),
     constraints: [],
     decisions: [],
     filesRead: [],
@@ -54,6 +92,24 @@ export function emptyWorkingMemory(goal = ""): WorkingMemory {
     openQuestions: [],
     nextSteps: [],
   };
+}
+
+/**
+ * Cập nhật goal khi user gửi request MỚI trong cùng một phiên (lượt REPL).
+ * Ledger giữ nguyên phần còn lại (files/failures/decisions) — chỉ goal là lỗi thời.
+ * Lượt ngắn ("tiến hành", "cho tôi câu trả lời?") không đủ ngữ nghĩa tự thân ⇒
+ * giữ thêm request cũ phía sau để model không lạc.
+ */
+export function setMemoryGoal(mem: WorkingMemory, task: string): void {
+  const t = goalFromTask(task);
+  if (!t) return;
+  if (mem.goal === t) return;
+  const base = (mem.goal || "").split(" (follow-up to: ")[0];
+  if (t.length <= 48 && base && base !== t) {
+    mem.goal = `${t} (follow-up to: ${base})`.slice(0, GOAL_CAP);
+    return;
+  }
+  mem.goal = t;
 }
 
 function pushUnique(list: string[], item: string, cap: number): void {
@@ -117,7 +173,12 @@ export function memoryIsMeaningful(mem: WorkingMemory): boolean {
 
 /** Condensed ledger block for the prompt (~≤1.5k tokens). */
 export function formatWorkingMemory(mem: WorkingMemory): string {
-  const lines: string[] = ["[working memory — decisions & state preserved across compaction]"];
+  const lines: string[] = [
+    "[working memory — decisions & state preserved across compaction]",
+    // Không nói rõ điều này, model coi block (role=user) như lời nhắn mới và…
+    // trả lời đúng dòng "goal:" cũ (log thật: 20261127-105851-7fb8).
+    "Harness context — this block is NOT a new user request; do not reply to it, keep working on the goal below.",
+  ];
   if (mem.goal) lines.push(`goal: ${mem.goal}`);
   if (mem.constraints.length > 0) lines.push(`constraints:\n${mem.constraints.map((s) => `  - ${s}`).join("\n")}`);
   if (mem.decisions.length > 0) lines.push(`decisions:\n${mem.decisions.map((s) => `  - ${s}`).join("\n")}`);
@@ -138,8 +199,16 @@ export function memoryFromMessages(messages: ChatMessage[], goal?: string): Work
   const mem = emptyWorkingMemory(goal ?? "");
   const toolNameById = new Map<string, string>();
   if (!mem.goal) {
-    const firstUser = messages.find((m) => m.role === "user" && m.content && !m.content.startsWith("[system]"));
-    mem.goal = (typeof firstUser?.content === "string" ? firstUser.content : "").slice(0, 400);
+    // Request THẬT gần nhất của user — bỏ qua block harness (repo map/ledger/
+    // reminder), nếu không goal thành 8k dòng "[Context — repository map…]" và
+    // mọi lượt sau model làm theo boilerplate đó.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== "user" || typeof m.content !== "string") continue;
+      if (isSyntheticUserBlock(m.content)) continue;
+      mem.goal = goalFromTask(m.content);
+      if (mem.goal) break;
+    }
   }
   for (const m of messages) {
     if (m.role === "assistant" && m.tool_calls) {

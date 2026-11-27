@@ -356,6 +356,12 @@ export class LlmClient {
       | undefined;
     if (!choice) throw new LlmError("LLM API returned no message in response");
 
+    // OpenAI-compatible API trả lý do dừng ở SIBLING của message (`choices[0].finish_reason`),
+    // không phải trong message. Đọc sai chỗ ⇒ mọi đáp án bị cắt vì hết token
+    // ("length") bị nhãn là "stop" và loop nhận nguyên văn câu cụt làm kết quả.
+    const finishReason = (data.choices?.[0] as { finish_reason?: string } | undefined)?.finish_reason
+      ?? (choice as { stop_reason?: string }).stop_reason;
+
     // Extract cached prompt tokens when the provider reports them
     // (OpenAI-style: usage.prompt_tokens_details.cached_tokens).
     const usage = normalizeUsage(data.usage);
@@ -364,7 +370,7 @@ export class LlmClient {
       message: {
         role: "assistant",
         content: choice.content ?? null,
-        stop_reason: (choice as { stop_reason?: string }).stop_reason ?? (choice.content ? "stop" : undefined),
+        stop_reason: finishReason ?? (choice.content ? "stop" : undefined),
         reasoning: typeof choice.reasoning_content === "string" && choice.reasoning_content ? choice.reasoning_content : undefined,
         tool_calls: choice.tool_calls?.map((tc) => ({
           id: tc.id ?? "",
